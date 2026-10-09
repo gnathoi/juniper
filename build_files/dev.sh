@@ -19,11 +19,8 @@ for p in sys.stdin.read().split("\0"):
         os.setxattr(p, "user.component", sys.argv[1].encode(), follow_symlinks=False)
 ' "$1"; }
 find /ctx/system_files_dev \( -type f -o -type l \) -printf '/%P\0' | tag juniper
-# From ublue-os/brew (COPY --from=brew /system_files /, plus the tarball in its image)
-printf '%s\0' /usr/share/homebrew.tar.zst \
-  /etc/profile.d/brew-bash-completion.sh /etc/profile.d/brew.sh /etc/security/limits.d/30-brew-limits.conf \
-  /usr/lib/systemd/system-preset/01-homebrew.preset /usr/lib/systemd/system/brew-{setup,update,upgrade}.service \
-  /usr/lib/systemd/system/brew-{update,upgrade}.timer /usr/share/fish/vendor_conf.d/ublue-brew.fish | tag homebrew
+# From ublue-os/brew (bind-mounted at /brew): everything COPY'd in, plus the tarball
+find /brew \( -type f -o -type l \) -printf '/%P\0' | tag homebrew
 
 # --- cleanup: package scriptlets leave runtime-only content that bootc lint rejects ---
 rm -rf /tmp/nvim.*
