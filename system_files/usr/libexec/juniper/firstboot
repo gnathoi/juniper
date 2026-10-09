@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# One-shot first-boot setup, after cloud-init (juniper-firstboot.service):
+# scrub secrets off the unencrypted CIDATA partition and retire cloud-init.
+# Safe to re-run: every step is idempotent.
+set -euo pipefail
+
+state_dir=${JUNIPER_STATE_DIR:-/var/lib/juniper}
+share=${JUNIPER_SHARE:-/usr/share/juniper}
+cloud_disabled=${JUNIPER_CLOUD_DISABLED:-/etc/cloud/cloud-init.disabled}
+cidata_dir=${JUNIPER_CIDATA_DIR:-}
+
+scrub_cidata() {
+  # The Wi-Fi password and Tailscale key were handed over via CIDATA; cloud-init has
+  # already applied them, so put the secret-free template back.
+  if [[ -z $cidata_dir ]]; then
+    local dev
+    dev=$(blkid -L CIDATA)
+    cidata_dir=$(mktemp -d)
+    mount "$dev" "$cidata_dir"
+    trap 'umount "$cidata_dir"; rmdir "$cidata_dir"' EXIT
+  fi
+  rm -f "$cidata_dir/network-config"
+  cp "$share/cidata/user-data" "$cidata_dir/user-data"
+  sync
+}
+
+scrub_cidata
+touch "$cloud_disabled"
+mkdir -p "$state_dir"
+touch "$state_dir/firstboot.done"

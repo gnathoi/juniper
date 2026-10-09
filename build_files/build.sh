@@ -46,7 +46,7 @@ EOT
 # --- units ---
 systemctl enable tailscaled.service firewalld.service avahi-daemon.service \
   cloud-init-local.service cloud-init.service cloud-config.service cloud-final.service \
-  podman-auto-update.timer
+  podman-auto-update.timer juniper-firstboot.service juniper-tailscale-join.service
 systemctl --global enable podman-auto-update.timer
 systemctl mask bootc-fetch-apply-updates.timer
 

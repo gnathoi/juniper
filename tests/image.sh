@@ -36,6 +36,10 @@ need_enabled tailscaled.service firewalld.service avahi-daemon.service cloud-ini
 grep -q 'resize_what = "/var"' /usr/lib/python3*/site-packages/cloudinit/config/cc_resizefs.py
 grep -q 'rootflags=noatime' /usr/lib/bootc/kargs.d/10-juniper.toml
 
+need_enabled juniper-firstboot.service juniper-tailscale-join.service
+systemd-analyze verify /usr/lib/systemd/system/juniper-*.service
+test -f /usr/share/juniper/cidata/user-data
+
 if [[ $IMAGE_ID == juniper ]]; then
   # --- full image only ---
   need_cmds distrobox fastfetch btop rg fzf nvim tmux git zstd

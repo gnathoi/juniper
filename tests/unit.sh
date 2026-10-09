@@ -30,6 +30,7 @@ stub() {
 }
 called() { grep -qF -- "$1" "$CALLS"; }
 not_called() { ! called "$1"; }
+not_grep_dir() { ! grep -rq -- "$1" "$2"; }
 check() {
   if "${@:2}"; then
     echo "ok   $1"
@@ -44,6 +45,33 @@ test_harness_works() {
   stub bootc 'echo hi'
   check "harness: stub output" test "$(bootc status)" = hi
   check "harness: call logged" called "bootc status"
+}
+
+firstboot_env() {
+  export JUNIPER_SHARE=$T/share JUNIPER_CIDATA_DIR=$T/cidata \
+    JUNIPER_CLOUD_DISABLED=$T/cloud-init.disabled
+  mkdir -p "$JUNIPER_SHARE/cidata" "$JUNIPER_CIDATA_DIR"
+  echo "#cloud-config template" >"$JUNIPER_SHARE/cidata/user-data"
+  echo "secret wifi" >"$JUNIPER_CIDATA_DIR/network-config"
+  echo "secret tskey" >"$JUNIPER_CIDATA_DIR/user-data"
+}
+
+test_firstboot_scrubs_cidata() {
+  firstboot_env
+  "$LIBEXEC/firstboot"
+  check "firstboot: network-config removed" test ! -e "$JUNIPER_CIDATA_DIR/network-config"
+  check "firstboot: user-data replaced by template" grep -q template "$JUNIPER_CIDATA_DIR/user-data"
+  check "firstboot: no secrets left on CIDATA" not_grep_dir secret "$JUNIPER_CIDATA_DIR"
+  check "firstboot: cloud-init disabled" test -e "$JUNIPER_CLOUD_DISABLED"
+  check "firstboot: marked done" test -e "$JUNIPER_STATE_DIR/firstboot.done"
+}
+
+test_firstboot_rerun_after_power_loss() {
+  firstboot_env
+  "$LIBEXEC/firstboot"
+  "$LIBEXEC/firstboot"
+  check "firstboot rerun: still scrubbed" not_grep_dir secret "$JUNIPER_CIDATA_DIR"
+  check "firstboot rerun: marked done" test -e "$JUNIPER_STATE_DIR/firstboot.done"
 }
 
 # --- runner ---

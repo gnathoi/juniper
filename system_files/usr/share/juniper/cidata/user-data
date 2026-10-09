@@ -1,0 +1,23 @@
+#cloud-config
+# Juniper first-boot configuration, applied once by cloud-init and then wiped from this
+# partition. Raspberry Pi Imager (Juniper build) writes this for you; edit it by hand only
+# if you flash with dd or similar. Uncomment and fill in what you need.
+#
+# hostname: juniper
+#
+# users:
+#   - name: me
+#     groups: [wheel]
+#     sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+#     ssh_authorized_keys:
+#       - ssh-ed25519 AAAA... me@laptop
+#
+# timezone: Europe/London
+#
+# Tailscale: create a one-off, pre-approved, TAGGED auth key at
+# https://login.tailscale.com/admin/settings/keys (tagged devices don't expire, so the
+# firewall lockdown can never lock you out). Once joined, only Tailscale can reach the Pi.
+# write_files:
+#   - path: /etc/tailscale/authkey
+#     permissions: "0600"
+#     content: "tskey-auth-..."
