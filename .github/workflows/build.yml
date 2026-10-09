@@ -260,7 +260,7 @@ jobs:
       TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', needs.build.outputs.version) }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: disk-*
           merge-multiple: true
