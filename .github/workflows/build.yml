@@ -97,8 +97,15 @@ jobs:
         if: env.PUBLISH == 'true'
         env:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+          IMAGE_NAME: ${{ matrix.image }}
           VERSION: ${{ steps.meta.outputs.version }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          creds="$GITHUB_ACTOR:$GITHUB_TOKEN"
+          command -v skopeo >/dev/null || sudo apt-get install -y skopeo
+          prev=$(skopeo inspect --creds "$creds" "docker://$IMAGE_REF:latest" 2>/dev/null \
+            | jq -c '[.LayersData[].Digest]' || echo '[]')
+
           for tag in latest "$VERSION" "sha-${GITHUB_SHA::7}"; do
             pushed=false
             for i in 1 2 3; do
@@ -114,3 +121,11 @@ jobs:
             fi
           done
           echo "digest=$(cat /tmp/digest)" >>"$GITHUB_OUTPUT"
+
+          skopeo inspect --creds "$creds" "docker://$IMAGE_REF@$(cat /tmp/digest)" \
+            | jq -r --arg name "$IMAGE_NAME" --argjson prev "$prev" '
+              [.LayersData[] | select(.Digest as $d | $prev | index($d) | not)] as $new
+              | "### Update size: \($name)\n"
+                + "\($new | length) of \(.LayersData | length) layers changed, "
+                + "\((([$new[].Size] | add) // 0) / 1048576 | floor) MiB to download"' \
+            >>"$GITHUB_STEP_SUMMARY"
