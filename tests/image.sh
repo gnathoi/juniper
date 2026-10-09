@@ -39,6 +39,8 @@ grep -q 'rootflags=noatime' /usr/lib/bootc/kargs.d/10-juniper.toml
 need_enabled juniper-firstboot.service juniper-tailscale-join.service
 systemd-analyze verify /usr/lib/systemd/system/juniper-*.service
 test -f /usr/share/juniper/cidata/user-data
+[[ $(systemctl is-enabled juniper-lockdown.timer) == enabled ]]
+firewall-offline-cmd --get-default-zone | grep -qx public
 
 if [[ $IMAGE_ID == juniper ]]; then
   # --- full image only ---

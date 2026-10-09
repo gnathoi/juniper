@@ -85,6 +85,37 @@ test_firstboot_mounts_cidata_by_label() {
   check "firstboot: unmounts it" called "umount"
 }
 
+test_lockdown_waits_for_join() {
+  stub tailscale "echo '{\"BackendState\":\"NeedsLogin\"}'"
+  "$LIBEXEC/lockdown"
+  check "lockdown: firewall untouched before join" not_called firewall-cmd
+  check "lockdown: not marked" test ! -e "$JUNIPER_STATE_DIR/locked"
+}
+
+test_lockdown_never_fires_without_tailscale() {
+  stub tailscale 'exit 1'
+  "$LIBEXEC/lockdown"
+  check "lockdown: tailscale broken -> LAN stays open" not_called firewall-cmd
+}
+
+test_lockdown_locks_once_running() {
+  stub tailscale "echo '{\"BackendState\":\"Running\"}'"
+  "$LIBEXEC/lockdown"
+  check "lockdown: tailscale0 trusted" called "firewall-cmd --permanent --zone=trusted --add-interface=tailscale0"
+  check "lockdown: direct peers allowed" called "firewall-cmd --permanent --zone=drop --add-port=41641/udp"
+  check "lockdown: default zone drop" called "firewall-cmd --set-default-zone=drop"
+  check "lockdown: reloaded" called "firewall-cmd --reload"
+  check "lockdown: marked" test -e "$JUNIPER_STATE_DIR/locked"
+  check "lockdown: timer retired" called "systemctl disable --now juniper-lockdown.timer"
+}
+
+test_lockdown_only_once() {
+  touch "$JUNIPER_STATE_DIR/locked"
+  stub tailscale "echo '{\"BackendState\":\"Running\"}'"
+  "$LIBEXEC/lockdown"
+  check "lockdown: idempotent" not_called firewall-cmd
+}
+
 # --- runner ---
 for t in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do
   setup

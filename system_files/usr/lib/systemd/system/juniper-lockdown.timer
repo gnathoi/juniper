@@ -1,0 +1,10 @@
+[Unit]
+Description=Check every 5 minutes whether to lock the firewall down to Tailscale
+ConditionPathExists=!/var/lib/juniper/locked
+
+[Timer]
+OnBootSec=1min
+OnCalendar=*:0/5
+
+[Install]
+WantedBy=timers.target
