@@ -7,16 +7,16 @@ Bazzite.
 | | `juniper-minimal` | `juniper` |
 |---|---|---|
 | Purpose | appliance base — build `FROM` it | dev box |
-| Tailscale, flash-time join, firewall lockdown, `ujust lan-ssh` | ✅ | ✅ |
-| Podman + quadlets, nightly `podman auto-update`, firewalld | ✅ | ✅ |
-| cloud-init first boot, secrets scrubbed from the boot partition | ✅ | ✅ |
-| Signed nightly updates, reboot window, firmware tryboot fallback | ✅ | ✅ |
-| zram, journald cap, hardware watchdog, `noatime` | ✅ | ✅ |
-| `ujust` core: update, update-schedule, lan-ssh, tailscale-*, pi-status, enable-metrics | ✅ | ✅ |
-| Login status (Tailscale, update state) | ✅ | ✅ |
-| Juniper logo + system summary at login | — | ✅ |
-| Homebrew, distrobox, git, tmux, neovim, btop, ripgrep, fzf | — | ✅ |
-| `ujust devbox`, `ujust install-podlet` | — | ✅ |
+| Tailscale, flash-time join, firewall lockdown, `ujust lan-ssh` | yes | yes |
+| Podman + quadlets, nightly `podman auto-update`, firewalld | yes | yes |
+| cloud-init first boot, secrets scrubbed from the boot partition | yes | yes |
+| Signed nightly updates, reboot window, firmware tryboot fallback | yes | yes |
+| zram, journald cap, hardware watchdog, `noatime` | yes | yes |
+| `ujust` core: update, update-schedule, lan-ssh, tailscale-*, pi-status, enable-metrics | yes | yes |
+| Login status (Tailscale, update state) | yes | yes |
+| Juniper logo + system summary at login |  | yes |
+| Homebrew, distrobox, git, tmux, neovim, btop, ripgrep, fzf |  | yes |
+| `ujust devbox`, `ujust install-podlet` |  | yes |
 
 Images: `ghcr.io/gnathoi/juniper-minimal` and `ghcr.io/gnathoi/juniper`. Every image,
 disk image and checksum file is cosign-signed; devices only accept signed OS updates
