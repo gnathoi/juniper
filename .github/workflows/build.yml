@@ -178,7 +178,8 @@ jobs:
           COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
           COSIGN_PASSWORD: ""
         run: |
-          cosign attest --yes --key env://COSIGN_PRIVATE_KEY --type spdxjson \
+          # The full-OS SBOM is too large for the public Rekor log; trust is key-based anyway.
+          cosign attest --yes --tlog-upload=false --key env://COSIGN_PRIVATE_KEY --type spdxjson \
             --predicate sbom.spdx.json "$IMAGE_REF@$DIGEST"
 
       - name: Verify SBOM attestation
@@ -187,8 +188,9 @@ jobs:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
           DIGEST: ${{ steps.push.outputs.digest }}
         run: |
-          cosign verify-attestation --key system_files/usr/share/pki/containers/juniper.pub \
-            --type spdxjson "$IMAGE_REF@$DIGEST" >/dev/null
+          # No tlog entry exists for the attestation (see Attest SBOM).
+          cosign verify-attestation --insecure-ignore-tlog=true \
+            --key system_files/usr/share/pki/containers/juniper.pub --type spdxjson "$IMAGE_REF@$DIGEST" >/dev/null
 
   disk:
     needs: build
