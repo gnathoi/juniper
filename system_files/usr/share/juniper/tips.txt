@@ -1,0 +1,10 @@
+Run `ujust` to see every Juniper command.
+Long-running services belong in Podman quadlets: /etc/containers/systemd/*.container
+`distrobox create` gives you a mutable dev box; the host stays immutable.
+`ujust update-schedule 03:30` moves the nightly update reboot window.
+`bootc status` shows booted, staged and rollback images.
+Tailscale SSH is on: `ssh <user>@<hostname>` from any device on your tailnet.
+`ujust pi-status` shows temperature and throttling.
+Homebrew installs CLI tools into your home: `brew install <tool>`.
+`ujust lan-ssh on` re-opens SSH on the local network if Tailscale ever goes away.
+`podman auto-update` keeps containers with AutoUpdate=registry current every night.

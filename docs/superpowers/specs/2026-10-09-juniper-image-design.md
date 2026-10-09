@@ -197,3 +197,24 @@ tarball URLs — adopt Renovate later if more pins appear.
 4. Raw image origin must point at the registry ref so `bootc upgrade` works out of the box.
 5. Name: "Juniper" overlaps Juniper Networks' trademark (networking gear). Fine for a
    personal project; reconsider before wider promotion.
+
+## Changes made during planning (2026-10-09)
+
+- Rollback uses rpi-bootc-bootloader firmware tryboot (`TRYBOOT=1`) instead of greenboot,
+  which needs GRUB boot counting. Updates reboot with `rpi-bootc-bootloader tryreboot`;
+  `juniper-healthcheck` runs `rpi-bootc-bootloader sync` on a healthy boot and reboots an
+  unhealthy tryboot so the firmware falls back.
+- No `90-juniper.cfg` cloud-init module override: the imager's apt package request fails
+  fast and harmlessly on bootc.
+- Tailscale join is `juniper-tailscale-join.service` (runs while `/etc/tailscale/authkey`
+  exists, retries every 60 s); the CIDATA template only needs `write_files`.
+- Lockdown is triggered by a 5-minute `juniper-lockdown.timer` that disables itself once
+  locked, not a path unit.
+- `install-cockpit` and `setup-backup` recipes dropped for v1.
+- Tailscale IP shown in the MOTD status block, not in fastfetch.
+- Firewall uses stock `drop`/`trusted` zones; no vendor zone files.
+- Registry is `ghcr.io/gnathoi/juniper` (pushed with `GITHUB_TOKEN`, package public, repo
+  private for now) instead of quay.io. The Containerfile's base image ref stays fully
+  qualified (`quay.io/almalinuxorg/...`).
+- CI triggers on pushes to any branch (build + test) instead of pull requests; publishing
+  happens on main, tags, the weekly cron and manual runs.
