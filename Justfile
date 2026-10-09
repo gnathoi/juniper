@@ -52,7 +52,7 @@ rechunk:
 
 # Run tests/image.sh inside an image
 test-image image=(image_ref + ":build"):
-    podman run --rm --platform linux/arm64 -v ./tests:/tests:ro,z {{ image }} /tests/image.sh
+    podman run --rm --pull=never -v ./tests:/tests:ro,z {{ image }} /tests/image.sh
 
 # Build a flashable GPT .raw from a pushed image ref (root: loop devices)
 build-raw ref out="juniper.raw":

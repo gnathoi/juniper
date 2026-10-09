@@ -42,7 +42,10 @@ need_enabled juniper-firstboot.service juniper-tailscale-join.service
 need_enabled juniper-update.timer juniper-reboot.timer juniper-healthcheck.service
 need_cmds rpi-bootc-bootloader
 grep -qx 'TRYBOOT=1' /etc/rpi-bootc-bootloader/tryboot.conf
-grep -qx 'OnCalendar=Tue \*-\*-\* 04:00:00' /usr/lib/systemd/system/juniper-reboot.timer
+grep -qx 'OnCalendar=Tue \*-\*-\* 04:00:00' /usr/lib/systemd/system/juniper-reboot.timer || {
+  echo "reboot timer default is not Tue 04:00" >&2
+  exit 1
+}
 systemd-analyze verify /usr/lib/systemd/system/juniper-*.service /usr/lib/systemd/system/juniper-*.timer
 test -f /usr/share/juniper/cidata/user-data
 [[ $(systemctl is-enabled juniper-lockdown.timer) == enabled ]]
