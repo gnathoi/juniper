@@ -86,6 +86,11 @@ jobs:
         run: |
           sudo "$(command -v just)" image="${{ matrix.image }}" image_ref="$IMAGE_REF" version="$VERSION" build rechunk
 
+      - name: Check layers
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+        run: sudo "$(command -v just)" image="${{ matrix.image }}" image_ref="$IMAGE_REF" check-layers
+
       - name: Smoke test
         env:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}

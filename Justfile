@@ -52,8 +52,20 @@ rechunk:
 
 # Run tests/image.sh inside an image
 test-image image=(image_ref + ":build"):
-    podman run --rm --platform linux/arm64 -v ./tests:/tests:ro,z {{ image }} /tests/image.sh
+    podman run --rm --pull=never -v ./tests:/tests:ro,z {{ image }} /tests/image.sh
 
 # Build a flashable GPT .raw from a pushed image ref (root: loop devices)
 build-raw ref out="juniper.raw":
     disk/build-raw.sh {{ ref }} {{ out }}
+
+# Assert the rechunked image has its own juniper (and, for juniper, homebrew) layers; print sizes
+check-layers:
+    #!/usr/bin/bash
+    set -euo pipefail
+    hist=$(podman history --no-trunc --format '{{{{.Size}}\t{{{{.CreatedBy}}' {{ image_ref }}:latest)
+    echo "$hist"
+    want=(juniper)
+    [[ {{ image }} == juniper ]] && want+=(homebrew)
+    for w in "${want[@]}"; do
+      grep -qP "^(?!0B)[0-9.]+[kMG]?B\\s+$w\\s*$" <<<"$hist" || { echo "no $w layer" >&2; exit 1; }
+    done

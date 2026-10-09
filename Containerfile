@@ -28,6 +28,7 @@ FROM minimal AS juniper
 COPY --from=brew /system_files /
 
 RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
+    --mount=type=bind,from=brew,source=/system_files,target=/brew \
     --mount=type=tmpfs,target=/var \
     /ctx/build_files/dev.sh
 
