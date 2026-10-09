@@ -218,3 +218,43 @@ tarball URLs — adopt Renovate later if more pins appear.
   qualified (`quay.io/almalinuxorg/...`).
 - CI triggers on pushes to any branch (build + test) instead of pull requests; publishing
   happens on main, tags, the weekly cron and manual runs.
+
+## Image variants (added 2026-10-09, user-approved)
+
+One Containerfile, two published images:
+
+```
+quay.io/almalinuxorg/almalinux-bootc-rpi:10@sha256:…
+  └─ stage "minimal"  → ghcr.io/gnathoi/juniper-minimal   (appliance base: build FROM this)
+       └─ stage "juniper" → ghcr.io/gnathoi/juniper         (dev box = minimal + user tools)
+```
+
+| | minimal | juniper (full) |
+|---|---|---|
+| Tailscale, flash-time join, lockdown, `lan-ssh` | ✅ | ✅ |
+| podman, quadlets, `podman auto-update`, firewalld | ✅ | ✅ |
+| cloud-init first boot, CIDATA scrub | ✅ | ✅ |
+| Updates, tryboot fallback, health check, signing | ✅ | ✅ |
+| zram, journald cap, watchdog, noatime | ✅ | ✅ |
+| `ujust` core: update, update-schedule, lan-ssh, tailscale-*, pi-status, enable-metrics | ✅ | ✅ |
+| MOTD status block (Tailscale, update state) | ✅ | ✅ |
+| fastfetch with the juniper logo | — | ✅ |
+| Homebrew, distrobox, git, tmux, neovim, btop, ripgrep, fzf | — | ✅ |
+| `ujust devbox`, `install-podlet` | — | ✅ |
+
+- Shared content: `system_files/` + `build_files/build.sh`. Dev-only: `system_files_dev/` +
+  `build_files/dev.sh`; `main.just` uses `import? "dev.just"`.
+- os-release `IMAGE_ID`/`VARIANT_ID` = `juniper-minimal` | `juniper`.
+- CI builds, tests, publishes, signs and reports update size per image (matrix); releases
+  carry a disk image per image and one `os-list.json` with both.
+- `examples/appliance/` shows building on minimal (package + quadlet) and adding your own
+  signing policy; devices follow whatever image they were switched to.
+
+## Homebrew (supersedes the earlier "baked tarball" line, 2026-10-09)
+
+Full image only. Copied from `ghcr.io/ublue-os/brew`, pinned by digest, its cosign
+signature verified in CI against ublue's key (`ci/ublue-brew.pub`). ublue's
+`brew-setup.service` extracts it to `/var/home/linuxbrew` on first boot (offline-capable);
+their `brew-update`/`brew-upgrade` timers keep it current. Dependabot ignores the pin;
+`just bump-brew` moves it deliberately, so the ~150 MB tarball never rides along in routine
+updates.

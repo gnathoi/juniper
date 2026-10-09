@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A headless, batteries-included bootc image for Raspberry Pi 4/5 layered on the AlmaLinux RPi bootc image, with Tailscale-first networking, safe automatic updates, ujust/MOTD/fastfetch UX, CI and a flashable disk image.
+**Goal:** Two headless bootc images for Raspberry Pi 4/5 layered on the AlmaLinux RPi bootc image — `juniper-minimal` (appliance base for others to build on) and `juniper` (minimal + developer tools) — with Tailscale-first networking, safe automatic updates, ujust/MOTD/fastfetch UX, CI and a flashable disk image.
 
 **Architecture:** One `Containerfile` `FROM` the digest-pinned AlmaLinux RPi bootc image runs `build_files/build.sh`, which installs packages and copies `system_files/` into `/`. Behaviour lives in small bash scripts under `/usr/libexec/juniper/` driven by systemd units/timers; each script is unit-tested on the host with stubbed commands (`tests/unit.sh`), and the built image is smoke-tested (`tests/image.sh`). GitHub Actions lints, builds on an arm64 runner, pushes, signs, and on request produces a GPT `.raw.xz` plus an rpi-imager OS list.
 
@@ -14,7 +14,8 @@
 
 - Base image: `quay.io/almalinuxorg/almalinux-bootc-rpi:10@sha256:08b361228495c05656b1367fb41507a79ea9b7eca293f21bbc5e4801e3355337` (index digest as of 2026-10-09; Dependabot bumps it).
 - Hardware: Pi 4, Pi 5, Pi 400/500, CM4/CM5. aarch64 only. GPT disk only. Dev target Pi 5 4GB.
-- Published image: `ghcr.io/gnathoi/juniper` (CI computes `${IMAGE_REGISTRY:-ghcr.io}/${owner}/juniper`, lowercased; pushes with `GITHUB_TOKEN`, no registry secrets). The base image ref in the Containerfile is fully qualified with its registry (`quay.io/almalinuxorg/...`).
+- Two images from one Containerfile (ruling R7): stage `minimal` → `ghcr.io/gnathoi/juniper-minimal`; stage `juniper` (`FROM minimal` + dev layer) → `ghcr.io/gnathoi/juniper`. Shared behaviour lives in `system_files/` + `build_files/build.sh`; developer-only content in `system_files_dev/` + `build_files/dev.sh`. Never put dev tools in minimal.
+- Published images (CI computes `${IMAGE_REGISTRY:-ghcr.io}/${owner}/juniper`, lowercased; pushes with `GITHUB_TOKEN`, no registry secrets). The base image ref in the Containerfile is fully qualified with its registry (`quay.io/almalinuxorg/...`).
 - Repo `github.com/gnathoi/juniper` is **private**; the GHCR package is made **public** so Pis can pull updates. Release assets stay private until the repo goes public (the rpi-imager OS-list URL only works after that).
 - License Apache-2.0. Never copy files from `../bootc-images-rpi` (GPL-3.0); re-implement.
 - Everything shipped goes under `/usr` unless the tool only reads `/etc`. Nothing written to `/var` at build time. `bootc container lint` must pass.
@@ -33,28 +34,32 @@
 - **Recipes cut:** `install-cockpit` (needs host bridge + Origins/serve config) and `setup-backup` (interactive restic config). Kept: `devbox`, `install-podlet`, `enable-metrics`.
 - **Tailscale IP lives in the MOTD status block**, not a fastfetch module (avoids showing it twice).
 - **Firewall uses stock zones** (`drop`, `trusted`) via `firewall-cmd`; no vendor zone files.
-- **Homebrew is cloned on first boot, not baked in** (ruling R4): a tarball of a fresh clone is never byte-identical, so it would defeat rechunking and bloat every update. `juniper-brew-setup.service` clones into `/var/home/linuxbrew/.linuxbrew`, retrying until it succeeds.
+- **Two images** (ruling R7): `juniper-minimal` (Tailscale, lockdown, podman/quadlets, updates, ujust core, MOTD) and `juniper` (+ Homebrew, distrobox, fastfetch, git, tmux, neovim, btop, ripgrep, fzf, `ujust devbox`/`install-podlet`). Plus `examples/appliance/` showing how to build on minimal.
+- **Homebrew is baked into the full image from `ghcr.io/ublue-os/brew`, pinned by digest** (ruling R6, replaces the first-boot clone): reproducible bytes so rechunking keeps it out of routine updates, offline first boot, covered by our signature. CI verifies ublue's cosign signature before building; Dependabot ignores it; `just bump-brew` moves the pin. ublue's `brew-setup.service` extracts it to `/var/home/linuxbrew` on first boot; their `brew-update`/`brew-upgrade` timers keep it current.
 - **Every publish reports its update size** (ruling R5): layers and MiB changed versus the previous `:latest`, in the GitHub job summary.
 - **Registry is GHCR** (`ghcr.io/gnathoi/juniper`, public package, private repo) instead of quay.io; CI moved into Task 1 so every task's image changes are verified on the arm64 runner.
 
 ## Review Focus
 
-1. **No Tailscale key ever supplied** (or tailscaled broken): the Pi must stay a normal LAN box with SSH open forever — lockdown must never fire. Test in Task 4.
-2. **Power loss during first boot** before `firstboot.done`: the re-run must finish cleanly, and an interrupted Homebrew clone must not be mistaken for a complete one. Test in Task 3.
-3. **Wi-Fi typo / no network on the very first boot:** the health check fails but this is not a tryboot, so it must not reboot (no boot loop). Test in Task 5.
-4. **Tailscale node key expiry after lockdown** locks the user out of a headless Pi. Expected behaviour: docs and the user-data template tell users to use a *tagged* auth key (key expiry disabled by default) and that `ujust lan-ssh on` is the escape hatch. Covered by the user-data template text (Task 3) and README (Task 9).
-5. **Timezone never set** (flashed without imager customisation): the reboot window silently runs in UTC. `update-schedule` must print which timezone it is using. Test in Task 5.
+1. **No Tailscale key ever supplied** (or tailscaled broken): the Pi must stay a normal LAN box with SSH open forever — lockdown must never fire. Test in Task 5.
+2. **Power loss during first boot** before `firstboot.done`: the re-run must finish cleanly and leave no secrets on CIDATA. Test in Task 4.
+3. **Wi-Fi typo / no network on the very first boot:** the health check fails but this is not a tryboot, so it must not reboot (no boot loop). Test in Task 6.
+4. **Tailscale node key expiry after lockdown** locks the user out of a headless Pi. Expected behaviour: docs and the user-data template tell users to use a *tagged* auth key (key expiry disabled by default) and that `ujust lan-ssh on` is the escape hatch. Covered by the user-data template text (Task 4) and README (Task 10).
+5. **Timezone never set** (flashed without imager customisation): the reboot window silently runs in UTC. `update-schedule` must print which timezone it is using. Test in Task 6.
 
 ---
 
 ## File Structure
 
 ```
-Containerfile                                   build entry; FROM base@digest
-build_files/build.sh                            repos, packages, os-release, policy, enable units
+Containerfile                                   stages: ctx, brew (pinned), minimal, juniper
+build_files/build.sh                            minimal: repos, packages, files, os-release, policy, units
+build_files/dev.sh                              juniper: dev packages, system_files_dev, brew units
+system_files_dev/                               dev-only files (dev.just, fastfetch config + logo, dev tips)
+ci/ublue-brew.pub                               ublue-os/brew cosign key (CI verifies the pinned brew image)
+examples/appliance/                             how to build an appliance FROM juniper-minimal
 system_files/usr/bin/ujust                      just wrapper
 system_files/usr/libexec/juniper/firstboot      scrub CIDATA, retire cloud-init, sig enforcement
-system_files/usr/libexec/juniper/brew-setup     clone Homebrew into /var/home/linuxbrew (first boot, retried)
 system_files/usr/libexec/juniper/lockdown       firewall → Tailscale only
 system_files/usr/libexec/juniper/apply-update   reboot into staged update via tryboot
 system_files/usr/libexec/juniper/update-schedule  set/show/disable reboot window
@@ -65,14 +70,16 @@ system_files/usr/lib/systemd/zram-generator.conf
 system_files/usr/lib/systemd/journald.conf.d/50-juniper.conf
 system_files/usr/lib/systemd/system.conf.d/50-juniper-watchdog.conf
 system_files/usr/lib/bootc/kargs.d/10-juniper.toml
-system_files/usr/share/juniper/just/{main,update,network,apps,pi}.just
-system_files/usr/share/juniper/{logo.txt,tips.txt}
+system_files/usr/share/juniper/just/{main,update,network,services,pi}.just
+system_files/usr/share/juniper/tips.txt
+system_files_dev/usr/share/juniper/just/dev.just
+system_files_dev/usr/share/juniper/{logo.txt,tips-dev.txt}
+system_files_dev/etc/xdg/fastfetch/config.jsonc
 system_files/usr/share/juniper/cidata/{user-data,meta-data,README.txt}   template shipped on CIDATA + restored by firstboot
 system_files/usr/share/pki/containers/juniper.pub
 system_files/etc/cloud/cloud.cfg.d/10-juniper-growpart.cfg
 system_files/etc/rpi-bootc-bootloader/tryboot.conf
-system_files/etc/profile.d/{juniper-motd.sh,juniper-brew.sh}
-system_files/etc/xdg/fastfetch/config.jsonc
+system_files/etc/profile.d/juniper-motd.sh
 tests/unit.sh                                   host unit tests with stubs
 tests/image.sh                                  smoke test run inside the built image
 disk/bib-config.toml, disk/build-raw.sh, disk/render-os-list.sh, disk/icon.png
@@ -93,7 +100,7 @@ LICENSE, THIRD_PARTY.md, README.md, .gitignore
 - Produces: `tests/image.sh` — ordered list of assertions, new ones inserted above `echo "image smoke test: OK"`.
 - Produces: Justfile recipes `check`, `build`, `rechunk`, `test-image`, `build-raw ref out`; variables `image_ref`, `version`.
 - Produces: build args `IMAGE_REF` (no tag) and `IMAGE_VERSION` (YYYYMMDD) visible to `build.sh` as env.
-- Produces: workflow `.github/workflows/build.yml` with jobs `lint`, `build` (outputs `version`, `image_ref`, `digest`; steps "Smoke test", "Push"); env `PUBLISH`. Task 8 appends signing steps to `build`; Task 9 adds a `disk` job.
+- Produces: workflow `.github/workflows/build.yml` with jobs `lint`, `build` (outputs `version`, `image_ref`, `digest`; steps "Smoke test", "Push"); env `PUBLISH`. Task 3 turns `build` into a two-image matrix; Task 9 appends signing steps; Task 10 adds `disk` and `release` jobs.
 
 - [ ] **Step 1: Record the planning deviations in the spec**
 
@@ -651,16 +658,311 @@ git commit -m "feat: packages and SD-card-friendly system config"
 
 ---
 
-### Task 3: First boot (CIDATA scrub, cloud-init retirement, Homebrew, Tailscale join)
+### Task 3: Split into `juniper-minimal` and `juniper` images (R6, R7)
 
 **Files:**
-- Create: `system_files/usr/libexec/juniper/firstboot`, `system_files/usr/libexec/juniper/brew-setup`, `system_files/usr/lib/systemd/system/juniper-firstboot.service`, `system_files/usr/lib/systemd/system/juniper-brew-setup.service`, `system_files/usr/lib/systemd/system/juniper-tailscale-join.service`, `system_files/usr/share/juniper/cidata/user-data`, `system_files/usr/share/juniper/cidata/meta-data`, `system_files/usr/share/juniper/cidata/README.txt`
+- Modify: `Containerfile`, `build_files/build.sh`, `tests/image.sh`, `Justfile`, `.github/workflows/build.yml`, `.pre-commit-config.yaml` (only if hadolint needs it), `system_files/usr/share/juniper/tips.txt`
+- Create: `build_files/dev.sh`, `system_files_dev/usr/share/juniper/just/dev.just`, `system_files_dev/usr/share/juniper/tips-dev.txt`, `ci/ublue-brew.pub`
+- Delete: `system_files/etc/profile.d/juniper-brew.sh` (ublue's `/etc/profile.d/brew.sh` replaces it)
+
+**Interfaces:**
+- Consumes: Task 1/2 Containerfile, build.sh, image.sh, Justfile, workflow.
+- Produces: Containerfile stages `minimal` and `juniper`; build args `IMAGE_REF`, `IMAGE_NAME` (`juniper-minimal`|`juniper`), `IMAGE_VERSION`; os-release `IMAGE_ID`/`VARIANT_ID` = `IMAGE_NAME`.
+- Produces: Justfile variables `image` (default `juniper`), `image_ref` (default `localhost/` + image), `target` (derived); recipes `build`, `rechunk`, `test-image`, `verify-brew`, `bump-brew`.
+- Produces: `tests/image.sh` helpers `need_cmds CMD...`, `need_enabled UNIT...`; shared assertions go above the `if [[ $IMAGE_ID == juniper ]]` block, full-only assertions inside its `then` branch, minimal-only inside `else`.
+- Produces: workflow `build` job with `strategy.matrix.image: [juniper-minimal, juniper]`; job output `version` only (both legs agree). Later tasks add per-leg steps; anything needing an image ref computes it from `matrix.image`.
+- Produces: `/usr/share/juniper/just/dev.just` (recipes `devbox`, `install-podlet`), imported optionally by Task 7's `main.just`.
+
+- [ ] **Step 1: Save ublue's cosign key**
+
+```bash
+mkdir -p ci
+gh api repos/ublue-os/brew/contents/cosign.pub --jq .content | base64 -d >ci/ublue-brew.pub
+cosign verify --key ci/ublue-brew.pub ghcr.io/ublue-os/brew@sha256:2aaf87e3757466bc28d056505a651c7ca5c56fd28f6ff709b34f3f5dbc860e89 >/dev/null && echo verified
+```
+
+Expected: `verified`.
+
+- [ ] **Step 2: Variant-aware smoke test (failing first)**
+
+Replace `tests/image.sh` with (keeps every existing assertion; dev tools move into the full-only branch):
+
+```bash
+#!/usr/bin/env bash
+# Smoke test executed inside a built image (no systemd running):
+#   just image=juniper test-image   /   just image=juniper-minimal test-image
+set -euo pipefail
+
+# shellcheck source=/dev/null
+. /usr/lib/os-release
+[[ $IMAGE_ID == juniper || $IMAGE_ID == juniper-minimal ]] || {
+  echo "unexpected IMAGE_ID: $IMAGE_ID"
+  exit 1
+}
+grep -q '^PRETTY_NAME="Juniper' /usr/lib/os-release
+
+need_cmds() {
+  for cmd; do
+    command -v "$cmd" >/dev/null || {
+      echo "missing: $cmd"
+      exit 1
+    }
+  done
+}
+need_enabled() {
+  for unit; do
+    [[ $(systemctl is-enabled "$unit") == enabled ]] || {
+      echo "not enabled: $unit"
+      exit 1
+    }
+  done
+}
+
+# --- shared (both images) ---
+need_cmds tailscale tailscaled podman just jq rsync firewall-cmd cloud-init
+need_enabled tailscaled.service firewalld.service avahi-daemon.service cloud-init.service \
+  cloud-final.service podman-auto-update.timer
+[[ $(systemctl is-enabled bootc-fetch-apply-updates.timer) == masked ]]
+grep -q 'resize_what = "/var"' /usr/lib/python3*/site-packages/cloudinit/config/cc_resizefs.py
+grep -q 'rootflags=noatime' /usr/lib/bootc/kargs.d/10-juniper.toml
+
+if [[ $IMAGE_ID == juniper ]]; then
+  # --- full image only ---
+  need_cmds distrobox fastfetch btop rg fzf nvim tmux git zstd
+  need_enabled brew-setup.service brew-update.timer brew-upgrade.timer
+  test -s /usr/share/homebrew.tar.zst
+  test -f /etc/profile.d/brew.sh
+  just --justfile /usr/share/juniper/just/dev.just --summary | tr ' ' '\n' | grep -qx devbox
+else
+  # --- minimal only: no developer tooling ---
+  for cmd in distrobox fastfetch nvim tmux btop git; do
+    if command -v "$cmd" >/dev/null; then
+      echo "dev tool in minimal: $cmd"
+      exit 1
+    fi
+  done
+  test ! -e /usr/share/homebrew.tar.zst
+  test ! -e /usr/share/juniper/just/dev.just
+fi
+
+echo "image smoke test: OK ($IMAGE_ID)"
+```
+
+- [ ] **Step 3: Containerfile stages**
+
+Replace `Containerfile` with:
+
+```dockerfile
+# Juniper: headless bootc images for Raspberry Pi 4/5.
+#   --target minimal  -> juniper-minimal (appliance base: build FROM this)
+#   --target juniper  -> juniper (minimal + developer tools)
+FROM scratch AS ctx
+COPY build_files /build_files
+COPY system_files /system_files
+COPY system_files_dev /system_files_dev
+
+# Homebrew tarball + setup/update units (Bluefin's), pinned by digest. CI checks ublue's
+# cosign signature (`just verify-brew`); Dependabot ignores it; bump with `just bump-brew`.
+FROM ghcr.io/ublue-os/brew@sha256:2aaf87e3757466bc28d056505a651c7ca5c56fd28f6ff709b34f3f5dbc860e89 AS brew
+
+FROM quay.io/almalinuxorg/almalinux-bootc-rpi:10@sha256:08b361228495c05656b1367fb41507a79ea9b7eca293f21bbc5e4801e3355337 AS minimal
+
+# Published image ref without tag (e.g. ghcr.io/gnathoi/juniper), image name and date version.
+ARG IMAGE_REF=localhost/juniper-minimal
+ARG IMAGE_NAME=juniper-minimal
+ARG IMAGE_VERSION=dev
+
+RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
+    --mount=type=tmpfs,target=/var \
+    /ctx/build_files/build.sh
+
+RUN bootc container lint --fatal-warnings
+
+FROM minimal AS juniper
+
+COPY --from=brew /system_files /
+
+RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
+    --mount=type=tmpfs,target=/var \
+    /ctx/build_files/dev.sh
+
+RUN bootc container lint --fatal-warnings
+```
+
+Keep whatever `bootc container lint` form Task 1 ended with (the brief allowed dropping `--fatal-warnings` if the base image forced it).
+
+- [ ] **Step 4: Split build.sh / add dev.sh**
+
+In `build_files/build.sh`:
+- Require the new arg: `: "${IMAGE_REF:?}" "${IMAGE_NAME:?}" "${IMAGE_VERSION:?}"`.
+- Package list becomes exactly:
+
+```bash
+dnf -y install \
+  podman firewalld cloud-init cloud-utils-growpart zram-generator \
+  jq rsync NetworkManager-wifi avahi just \
+  tailscale
+```
+
+- Replace the identity block with:
+
+```bash
+# --- identity ---
+case $IMAGE_NAME in
+  juniper-minimal) pretty="Juniper Minimal" ;;
+  juniper) pretty="Juniper" ;;
+  *)
+    echo "unknown IMAGE_NAME: $IMAGE_NAME" >&2
+    exit 1
+    ;;
+esac
+sed -i '/^\(PRETTY_NAME\|VARIANT\|VARIANT_ID\|IMAGE_ID\|IMAGE_VERSION\)=/d' /usr/lib/os-release
+cat >>/usr/lib/os-release <<EOT
+PRETTY_NAME="${pretty} ${IMAGE_VERSION} (AlmaLinux 10 bootc)"
+VARIANT="${pretty}"
+VARIANT_ID=${IMAGE_NAME}
+IMAGE_ID=${IMAGE_NAME}
+IMAGE_VERSION=${IMAGE_VERSION}
+EOT
+```
+
+- Cleanup line becomes `rm -rf /run/cloud-init` (the `/tmp/nvim.*` part moves to dev.sh).
+
+`build_files/dev.sh` (chmod +x):
+
+```bash
+#!/usr/bin/env bash
+# Developer layer on top of the minimal image (Containerfile stage "juniper").
+# Homebrew's tarball and units were already copied from the pinned ublue-os/brew image.
+set -xeuo pipefail
+
+dnf -y install distrobox fastfetch btop ripgrep fzf neovim tmux git-core zstd
+dnf clean all
+
+cp -a /ctx/system_files_dev/. /
+
+systemctl preset brew-setup.service brew-update.timer brew-upgrade.timer
+
+# --- cleanup: package scriptlets leave runtime-only content that bootc lint rejects ---
+rm -rf /tmp/nvim.*
+```
+
+`git rm system_files/etc/profile.d/juniper-brew.sh`.
+
+- [ ] **Step 5: Dev-only files**
+
+`system_files_dev/usr/share/juniper/just/dev.just`:
+
+```just
+# Create and enter a mutable Fedora dev container (distrobox) named devbox
+devbox:
+    distrobox create --yes --name devbox --image registry.fedoraproject.org/fedora-toolbox:latest
+    distrobox enter devbox
+
+# Install podlet (converts compose files / podman commands to quadlets) into ~/.local/bin
+install-podlet:
+    #!/usr/bin/bash
+    set -euo pipefail
+    asset=podlet-aarch64-unknown-linux-gnu
+    url=https://github.com/containers/podlet/releases/latest/download/$asset.tar.xz
+    tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+    curl -fsSLo "$tmp/p.tar.xz" "$url"
+    curl -fsSLo "$tmp/p.sha256" "$url.sha256"
+    [[ $(sha256sum "$tmp/p.tar.xz" | cut -d' ' -f1) == $(cut -d' ' -f1 "$tmp/p.sha256") ]] || { echo "checksum mismatch" >&2; exit 1; }
+    mkdir -p ~/.local/bin
+    tar -xJf "$tmp/p.tar.xz" -C ~/.local/bin --strip-components=1 "$asset/podlet"
+    ~/.local/bin/podlet --version
+```
+
+Verify the podlet archive layout once: `curl -fsSL https://github.com/containers/podlet/releases/latest/download/podlet-aarch64-unknown-linux-gnu.tar.xz | tar -tJ` must list `podlet-aarch64-unknown-linux-gnu/podlet`; adjust `--strip-components`/member if not.
+
+Move the two developer tips out of `system_files/usr/share/juniper/tips.txt` (the distrobox line and the Homebrew line) into `system_files_dev/usr/share/juniper/tips-dev.txt`, unchanged. Change the tips.txt Tailscale-SSH/other lines not at all.
+
+- [ ] **Step 6: Justfile**
+
+Replace the variable block and `build` recipe, and add two recipes:
+
+```just
+image := "juniper"
+image_ref := "localhost/" + image
+version := `date -u +%Y%m%d`
+target := if image == "juniper-minimal" { "minimal" } else { "juniper" }
+
+# Build {{ image }} for arm64 as {{ image_ref }}:build (needs arm64 or qemu-user-static)
+build:
+    podman build --platform linux/arm64 --target {{ target }} \
+      --build-arg IMAGE_REF={{ image_ref }} --build-arg IMAGE_NAME={{ image }} \
+      --build-arg IMAGE_VERSION={{ version }} \
+      -t {{ image_ref }}:build .
+
+# Verify the cosign signature of the pinned ublue-os/brew image (CI runs this first)
+verify-brew:
+    cosign verify --key ci/ublue-brew.pub \
+      "$(grep -oP '^FROM \Kghcr\.io/ublue-os/brew@sha256:[0-9a-f]{64}' Containerfile)" >/dev/null
+
+# Move the Homebrew pin to ublue-os/brew's current :latest (rare: brew self-updates on device)
+bump-brew:
+    #!/usr/bin/bash
+    set -euo pipefail
+    digest=sha256:$(skopeo inspect --raw docker://ghcr.io/ublue-os/brew:latest | sha256sum | cut -d' ' -f1)
+    sed -i -E "s|(ghcr\.io/ublue-os/brew@)sha256:[0-9a-f]{64}|\1$digest|" Containerfile
+    just verify-brew
+    git diff --stat Containerfile
+```
+
+`rechunk`, `test-image`, `check`, `build-raw` stay as they are (they already use `image_ref`).
+
+- [ ] **Step 7: CI matrix**
+
+In `.github/workflows/build.yml` `build` job:
+- Add, under `runs-on`:
+
+```yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [juniper-minimal, juniper]
+```
+
+- `outputs:` keeps only `version: ${{ steps.meta.outputs.version }}` (remove `image_ref` and `digest`: with a matrix they would be whichever leg finished last).
+- In "Image metadata": `ref="${REGISTRY}/${NAMESPACE}/${{ matrix.image }}"`.
+- Before "Build and rechunk", add:
+
+```yaml
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Verify pinned Homebrew image signature
+        if: matrix.image == 'juniper'
+        run: just verify-brew
+```
+
+- "Build and rechunk" runs `sudo "$(command -v just)" image="${{ matrix.image }}" image_ref="$IMAGE_REF" version="$VERSION" build rechunk`, and "Smoke test" passes `image="${{ matrix.image }}"` likewise.
+
+Run: `pre-commit run --all-files` → clean (if hadolint flags the digest-only `FROM … AS brew`, add an inline `# hadolint ignore=<rule>` with the rule id it prints, directly above that line).
+
+- [ ] **Step 8: Verify on CI**
+
+Push; both matrix legs green; logs show `image smoke test: OK (juniper-minimal)` and `image smoke test: OK (juniper)`; the `juniper` leg shows the "Verify pinned Homebrew image signature" step passing.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add -A
+git commit -m "feat: split into juniper-minimal and juniper images; pinned, verified Homebrew"
+git push
+```
+
+---
+
+### Task 4: First boot (CIDATA scrub, cloud-init retirement, Tailscale join)
+
+**Files:**
+- Create: `system_files/usr/libexec/juniper/firstboot`, `system_files/usr/lib/systemd/system/juniper-firstboot.service`, `system_files/usr/lib/systemd/system/juniper-tailscale-join.service`, `system_files/usr/share/juniper/cidata/user-data`, `system_files/usr/share/juniper/cidata/meta-data`, `system_files/usr/share/juniper/cidata/README.txt`
 - Modify: `tests/unit.sh`, `tests/image.sh`, `build_files/build.sh`
 
 **Interfaces:**
-- Consumes: `git-core` in the image and `/etc/profile.d/juniper-brew.sh` (Task 2).
+- Consumes: shared `system_files/` tree and `tests/image.sh` helpers `need_enabled` (Task 3). All files here are shared (both images).
 - Produces: `/usr/libexec/juniper/firstboot` honouring env `JUNIPER_STATE_DIR`, `JUNIPER_SHARE`, `JUNIPER_CIDATA_DIR` (skip mount when set), `JUNIPER_CLOUD_DISABLED`. Function `enforce_signatures` is added in Task 8.
-- Produces: `/usr/libexec/juniper/brew-setup` honouring `JUNIPER_BREW_HOME`, `JUNIPER_BREW_REPO`.
 - Produces: `/usr/share/juniper/cidata/*` (consumed by Task 9 `build-raw.sh`).
 
 - [ ] **Step 1: Write failing tests**
@@ -695,52 +997,6 @@ test_firstboot_rerun_after_power_loss() {
   check "firstboot rerun: marked done" test -e "$JUNIPER_STATE_DIR/firstboot.done"
 }
 
-brew_env() {
-  export JUNIPER_BREW_HOME=$T/linuxbrew JUNIPER_BREW_REPO=https://example.invalid/brew
-  # Fake clone: create the destination (last argument) with a brew entrypoint.
-  stub git 'dest=${*: -1}; mkdir -p "$dest/bin"; echo brew >"$dest/bin/brew"'
-}
-
-test_brew_setup_installs() {
-  brew_env
-  "$LIBEXEC/brew-setup"
-  check "brew: cloned from repo" called "git clone --quiet https://example.invalid/brew"
-  check "brew: entrypoint linked" test -L "$JUNIPER_BREW_HOME/.linuxbrew/bin/brew"
-  check "brew: Homebrew checkout in place" test -f "$JUNIPER_BREW_HOME/.linuxbrew/Homebrew/bin/brew"
-  check "brew: chowned to uid 1000" called "chown -R 1000:1000 $JUNIPER_BREW_HOME"
-}
-
-test_brew_setup_recovers_from_interrupted_clone() {
-  brew_env
-  mkdir -p "$JUNIPER_BREW_HOME/.linuxbrew.partial/junk"
-  "$LIBEXEC/brew-setup"
-  check "brew: partial replaced" test ! -e "$JUNIPER_BREW_HOME/.linuxbrew.partial"
-  check "brew: complete after recovery" test -L "$JUNIPER_BREW_HOME/.linuxbrew/bin/brew"
-}
-
-test_brew_setup_failed_clone_is_not_installed() {
-  brew_env
-  stub git 'exit 128'
-  check "brew: clone failure exits non-zero (systemd retries)" bash -c '! "$0"' "$LIBEXEC/brew-setup"
-  check "brew: nothing that looks installed" test ! -e "$JUNIPER_BREW_HOME/.linuxbrew"
-}
-
-test_brew_setup_idempotent() {
-  brew_env
-  mkdir -p "$JUNIPER_BREW_HOME/.linuxbrew"
-  "$LIBEXEC/brew-setup"
-  check "brew: existing install left alone" not_called git
-}
-
-test_firstboot_mounts_cidata_by_label() {
-  firstboot_env
-  unset JUNIPER_CIDATA_DIR
-  stub blkid 'echo /dev/mmcblk0p1'
-  "$LIBEXEC/firstboot" || true
-  check "firstboot: looks up CIDATA label" called "blkid -L CIDATA"
-  check "firstboot: mounts it" called "mount /dev/mmcblk0p1"
-  check "firstboot: unmounts it" called "umount"
-}
 ```
 
 and add the helper next to `called`/`not_called`:
@@ -791,30 +1047,6 @@ mkdir -p "$state_dir"
 touch "$state_dir/firstboot.done"
 ```
 
-`system_files/usr/libexec/juniper/brew-setup` (chmod +x):
-
-```bash
-#!/usr/bin/env bash
-# Installs Homebrew into /var/home/linuxbrew on first boot (juniper-brew-setup.service).
-# Cloned here rather than baked into the image so image updates stay small; brew keeps
-# itself updated afterwards. Exits non-zero on failure so systemd retries.
-set -euo pipefail
-
-brew_home=${JUNIPER_BREW_HOME:-/var/home/linuxbrew}
-repo=${JUNIPER_BREW_REPO:-https://github.com/Homebrew/brew}
-
-[[ -d $brew_home/.linuxbrew ]] && exit 0
-# Clone beside the target and rename, so an interrupted clone never looks installed.
-rm -rf "$brew_home/.linuxbrew.partial"
-mkdir -p "$brew_home/.linuxbrew.partial/bin"
-git clone --quiet "$repo" "$brew_home/.linuxbrew.partial/Homebrew"
-ln -s ../Homebrew/bin/brew "$brew_home/.linuxbrew.partial/bin/brew"
-mv "$brew_home/.linuxbrew.partial" "$brew_home/.linuxbrew"
-chown -R 1000:1000 "$brew_home"
-```
-
-(Full clone, not `--depth 1`: `brew update` needs history.)
-
 Note: with the stubbed `mount`, the label test cannot write into the temp dir's real content but `cp`/`rm` still operate on the empty temp dir, so the script completes; the `|| true` in the test only guards against environment differences.
 
 - [ ] **Step 4: Add the units**
@@ -831,25 +1063,6 @@ ConditionPathExists=!/var/lib/juniper/firstboot.done
 Type=oneshot
 ExecStart=/usr/libexec/juniper/firstboot
 RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-```
-
-`system_files/usr/lib/systemd/system/juniper-brew-setup.service`:
-
-```ini
-[Unit]
-Description=Install Homebrew into /var/home/linuxbrew
-After=network-online.target
-Wants=network-online.target
-ConditionPathExists=!/var/home/linuxbrew/.linuxbrew
-
-[Service]
-Type=exec
-ExecStart=/usr/libexec/juniper/brew-setup
-Restart=on-failure
-RestartSec=5min
 
 [Install]
 WantedBy=multi-user.target
@@ -876,7 +1089,7 @@ RestartSec=60
 WantedBy=multi-user.target
 ```
 
-Append to the `systemctl enable` line in `build_files/build.sh`: `juniper-firstboot.service juniper-brew-setup.service juniper-tailscale-join.service`.
+Append to the `systemctl enable` line in `build_files/build.sh`: `juniper-firstboot.service juniper-tailscale-join.service`.
 
 - [ ] **Step 5: Add the CIDATA template files**
 
@@ -939,9 +1152,7 @@ Both files are wiped from this partition after first boot.
 Insert into `tests/image.sh` above the final echo:
 
 ```bash
-for unit in juniper-firstboot.service juniper-brew-setup.service juniper-tailscale-join.service; do
-  [[ $(systemctl is-enabled "$unit") == enabled ]] || { echo "not enabled: $unit"; exit 1; }
-done
+need_enabled juniper-firstboot.service juniper-tailscale-join.service
 systemd-analyze verify /usr/lib/systemd/system/juniper-*.service
 test -f /usr/share/juniper/cidata/user-data
 ```
@@ -954,20 +1165,20 @@ Run: `tests/unit.sh` → expected `all passed`. Then CI (push + `gh run watch`) 
 
 ```bash
 git add -A
-git commit -m "feat: first boot scrubs CIDATA secrets, retires cloud-init, joins tailnet, installs Homebrew"
+git commit -m "feat: first boot scrubs CIDATA secrets, retires cloud-init, joins tailnet"
 ```
 
 ---
 
-### Task 4: Firewall lockdown
+### Task 5: Firewall lockdown
 
 **Files:**
 - Create: `system_files/usr/libexec/juniper/lockdown`, `system_files/usr/lib/systemd/system/juniper-lockdown.service`, `system_files/usr/lib/systemd/system/juniper-lockdown.timer`
 - Modify: `tests/unit.sh`, `tests/image.sh`, `build_files/build.sh`
 
 **Interfaces:**
-- Produces: marker `/var/lib/juniper/locked` (consumed by Task 5 healthcheck, Task 6 motd).
-- Produces: `juniper-lockdown.service` (started by `ujust tailscale-up` in Task 6).
+- Produces: marker `/var/lib/juniper/locked` (consumed by Task 6 healthcheck, Task 7 motd).
+- Produces: `juniper-lockdown.service` (started by `ujust tailscale-up` in Task 7).
 
 - [ ] **Step 1: Write failing tests**
 
@@ -1087,15 +1298,15 @@ git commit -m "feat: lock firewall down to Tailscale once the Pi has joined"
 
 ---
 
-### Task 5: Automatic updates with tryboot fallback
+### Task 6: Automatic updates with tryboot fallback
 
 **Files:**
 - Create: `system_files/usr/libexec/juniper/apply-update`, `system_files/usr/libexec/juniper/update-schedule`, `system_files/usr/libexec/juniper/healthcheck`, `system_files/usr/lib/systemd/system/juniper-update.{service,timer}`, `system_files/usr/lib/systemd/system/juniper-reboot.{service,timer}`, `system_files/usr/lib/systemd/system/juniper-healthcheck.service`, `system_files/etc/rpi-bootc-bootloader/tryboot.conf`
 - Modify: `tests/unit.sh`, `tests/image.sh`, `build_files/build.sh`
 
 **Interfaces:**
-- Consumes: `/var/lib/juniper/locked` (Task 4).
-- Produces: `/usr/libexec/juniper/apply-update` (no args), `/usr/libexec/juniper/update-schedule [HH:MM|off]` with env `JUNIPER_DROPIN_DIR`; healthcheck env `JUNIPER_HEALTH_TRIES`, `JUNIPER_HEALTH_INTERVAL`, `JUNIPER_TRYBOOT_FLAG`. Used by Task 6 recipes.
+- Consumes: `/var/lib/juniper/locked` (Task 5).
+- Produces: `/usr/libexec/juniper/apply-update` (no args), `/usr/libexec/juniper/update-schedule [HH:MM|off]` with env `JUNIPER_DROPIN_DIR`; healthcheck env `JUNIPER_HEALTH_TRIES`, `JUNIPER_HEALTH_INTERVAL`, `JUNIPER_TRYBOOT_FLAG`. Used by Task 7 recipes.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -1379,27 +1590,51 @@ git commit -m "feat: nightly staged updates with randomized reboot window and tr
 
 ---
 
-### Task 6: ujust, MOTD and fastfetch
+### Task 7: ujust, MOTD and fastfetch
 
 **Files:**
-- Create: `system_files/usr/bin/ujust`, `system_files/usr/share/juniper/just/{main,update,network,apps,pi}.just`, `system_files/usr/libexec/juniper/motd`, `system_files/etc/profile.d/juniper-motd.sh`, `system_files/etc/xdg/fastfetch/config.jsonc`, `system_files/usr/share/juniper/logo.txt`
+- Create (shared): `system_files/usr/bin/ujust`, `system_files/usr/share/juniper/just/{main,update,network,services,pi}.just`, `system_files/usr/libexec/juniper/motd`, `system_files/etc/profile.d/juniper-motd.sh`
+- Create (full image only): `system_files_dev/etc/xdg/fastfetch/config.jsonc`, `system_files_dev/usr/share/juniper/logo.txt`
 - Modify: `tests/image.sh`
 
 **Interfaces:**
-- Consumes: `/usr/libexec/juniper/{apply-update,update-schedule}` (Task 5), `juniper-lockdown.service` (Task 4), `/var/lib/juniper/locked`, `/usr/share/juniper/tips.txt` (Task 1).
-- Produces: `ujust` recipes `update`, `update-schedule [time]`, `lan-ssh on|off`, `tailscale-up`, `tailscale-ssh on|off`, `toggle-motd`, `devbox`, `install-podlet`, `enable-metrics`, `pi-status`.
+- Consumes: `/usr/libexec/juniper/{apply-update,update-schedule}` (Task 6), `juniper-lockdown.service` (Task 5), `/var/lib/juniper/locked`, `/usr/share/juniper/tips.txt` (Task 1).
+- Consumes: `system_files_dev/usr/share/juniper/just/dev.just` and `tips-dev.txt` (Task 3).
+- Produces: `ujust` recipes in both images: `update`, `update-schedule [time]`, `lan-ssh on|off`, `tailscale-up`, `tailscale-ssh on|off`, `toggle-motd`, `enable-metrics`, `pi-status`; full image adds `devbox`, `install-podlet` via `import? "dev.just"`.
 
 - [ ] **Step 1: Failing smoke assertions**
 
 Insert into `tests/image.sh`:
 
+Shared section (above the `if [[ $IMAGE_ID == juniper ]]` block):
+
 ```bash
-for r in update update-schedule lan-ssh tailscale-up tailscale-ssh toggle-motd devbox install-podlet enable-metrics pi-status; do
-  ujust --summary | tr ' ' '\n' | grep -qx "$r" || { echo "missing recipe: $r"; exit 1; }
+recipes=$(ujust --summary | tr ' ' '\n')
+for r in update update-schedule lan-ssh tailscale-up tailscale-ssh toggle-motd enable-metrics pi-status; do
+  grep -qx "$r" <<<"$recipes" || { echo "missing recipe: $r"; exit 1; }
 done
-fastfetch --config /etc/xdg/fastfetch/config.jsonc --pipe >/dev/null
 HOME=/tmp /usr/libexec/juniper/motd | grep -q 'Tailscale'
 ```
+
+Full-only branch (inside `then`):
+
+```bash
+  for r in devbox install-podlet; do
+    grep -qx "$r" <<<"$recipes" || { echo "missing recipe: $r"; exit 1; }
+  done
+  fastfetch --config /etc/xdg/fastfetch/config.jsonc --pipe >/dev/null
+```
+
+Minimal-only branch (inside `else`):
+
+```bash
+  if grep -qx devbox <<<"$recipes"; then
+    echo "dev recipe in minimal: devbox"
+    exit 1
+  fi
+```
+
+(Not `! grep …`: `set -e` ignores a negated command's failure.)
 
 - [ ] **Step 2: Run to verify failure** — CI (push + `gh run watch`) → FAIL (`ujust: command not found`).
 
@@ -1420,8 +1655,10 @@ set shell := ["bash", "-c"]
 
 import "update.just"
 import "network.just"
-import "apps.just"
+import "services.just"
 import "pi.just"
+# Developer recipes exist only in the full juniper image.
+import? "dev.just"
 
 [private]
 default:
@@ -1479,28 +1716,9 @@ toggle-motd:
     if [[ -e $f ]]; then rm "$f"; echo "Login banner on."; else mkdir -p "${f%/*}"; touch "$f"; echo "Login banner off."; fi
 ```
 
-`system_files/usr/share/juniper/just/apps.just`:
+`system_files/usr/share/juniper/just/services.just`:
 
 ```just
-# Create and enter a mutable Fedora dev container (distrobox) named devbox
-devbox:
-    distrobox create --yes --name devbox --image registry.fedoraproject.org/fedora-toolbox:latest
-    distrobox enter devbox
-
-# Install podlet (converts compose files / podman commands to quadlets) into ~/.local/bin
-install-podlet:
-    #!/usr/bin/bash
-    set -euo pipefail
-    asset=podlet-aarch64-unknown-linux-gnu
-    url=https://github.com/containers/podlet/releases/latest/download/$asset.tar.xz
-    tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-    curl -fsSLo "$tmp/p.tar.xz" "$url"
-    curl -fsSLo "$tmp/p.sha256" "$url.sha256"
-    [[ $(sha256sum "$tmp/p.tar.xz" | cut -d' ' -f1) == $(cut -d' ' -f1 "$tmp/p.sha256") ]] || { echo "checksum mismatch" >&2; exit 1; }
-    mkdir -p ~/.local/bin
-    tar -xJf "$tmp/p.tar.xz" -C ~/.local/bin --strip-components=1 "$asset/podlet"
-    ~/.local/bin/podlet --version
-
 # Run Prometheus node_exporter as a quadlet (reachable over Tailscale on :9100)
 enable-metrics:
     #!/usr/bin/bash
@@ -1533,8 +1751,6 @@ pi-status:
     sudo vcgencmd measure_clock arm
 ```
 
-Verify the podlet archive layout once: `curl -fsSL https://github.com/containers/podlet/releases/latest/download/podlet-aarch64-unknown-linux-gnu.tar.xz | tar -tJ` must list `podlet-aarch64-unknown-linux-gnu/podlet`; adjust `--strip-components`/member if not.
-
 - [ ] **Step 4: MOTD and fastfetch**
 
 `system_files/usr/libexec/juniper/motd` (chmod +x):
@@ -1564,11 +1780,12 @@ else
   upd="up to date"
 fi
 
-fastfetch 2>/dev/null
+# fastfetch ships only in the full image.
+if command -v fastfetch >/dev/null; then fastfetch; fi
 row Image "${PRETTY_NAME}"
 row Tailscale "$ts"
 row Update "$upd"
-row Tip "$(shuf -n1 /usr/share/juniper/tips.txt 2>/dev/null)"
+row Tip "$(cat /usr/share/juniper/tips*.txt 2>/dev/null | shuf -n1)"
 printf '\n  ujust for commands · ujust toggle-motd to hide this\n\n'
 ```
 
@@ -1586,7 +1803,7 @@ case $- in
 esac
 ```
 
-`system_files/etc/xdg/fastfetch/config.jsonc`:
+`system_files_dev/etc/xdg/fastfetch/config.jsonc`:
 
 ```jsonc
 {
@@ -1613,7 +1830,7 @@ esac
 }
 ```
 
-`system_files/usr/share/juniper/logo.txt` (`$1` = foliage green, `$2` = berry blue; original art):
+`system_files_dev/usr/share/juniper/logo.txt` (`$1` = foliage green, `$2` = berry blue; original art):
 
 ```
 $1               .
@@ -1633,7 +1850,7 @@ $1              |
 $1             _|_
 ```
 
-- [ ] **Step 5: Run tests** — CI (push + `gh run watch`) → OK. Also eyeball: `podman run --rm -it localhost/juniper:build fastfetch` and iterate on `logo.txt` until it looks like a juniper sprig.
+- [ ] **Step 5: Run tests** — CI (push + `gh run watch`) → OK. Also eyeball (after the CI image publishes, or on the Pi): `fastfetch` and iterate on `logo.txt` until it looks like a juniper sprig.
 
 - [ ] **Step 6: Commit**
 
@@ -1644,14 +1861,14 @@ git commit -m "feat: ujust recipes, login MOTD and juniper fastfetch"
 
 ---
 
-### Task 7: Dependabot, first publish, public package
+### Task 8: Dependabot, first publish, public package
 
 **Files:**
 - Create: `.github/dependabot.yml`
 
 **Interfaces:**
 - Consumes: workflow from Task 1 (publishes on `main`, tags, weekly cron, manual runs).
-- Produces: public package `ghcr.io/gnathoi/juniper` with tags `latest`, `YYYYMMDD`, `sha-xxxxxxx`.
+- Produces: public packages `ghcr.io/gnathoi/juniper-minimal` and `ghcr.io/gnathoi/juniper`, each with tags `latest`, `YYYYMMDD`, `sha-xxxxxxx`.
 
 - [ ] **Step 1: Dependabot**
 
@@ -1668,6 +1885,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # Homebrew tarball: bumped deliberately with `just bump-brew` (each bump is ~150 MB
+      # for devices; brew updates itself on the device anyway).
+      - dependency-name: "*ublue-os/brew*"
 ```
 
 Run: `pre-commit run --all-files` → pass. Commit and push:
@@ -1680,12 +1901,12 @@ git push
 
 - [ ] **Step 2: First publish from main**
 
-Merge the branch so far: `gh pr create --base main --head impl/image-core --fill && gh pr merge --merge`. The push to `main` runs `build` with `PUBLISH=true`.
-Expected: `skopeo inspect docker://ghcr.io/gnathoi/juniper:latest` works **after** Step 3 (before it, the package is private and needs `skopeo login ghcr.io`).
+Merge the branch so far: `gh pr create --base main --head impl/image-core --fill && gh pr merge --merge`. The push to `main` runs both `build` legs with `PUBLISH=true`.
+Expected: `skopeo inspect docker://ghcr.io/gnathoi/juniper:latest` and `…/juniper-minimal:latest` work **after** Step 3 (before it, the packages are private and need `skopeo login ghcr.io`).
 
 - [ ] **Step 3: Make the package public (user action)**
 
-GitHub → your profile → Packages → `juniper` → Package settings → Danger zone → Change visibility → Public. Then `skopeo inspect docker://ghcr.io/gnathoi/juniper:latest` succeeds without login.
+For **both** `juniper` and `juniper-minimal`: GitHub → your profile → Packages → package → Package settings → Danger zone → Change visibility → Public. Then `skopeo inspect` of both `:latest` tags succeeds without login.
 
 - [ ] **Step 4: Report update size on every publish (ruling R5)**
 
@@ -1705,7 +1926,7 @@ In `.github/workflows/build.yml`, replace the `Push` step's `run:` so it records
             >>"$GITHUB_STEP_SUMMARY"
 ```
 
-and add `GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}` to that step's `env:`. Run `pre-commit run --all-files` → clean. Verify on the next main publish: the run summary shows "Update size". After a no-op rebuild (re-run the workflow on main without changes) it should report only a few small layers changed (os-release/version metadata); if it reports most layers changed, rechunking isn't producing stable layers — record the numbers in the Task 7 report.
+and add `GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}` to that step's `env:`. Run `pre-commit run --all-files` → clean. Verify on the next main publish: the run summary shows "Update size" for each image. After a no-op rebuild (re-run the workflow on main without changes) it should report only a few small layers changed (os-release/version metadata); if it reports most layers changed, rechunking isn't producing stable layers — record the numbers in the Task 7 report.
 
 - [ ] **Step 5: Check Dependabot sees the Containerfile**
 
@@ -1713,14 +1934,14 @@ Repo → Insights → Dependency graph → Dependabot: `Containerfile` listed un
 
 ---
 
-### Task 8: Image signing and on-device enforcement
+### Task 9: Image signing and on-device enforcement
 
 **Files:**
 - Create: `system_files/usr/share/pki/containers/juniper.pub`
 - Modify: `build_files/build.sh`, `system_files/usr/libexec/juniper/firstboot`, `tests/unit.sh`, `tests/image.sh`, `.github/workflows/build.yml`
 
 **Interfaces:**
-- Consumes: `build` job outputs `image_ref`, `digest` (Task 1); firstboot script (Task 3).
+- Consumes: `build` job outputs `image_ref`, `digest` (Task 1); firstboot script (Task 4).
 - Produces: `/etc/containers/policy.json` entry for `$IMAGE_REF` requiring `sigstoreSigned` with `/usr/share/pki/containers/juniper.pub`; secret `SIGNING_SECRET`.
 
 - [ ] **Step 1: Check the key pair exists (the user generated it before execution)**
@@ -1826,7 +2047,7 @@ Append to the `build` job in `.github/workflows/build.yml`:
         run: cosign attest --yes --key env://COSIGN_PRIVATE_KEY --type spdxjson --predicate sbom.spdx.json "$IMAGE_REF@$DIGEST"
 ```
 
-- [ ] **Step 6: Verify** — `tests/unit.sh` passes; CI smoke test passes; after merging to main, `cosign verify --key system_files/usr/share/pki/containers/juniper.pub ghcr.io/gnathoi/juniper:latest` succeeds.
+- [ ] **Step 6: Verify** — `tests/unit.sh` passes; CI smoke test passes; after merging to main, `cosign verify --key system_files/usr/share/pki/containers/juniper.pub` succeeds for both `ghcr.io/gnathoi/juniper:latest` and `ghcr.io/gnathoi/juniper-minimal:latest`. (The signing steps run in each matrix leg; `IMAGE_REF`/`DIGEST` come from that leg's `steps.meta`/`steps.push`.)
 
 - [ ] **Step 7: Commit**
 
@@ -1837,15 +2058,15 @@ git commit -m "feat: cosign-signed images, enforced on device via containers pol
 
 ---
 
-### Task 9: Flashable disk image, OS list, release, docs
+### Task 10: Flashable disk image, OS list, release, docs
 
 **Files:**
-- Create: `disk/bib-config.toml`, `disk/build-raw.sh`, `disk/render-os-list.sh`, `disk/icon.png`
+- Create: `disk/bib-config.toml`, `disk/build-raw.sh`, `disk/render-os-list.sh`, `disk/icon.png`, `examples/appliance/Containerfile`, `examples/appliance/sensor.container`, `examples/appliance/README.md`
 - Modify: `.github/workflows/build.yml`, `README.md`, `tests/unit.sh`
 
 **Interfaces:**
-- Consumes: `/usr/share/juniper/cidata/*` from `system_files` (Task 3); `build` job outputs `image_ref`, `version` (Task 1).
-- Produces: release assets `juniper-<version>.raw.xz`, `SHA256SUMS`, `os-list.json`. While the repo is private these need `gh release download`; the stable OS-list URL `https://github.com/gnathoi/juniper/releases/latest/download/os-list.json` works for rpi-imager only once the repo is public.
+- Consumes: `/usr/share/juniper/cidata/*` from `system_files` (Task 4); `build` job output `version` and the matrix image names (Task 3).
+- Produces: release assets `juniper-<version>.raw.xz`, `juniper-minimal-<version>.raw.xz`, `SHA256SUMS`, `os-list.json` (both images). While the repo is private these need `gh release download`; the stable OS-list URL `https://github.com/gnathoi/juniper/releases/latest/download/os-list.json` works for rpi-imager only once the repo is public.
 
 - [ ] **Step 1: Failing test for the OS list renderer**
 
@@ -1855,12 +2076,26 @@ Insert into `tests/unit.sh`:
 test_render_os_list() {
   printf 'rawbytes' >"$T/j.raw"
   printf 'xz' >"$T/j.raw.xz"
-  "$ROOT/disk/render-os-list.sh" "$T/j.raw" "$T/j.raw.xz" https://example/j.raw.xz 20261009 >"$T/os.json"
+  "$ROOT/disk/render-os-list.sh" juniper "$T/j.raw" "$T/j.raw.xz" https://example/j.raw.xz 20261009 >"$T/os.json"
   check "os-list: url" jq -e '.os_list[0].url == "https://example/j.raw.xz"' "$T/os.json"
+  check "os-list: name" jq -e '.os_list[0].name == "Juniper 20261009"' "$T/os.json"
   check "os-list: extract_size" jq -e '.os_list[0].extract_size == 8' "$T/os.json"
   check "os-list: sha256 of raw" jq -e --arg h "$(sha256sum "$T/j.raw" | cut -d' ' -f1)" '.os_list[0].extract_sha256 == $h' "$T/os.json"
   check "os-list: cloudinit + tailscale capability" jq -e '.os_list[0].init_format == "cloudinit" and (.os_list[0].capabilities | index("tailscale"))' "$T/os.json"
   check "os-list: pi4+pi5 only" jq -e '.os_list[0].devices == ["pi5-64bit","pi4-64bit"]' "$T/os.json"
+}
+
+test_render_os_list_minimal() {
+  printf 'rawbytes' >"$T/m.raw"
+  printf 'xz' >"$T/m.raw.xz"
+  "$ROOT/disk/render-os-list.sh" juniper-minimal "$T/m.raw" "$T/m.raw.xz" https://example/m.raw.xz 20261009 >"$T/os.json"
+  check "os-list minimal: name" jq -e '.os_list[0].name == "Juniper Minimal 20261009"' "$T/os.json"
+  check "os-list minimal: no dev tools claimed" jq -e '.os_list[0].description | test("Homebrew") | not' "$T/os.json"
+}
+
+test_render_os_list_rejects_unknown_image() {
+  printf 'x' >"$T/x.raw"
+  check "os-list: unknown image rejected" bash -c '! "$0" nope "$1" "$1" u v 2>/dev/null' "$ROOT/disk/render-os-list.sh" "$T/x.raw"
 }
 ```
 
@@ -1872,12 +2107,28 @@ Run `tests/unit.sh` → FAIL (script missing).
 
 ```bash
 #!/usr/bin/env bash
-# Prints an rpi-imager OS list for one release.
-#   render-os-list.sh RAW RAW_XZ DOWNLOAD_URL VERSION
+# Prints an rpi-imager OS list (one entry) for one image of a release.
+#   render-os-list.sh IMAGE RAW RAW_XZ DOWNLOAD_URL VERSION
+# IMAGE is juniper or juniper-minimal. CI merges the per-image lists into os-list.json.
 set -euo pipefail
 
-raw=$1 xz=$2 url=$3 version=$4
+image=$1 raw=$2 xz=$3 url=$4 version=$5
+case $image in
+  juniper)
+    name="Juniper"
+    desc="Headless AlmaLinux bootc dev box: Tailscale, Podman, Distrobox, Homebrew"
+    ;;
+  juniper-minimal)
+    name="Juniper Minimal"
+    desc="Headless AlmaLinux bootc appliance base: Tailscale, Podman quadlets, auto-updates"
+    ;;
+  *)
+    echo "unknown image: $image" >&2
+    exit 1
+    ;;
+esac
 jq -n \
+  --arg name "$name" --arg desc "$desc" \
   --arg url "$url" --arg version "$version" \
   --arg sha "$(sha256sum "$raw" | cut -d' ' -f1)" \
   --argjson size "$(stat -c %s "$raw")" \
@@ -1885,8 +2136,8 @@ jq -n \
   --arg date "$(date -u +%F)" \
   --arg icon "${JUNIPER_ICON_URL:-https://raw.githubusercontent.com/${GITHUB_REPOSITORY:-owner/juniper}/main/disk/icon.png}" \
   '{os_list: [{
-     name: "Juniper \($version)",
-     description: "Headless AlmaLinux bootc image: Tailscale, Podman, Distrobox, Homebrew",
+     name: "\($name) \($version)",
+     description: $desc,
      icon: $icon, url: $url,
      extract_size: $size, extract_sha256: $sha, image_download_size: $dl,
      release_date: $date,
@@ -1976,67 +2227,173 @@ Run `tests/unit.sh` → `all passed`.
 
 - [ ] **Step 3: CI disk job**
 
-Append to `.github/workflows/build.yml` under `jobs:`:
+Append to `.github/workflows/build.yml` under `jobs:` (`disk` runs once per image; `release` merges them; the disk image is built from the published `:latest` of each image):
 
 ```yaml
   disk:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.build_raw)
     runs-on: ubuntu-24.04-arm
-    permissions:
-      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [juniper-minimal, juniper]
     env:
-      IMAGE_REF: ${{ needs.build.outputs.image_ref }}
+      IMAGE: ${{ matrix.image }}
       VERSION: ${{ needs.build.outputs.version }}
       TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', needs.build.outputs.version) }}
     steps:
       - uses: actions/checkout@v4
-      - uses: extractions/setup-just@v3
       - name: Free disk space
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /opt/ghc /usr/local/.ghcup
           df -h /
+      - uses: extractions/setup-just@v3
       - run: sudo apt-get update && sudo apt-get install -y dosfstools xz-utils jq
       - name: Build raw disk
-        run: sudo "$(command -v just)" build-raw "$IMAGE_REF:latest" "juniper-$VERSION.raw"
-      - name: Compress and render OS list
+        env:
+          REF: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+        run: sudo "$(command -v just)" build-raw "${REF,,}:latest" "$IMAGE-$VERSION.raw"
+      - name: Compress and render OS list entry
         run: |
-          sudo chown "$USER" "juniper-$VERSION.raw"
-          xz -T0 -k "juniper-$VERSION.raw"
-          disk/render-os-list.sh "juniper-$VERSION.raw" "juniper-$VERSION.raw.xz" \
-            "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/juniper-$VERSION.raw.xz" \
-            "$VERSION" >os-list.json
-          sha256sum "juniper-$VERSION.raw.xz" os-list.json >SHA256SUMS
+          sudo chown "$USER" "$IMAGE-$VERSION.raw"
+          xz -T0 -k "$IMAGE-$VERSION.raw"
+          disk/render-os-list.sh "$IMAGE" "$IMAGE-$VERSION.raw" "$IMAGE-$VERSION.raw.xz" \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$IMAGE-$VERSION.raw.xz" \
+            "$VERSION" >"os-list-$IMAGE.json"
+          rm "$IMAGE-$VERSION.raw"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: disk-${{ matrix.image }}
+          path: |
+            ${{ matrix.image }}-${{ env.VERSION }}.raw.xz
+            os-list-${{ matrix.image }}.json
+          retention-days: 3
+
+  release:
+    needs: [build, disk]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', needs.build.outputs.version) }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: disk-*
+          merge-multiple: true
+      - name: Merge OS lists and checksum
+        run: |
+          jq -s '{os_list: [.[].os_list[]]}' os-list-juniper.json os-list-juniper-minimal.json >os-list.json
+          sha256sum ./*.raw.xz os-list.json >SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
           name: Juniper ${{ env.VERSION }}
           files: |
-            juniper-${{ env.VERSION }}.raw.xz
+            *.raw.xz
             os-list.json
             SHA256SUMS
 ```
 
 Run `pre-commit run --all-files` → pass.
 
-- [ ] **Step 4: README**
+- [ ] **Step 4: Appliance example**
+
+`examples/appliance/Containerfile`:
+
+```dockerfile
+# Example appliance built on Juniper Minimal: one extra package and one quadlet service.
+# Build: podman build --platform linux/arm64 -t ghcr.io/you/sensor-box:latest examples/appliance
+FROM ghcr.io/gnathoi/juniper-minimal:latest
+
+# hadolint ignore=DL3041
+RUN dnf -y install i2c-tools && dnf clean all
+
+# Quadlets shipped in the image live in /usr/share/containers/systemd (immutable, updated
+# with the image); ones you add on a device go in /etc/containers/systemd.
+COPY sensor.container /usr/share/containers/systemd/sensor.container
+
+RUN bootc container lint
+```
+
+`examples/appliance/sensor.container`:
+
+```ini
+[Unit]
+Description=Example sensor: log the SoC temperature every minute
+
+[Container]
+Image=docker.io/library/alpine:3.20
+Exec=sh -c 'while true; do cat /sys/class/thermal/thermal_zone0/temp; sleep 60; done'
+Volume=/sys/class/thermal:/sys/class/thermal:ro
+AutoUpdate=registry
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`examples/appliance/README.md`:
+
+```markdown
+# Building an appliance on Juniper Minimal
+
+Juniper Minimal gives you Tailscale-first networking with firewall lockdown, Podman
+quadlets with nightly auto-update, signed nightly OS updates with firmware fallback, and
+`ujust`. You add your packages and services:
+
+1. Copy this directory, edit `Containerfile` and add your `*.container` quadlets.
+2. Build for arm64 and push to your registry (CI: copy Juniper's `build.yml` matrix leg).
+3. Flash a Juniper Minimal disk image, then on the device:
+   `sudo bootc switch ghcr.io/you/sensor-box:latest` — from then on the device follows
+   your image, with the same nightly update window and tryboot fallback.
+
+**Signatures.** Juniper's policy only covers Juniper's own images, so a device switched
+to your image accepts it unsigned. To enforce your own cosign key, add to your
+Containerfile:
+
+    COPY cosign.pub /usr/share/pki/containers/sensor-box.pub
+    RUN jq --arg ref ghcr.io/you/sensor-box \
+          '.transports.docker[$ref] = [{"type": "sigstoreSigned",
+             "keyPath": "/usr/share/pki/containers/sensor-box.pub",
+             "signedIdentity": {"type": "matchRepository"}}]' \
+          /etc/containers/policy.json >/tmp/policy.json \
+        && mv /tmp/policy.json /etc/containers/policy.json \
+        && printf 'docker:\n  ghcr.io/you/sensor-box:\n    use-sigstore-attachments: true\n' \
+          >/etc/containers/registries.d/sensor-box.yaml
+
+and switch with `sudo bootc switch --enforce-container-sigpolicy ghcr.io/you/sensor-box:latest`.
+```
+
+Make sure hadolint covers it: the `.pre-commit-config.yaml` hadolint hook's `files:` must match `(^|/)Containerfile$`.
+
+- [ ] **Step 5: README**
 
 Replace `README.md` with:
 
 ```markdown
 # Juniper
 
-Batteries-included, headless [bootc](https://bootc-dev.github.io/bootc/) image for
-Raspberry Pi 4/5 (incl. 400/500, CM4/CM5), layered on the AlmaLinux RPi bootc image in the
-spirit of Bluefin and Bazzite.
+Headless [bootc](https://bootc-dev.github.io/bootc/) images for Raspberry Pi 4/5 (incl.
+400/500, CM4/CM5), layered on the AlmaLinux RPi bootc image in the spirit of Bluefin and
+Bazzite.
 
-- **Tailscale-first**: give it an auth key at flash time; once joined, the firewall drops
-  everything except Tailscale.
-- **Containers for services**: Podman quadlets with nightly `podman auto-update`.
-- **Dev tools**: Distrobox, Homebrew, git, tmux, neovim, ripgrep, fzf, btop, `ujust`.
-- **Hands-off updates**: images download daily and reboot in a randomised window from
-  04:00 local time; the Pi firmware's tryboot falls back automatically if an update is
-  unhealthy. Images are cosign-signed and verified on the device.
+| | `juniper-minimal` | `juniper` |
+|---|---|---|
+| Purpose | appliance base — build `FROM` it | dev box |
+| Tailscale, flash-time join, firewall lockdown, `ujust lan-ssh` | ✅ | ✅ |
+| Podman + quadlets, nightly `podman auto-update`, firewalld | ✅ | ✅ |
+| cloud-init first boot, secrets scrubbed from the boot partition | ✅ | ✅ |
+| Signed nightly updates, reboot window, firmware tryboot fallback | ✅ | ✅ |
+| zram, journald cap, hardware watchdog, `noatime` | ✅ | ✅ |
+| `ujust` core: update, update-schedule, lan-ssh, tailscale-*, pi-status, enable-metrics | ✅ | ✅ |
+| Login status (Tailscale, update state) | ✅ | ✅ |
+| fastfetch with the juniper logo | — | ✅ |
+| Homebrew, distrobox, git, tmux, neovim, btop, ripgrep, fzf | — | ✅ |
+| `ujust devbox`, `ujust install-podlet` | — | ✅ |
+
+Images: `ghcr.io/gnathoi/juniper-minimal` and `ghcr.io/gnathoi/juniper` (cosign-signed).
 
 ## Install
 
@@ -2046,8 +2403,8 @@ spirit of Bluefin and Bazzite.
 2. Flash with Raspberry Pi Imager (Juniper build) using our OS list:
    `rpi-imager --repo https://github.com/gnathoi/juniper/releases/latest/download/os-list.json`
    and fill in user, SSH key, Wi-Fi, timezone and the Tailscale key.
-   Or download `juniper-*.raw.xz` from Releases, flash it with any tool, and edit
-   `user-data` on the small FAT partition (instructions in `README.txt` there).
+   Or download `juniper-*.raw.xz` / `juniper-minimal-*.raw.xz` from Releases, flash it with
+   any tool, and edit `user-data` on the small FAT partition (see `README.txt` there).
 3. Boot. The Pi joins your tailnet; `ssh <user>@<hostname>` over Tailscale.
 
 ## Everyday commands
@@ -2059,9 +2416,17 @@ spirit of Bluefin and Bazzite.
 | `ujust update-schedule 03:30` / `off` | move or disable the reboot window |
 | `ujust lan-ssh on` / `off` | re-open SSH on the local network (escape hatch) |
 | `ujust tailscale-up` | log in to Tailscale interactively |
-| `ujust devbox` | mutable Fedora dev container |
 | `ujust enable-metrics` | node_exporter on :9100 over Tailscale |
 | `ujust pi-status` | temperature and throttling |
+| `ujust devbox` (juniper) | mutable Fedora dev container |
+
+The `juniper` image's Homebrew comes from Bluefin's `ublue-os/brew` and updates and
+upgrades your brew packages automatically (`brew-update.timer`, `brew-upgrade.timer`).
+
+## Build your own appliance
+
+See [examples/appliance](examples/appliance): `FROM ghcr.io/gnathoi/juniper-minimal`, add
+packages and quadlets, push, `bootc switch` the device to it.
 
 ## Switch an existing AlmaLinux RPi bootc system
 
@@ -2069,31 +2434,35 @@ spirit of Bluefin and Bazzite.
 
 ## Build
 
-    just check          # lint + unit tests
-    just build          # arm64 image (arm64 host or qemu-user-static)
-    just test-image
+    just check                                   # lint + unit tests
+    just image=juniper-minimal build             # arm64 (arm64 host or qemu-user-static)
+    just image=juniper-minimal test-image
+    just bump-brew                               # move the Homebrew pin (verifies signature)
     sudo just build-raw ghcr.io/gnathoi/juniper:latest
 
-CI rebuilds weekly (Monday 02:00 UTC), on every merge, and on demand (Actions → build →
-Run workflow, tick "build_raw" for a disk image and release).
+CI builds both images on every push, publishes from `main` weekly (Monday 02:00 UTC) and
+on demand (Actions → build → Run workflow; tick "build_raw" for disk images + a release).
+Each publish reports how many layers and MiB a device downloads.
 
 ## License
 
 Apache-2.0. See THIRD_PARTY.md for bundled components.
 ```
 
-- [ ] **Step 5: Verify** — push and merge to main, then `gh workflow run build -f build_raw=true` (or Actions → build → Run workflow with `build_raw` ticked). Expected: release `build-YYYYMMDD` with `.raw.xz`, `os-list.json`, `SHA256SUMS`; `jq . os-list.json` shows correct sizes.
+Add a row to `THIRD_PARTY.md`: `| ublue-os/brew (Homebrew tarball + units, juniper image) | Apache-2.0 | github.com/ublue-os/brew |`.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Verify** — push and merge to main, then `gh workflow run build -f build_raw=true` (or Actions → build → Run workflow with `build_raw` ticked). Expected: release `build-YYYYMMDD` with `juniper-*.raw.xz`, `juniper-minimal-*.raw.xz`, `os-list.json` (two entries), `SHA256SUMS`; `jq . os-list.json` shows correct sizes. Also build the example once on CI or an arm64 host to prove it: `podman build --platform linux/arm64 examples/appliance`.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add -A
-git commit -m "feat: flashable GPT disk image, rpi-imager OS list and release job"
+git commit -m "feat: flashable disk images and OS list for both images; appliance example; docs"
 ```
 
 ---
 
-### Task 10: Hardware acceptance on the Pi 5
+### Task 11: Hardware acceptance on the Pi 5
 
 **Files:**
 - Create: `docs/acceptance.md` (filled-in checklist with results and dates)
@@ -2105,7 +2474,6 @@ Nothing here can run in CI; this task proves the risky assumptions on real hardw
   - `sudo ls /etc/tailscale/authkey` → no such file
   - `sudo mount LABEL=CIDATA /mnt && grep -c tskey /mnt/user-data; ls /mnt/network-config; sudo umount /mnt` → `0` and no such file
   - `test -e /etc/cloud/cloud-init.disabled && echo ok`
-  - `brew --version` (new login shell)
   - `cat /proc/cmdline | grep -o rootflags=noatime`
   - `swapon --show` lists `/dev/zram0`
   - `sudo wdctl` shows timeout 15s
@@ -2114,7 +2482,8 @@ Nothing here can run in CI; this task proves the risky assumptions on real hardw
 - [ ] **Step 4: Update + tryboot** — push a trivial change (e.g. a new tip) to get a new image; on the Pi: `sudo systemctl start juniper-update.service`, then `ujust update`. Expected: Pi reboots, `bootc status` shows the new image booted, `cat /proc/device-tree/chosen/bootloader/tryboot | od -An -tu4 --endian=big` was `1` on that boot (check `journalctl -u juniper-healthcheck -b`), and after healthcheck `config-bootc-default.txt` on CIDATA points to the new entry. Reboot again: still on the new image.
 - [ ] **Step 5: Fallback** — build a deliberately broken image on a branch (e.g. mask `tailscaled.service` in build.sh), push it to a test tag, `sudo bootc switch` to it (staged), `sudo /usr/libexec/juniper/apply-update`. Expected: tryboot boots it, healthcheck fails after ~5 min, Pi reboots into the previous deployment, Tailscale back. Then `sudo bootc switch` back to `:latest`.
 - [ ] **Step 6: Reboot window** — `ujust update-schedule 03:30` prints the Pi's timezone; `systemctl list-timers juniper-reboot.timer` shows next run 03:30–05:00. `ujust update-schedule off` → timer inactive.
-- [ ] **Step 7: UX** — new SSH login shows fastfetch with the juniper logo and the status block; `ujust toggle-motd` hides it; `ujust devbox`, `ujust install-podlet`, `ujust enable-metrics` (curl `:9100/metrics` over Tailscale), `ujust pi-status` all work.
+- [ ] **Step 7: UX** — new SSH login shows fastfetch with the juniper logo and the status block; `ujust toggle-motd` hides it; `ujust devbox`, `ujust install-podlet`, `ujust enable-metrics` (curl `:9100/metrics` over Tailscale), `ujust pi-status` all work; `brew --version` works in a new login shell (ublue's brew-setup ran).
+- [ ] **Step 7b: Minimal** — flash `juniper-minimal-*.raw.xz` (or `sudo bootc switch ghcr.io/gnathoi/juniper-minimal:latest` and reboot); repeat Steps 2–3 quickly; confirm the login shows the status block without fastfetch, `ujust` lists no `devbox`, `command -v brew distrobox` finds nothing.
 - [ ] **Step 8: Commit**
 
 ```bash
