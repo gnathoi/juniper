@@ -3,7 +3,7 @@
   "logo": {
     "type": "file",
     "source": "/usr/share/juniper/logo.txt",
-    "color": { "1": "green", "2": "blue" },
+    "color": { "1": "green", "2": "blue", "3": "94" },
     "padding": { "right": 2 }
   },
   "modules": [
