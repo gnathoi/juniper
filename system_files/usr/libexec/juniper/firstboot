@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # One-shot first-boot setup, after cloud-init (juniper-firstboot.service):
-# scrub secrets off the unencrypted CIDATA partition and retire cloud-init.
+# scrub secrets off the unencrypted CIDATA partition, retire cloud-init, and switch the
+# bootc origin to signature-enforced.
 # Safe to re-run: every step is idempotent.
 set -euo pipefail
 
@@ -29,7 +30,10 @@ enforce_signatures() {
   # place (no new deployment) so every future `bootc upgrade` verifies the cosign signature.
   local ref
   ref=$(bootc status --json | jq -r '.spec.image.image // empty')
-  [[ -n $ref ]] || return 0
+  if [[ -z $ref ]]; then
+    echo "juniper-firstboot: no image ref in bootc status; signature enforcement NOT applied" >&2
+    return 0
+  fi
   bootc switch --mutate-in-place --enforce-container-sigpolicy "$ref"
 }
 

@@ -94,6 +94,15 @@ test_firstboot_enforces_signatures() {
     called "bootc switch --mutate-in-place --enforce-container-sigpolicy ghcr.io/gnathoi/juniper:latest"
 }
 
+test_firstboot_warns_without_image_ref() {
+  firstboot_env
+  stub bootc 'if [[ $1 == status ]]; then echo "{}"; fi'
+  err=$("$LIBEXEC/firstboot" 2>&1 >/dev/null)
+  check "firstboot: warns when enforcement skipped" \
+    grep -q "no image ref in bootc status; signature enforcement NOT applied" <<<"$err"
+  check "firstboot: no switch without ref" not_called "bootc switch"
+}
+
 test_lockdown_waits_for_join() {
   stub tailscale "echo '{\"BackendState\":\"NeedsLogin\"}'"
   "$LIBEXEC/lockdown"

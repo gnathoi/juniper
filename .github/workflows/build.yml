@@ -15,7 +15,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
 
 permissions:
   contents: read
@@ -67,7 +67,11 @@ jobs:
           echo "image_ref=${ref,,}" >>"$GITHUB_OUTPUT"
           echo "version=$(date -u +%Y%m%d)" >>"$GITHUB_OUTPUT"
 
+      # cosign v2 on purpose: v3's bundle/referrers format isn't read by containers/image's
+      # sigstore-attachments lookup, so devices would reject updates.
       - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.5.2
 
       - name: Verify pinned Homebrew image signature
         if: matrix.image == 'juniper'
@@ -148,6 +152,13 @@ jobs:
           echo "$GITHUB_TOKEN" | cosign login "$REGISTRY" -u "$GITHUB_ACTOR" --password-stdin
           cosign sign --yes --key env://COSIGN_PRIVATE_KEY "$IMAGE_REF@$DIGEST"
 
+      - name: Verify signature with the on-device key
+        if: env.PUBLISH == 'true'
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: cosign verify --key system_files/usr/share/pki/containers/juniper.pub "$IMAGE_REF@$DIGEST" >/dev/null
+
       - name: SBOM
         if: env.PUBLISH == 'true'
         uses: anchore/sbom-action@v0
@@ -155,6 +166,7 @@ jobs:
           image: ${{ steps.meta.outputs.image_ref }}@${{ steps.push.outputs.digest }}
           format: spdx-json
           output-file: sbom.spdx.json
+          upload-artifact: false
           registry-username: ${{ github.actor }}
           registry-password: ${{ secrets.GITHUB_TOKEN }}
 
@@ -168,3 +180,12 @@ jobs:
         run: |
           cosign attest --yes --key env://COSIGN_PRIVATE_KEY --type spdxjson \
             --predicate sbom.spdx.json "$IMAGE_REF@$DIGEST"
+
+      - name: Verify SBOM attestation
+        if: env.PUBLISH == 'true'
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          cosign verify-attestation --key system_files/usr/share/pki/containers/juniper.pub \
+            --type spdxjson "$IMAGE_REF@$DIGEST" >/dev/null
