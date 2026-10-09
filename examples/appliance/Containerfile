@@ -1,5 +1,6 @@
 # Example appliance built on Juniper Minimal: one extra package and one quadlet service.
 # Build: podman build --platform linux/arm64 -t ghcr.io/you/sensor-box:latest examples/appliance
+# hadolint ignore=DL3007
 FROM ghcr.io/gnathoi/juniper-minimal:latest
 
 # hadolint ignore=DL3041
