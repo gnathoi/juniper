@@ -1,0 +1,2 @@
+# Fewer writes to the SD card. rpi-bootc-bootloader copies BLS options to cmdline.txt.
+kargs = ["rootflags=noatime"]
