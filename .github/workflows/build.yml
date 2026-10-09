@@ -4,6 +4,8 @@ on:
   push:
     branches: ["**"]
     tags: ["v*"]
+    # Docs-only pushes skip the image builds; lint-docs.yml lints them instead.
+    paths-ignore: ["docs/**", "**/*.md"]
   schedule:
     - cron: "0 2 * * 1"  # Weekly release train: Mondays 02:00 UTC publishes images, disk images and a release
   workflow_dispatch:

@@ -1,0 +1,21 @@
+name: lint-docs
+
+# Lints docs-only pushes, which build.yml skips (paths-ignore) to save image-build minutes.
+on:
+  push:
+    branches: ["**"]
+    paths: ["docs/**", "**/*.md"]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: extractions/setup-just@v4
+      - uses: pre-commit/action@v3.0.1
