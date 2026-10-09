@@ -52,7 +52,9 @@ for r in update update-schedule lan-ssh tailscale-up tailscale-ssh toggle-motd e
     exit 1
   }
 done
-HOME=/tmp /usr/libexec/juniper/motd | grep -q 'Tailscale'
+# Capture first: `grep -q` exiting early would SIGPIPE motd under pipefail.
+motd=$(HOME=/tmp /usr/libexec/juniper/motd)
+grep -q 'Tailscale' <<<"$motd"
 
 if [[ $IMAGE_ID == juniper ]]; then
   # --- full image only ---
