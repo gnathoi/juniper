@@ -997,6 +997,17 @@ test_firstboot_rerun_after_power_loss() {
   check "firstboot rerun: marked done" test -e "$JUNIPER_STATE_DIR/firstboot.done"
 }
 
+test_firstboot_mounts_cidata_by_label() {
+  firstboot_env
+  unset JUNIPER_CIDATA_DIR
+  stub blkid 'echo /dev/mmcblk0p1'
+  # TMPDIR under $T: with mount stubbed, the trap's rmdir can't remove the temp dir.
+  TMPDIR="$T" "$LIBEXEC/firstboot" 2>/dev/null || true
+  check "firstboot: looks up CIDATA label" called "blkid -L CIDATA"
+  check "firstboot: mounts it" called "mount /dev/mmcblk0p1"
+  check "firstboot: unmounts it" called "umount"
+}
+
 ```
 
 and add the helper next to `called`/`not_called`:
