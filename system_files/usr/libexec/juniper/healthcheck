@@ -20,8 +20,9 @@ healthy() {
 }
 
 in_tryboot() {
-  # Big-endian u32 set by the Pi bootloader when it booted tryboot.txt.
-  [[ -r $tryboot_flag ]] && [[ $(od -An -tu4 --endian=big "$tryboot_flag" | tr -d ' ') != 0 ]]
+  # Big-endian u32 set by the Pi bootloader when it booted tryboot.txt. Fail closed: only an
+  # exact 1 counts; 0, empty, longer or missing means a normal boot (never reboot-loop).
+  [[ -r $tryboot_flag ]] && [[ $(od -An -tu4 --endian=big -N4 "$tryboot_flag" | tr -d ' ') == 1 ]]
 }
 
 for ((i = 0; i < tries; i++)); do

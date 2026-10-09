@@ -187,6 +187,36 @@ test_healthcheck_requires_tailscale_once_locked() {
   check "health: locked + tailscale down -> fall back" called "systemctl reboot"
 }
 
+test_healthcheck_normal_boot_flag_zero_no_reboot() {
+  health_env
+  printf '\x00\x00\x00\x00' >"$JUNIPER_TRYBOOT_FLAG"
+  "$LIBEXEC/healthcheck" || true
+  check "health: flag 0 unhealthy -> no reboot" not_called "systemctl reboot"
+}
+
+test_healthcheck_normal_boot_flag_empty_no_reboot() {
+  health_env
+  : >"$JUNIPER_TRYBOOT_FLAG"
+  "$LIBEXEC/healthcheck" || true
+  check "health: empty flag unhealthy -> no reboot" not_called "systemctl reboot"
+}
+
+test_healthcheck_normal_boot_flag_8_zero_bytes_no_reboot() {
+  health_env
+  printf '\x00\x00\x00\x00\x00\x00\x00\x00' >"$JUNIPER_TRYBOOT_FLAG"
+  "$LIBEXEC/healthcheck" || true
+  check "health: 8 zero bytes unhealthy -> no reboot" not_called "systemctl reboot"
+}
+
+test_healthcheck_healthy_tryboot_confirms() {
+  health_env
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  "$LIBEXEC/healthcheck"
+  check "health: healthy tryboot -> sync" called "rpi-bootc-bootloader sync"
+  check "health: healthy tryboot -> no reboot" not_called "systemctl reboot"
+}
+
 # --- runner ---
 for t in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do
   setup
