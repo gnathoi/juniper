@@ -280,7 +280,7 @@ jobs:
             cosign sign-blob --yes --key env://COSIGN_PRIVATE_KEY --bundle "$f.bundle" "$f"
             cosign verify-blob --key system_files/usr/share/pki/containers/juniper.pub --bundle "$f.bundle" "$f"
           done
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.TAG }}
           name: Juniper ${{ env.VERSION }}
