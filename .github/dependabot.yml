@@ -4,10 +4,12 @@ updates:
     directory: /
     schedule:
       interval: weekly
+      day: saturday
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+      day: saturday
     ignore:
       # Homebrew tarball: bumped deliberately with `just bump-brew` (each bump is ~150 MB
       # for devices; brew updates itself on the device anyway).

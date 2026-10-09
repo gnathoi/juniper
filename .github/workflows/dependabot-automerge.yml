@@ -1,0 +1,42 @@
+name: dependabot-automerge
+
+on:
+  workflow_run:
+    workflows: [build]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  merge:
+    # yamllint disable-line rule:line-length
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && startsWith(github.event.workflow_run.head_branch, 'dependabot/')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # workflow_run: this checks out the default branch, never PR code.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Squash-merge the green Dependabot PR (not major bumps, not drafts)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          pr=$(gh pr list --state open --head "$BRANCH" --json number,headRefOid,author,isDraft \
+            --jq ".[] | select(.headRefOid == \"$SHA\" and .author.login == \"app/dependabot\"
+              and (.isDraft | not)) | .number")
+          if [ -z "$pr" ]; then
+            echo "No open, non-draft Dependabot PR for $BRANCH at $SHA; nothing to merge."
+            exit 0
+          fi
+          title=$(gh pr view "$pr" --json title --jq .title)
+          if [ "$(.github/scripts/dependabot-update-type.sh "$title")" = major ]; then
+            gh pr comment "$pr" --body "Major update, not auto-merged: review and merge manually."
+            exit 0
+          fi
+          gh pr merge "$pr" --squash --delete-branch

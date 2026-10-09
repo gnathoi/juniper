@@ -54,7 +54,8 @@ block (Image, Tailscale, Update, Tip), without the logo and system summary.
 | `ujust` | list everything |
 | `ujust update` | update and reboot now |
 | `ujust switch IMAGE` | switch to another image and reboot into it now |
-| `ujust update-schedule 03:30` / `off` | move or disable the reboot window |
+| `ujust update-schedule` | show the update and reboot timers |
+| `ujust update-schedule tue 04:00` / `daily 03:30` / `05:00` / `off` | set day and time, change time only, or disable the weekly reboot window |
 | `ujust lan-ssh on` / `off` | re-open SSH on the local network (escape hatch) |
 | `ujust tailscale-up` | log in to Tailscale interactively |
 | `ujust enable-metrics` | node_exporter on :9100 over Tailscale |
@@ -88,9 +89,18 @@ the current image; use `ujust switch`/`ujust update`.
     just bump-brew                               # move the Homebrew pin (verifies signature)
     sudo just build-raw ghcr.io/gnathoi/juniper:latest
 
-CI builds both images on every push, publishes from `main` weekly (Monday 02:00 UTC) and
-on demand (Actions → build → Run workflow; tick "build_raw" for disk images + a release).
-Each publish reports how many layers and MiB a device downloads.
+## Release train
+
+Dependabot PRs (checked Saturdays) merge themselves once CI is green, except major version
+bumps, which wait for manual review. Merges are not rebuilt on `main`, so Monday's run is the
+first full test of them (GitHub emails you if a scheduled run fails). Your pushes to `main`
+build and test but do not publish. One weekly run (Monday 02:00 UTC) publishes both signed
+images, the disk images and a release. Pis then reboot into it on Tuesday 04:00 local time,
+plus up to 90 minutes of random delay; change that with `ujust update-schedule`. For
+something urgent, run `gh workflow run build` on `main` to publish the images now (add
+`-f build_raw=true` for disk images and a release), then `ujust update` on devices;
+otherwise they apply it at the next Tuesday window. Each publish reports how many layers
+and MiB a device downloads.
 
 ## License
 

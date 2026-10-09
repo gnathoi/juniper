@@ -147,21 +147,52 @@ test_apply_update_with_staged() {
   check "apply-update: staged -> tryreboot" called "rpi-bootc-bootloader tryreboot"
 }
 
-test_update_schedule_sets_time() {
+sched() { "$LIBEXEC/update-schedule" "$@"; }
+
+test_update_schedule_day_and_time() {
   export JUNIPER_DROPIN_DIR=$T/dropin
   stub timedatectl 'echo Europe/London'
-  out=$("$LIBEXEC/update-schedule" 03:30)
-  check "schedule: drop-in written" grep -qx 'OnCalendar=\*-\*-\* 03:30:00' "$JUNIPER_DROPIN_DIR/schedule.conf"
+  out=$(sched wed 03:30)
+  check "schedule: weekly drop-in" grep -qx 'OnCalendar=Wed \*-\*-\* 03:30:00' "$JUNIPER_DROPIN_DIR/schedule.conf"
   check "schedule: resets OnCalendar first" grep -qx 'OnCalendar=' "$JUNIPER_DROPIN_DIR/schedule.conf"
   check "schedule: timer re-enabled" called "systemctl enable --now juniper-reboot.timer"
-  check "schedule: names the timezone" grep -q 'Europe/London' <<<"$out"
+  check "schedule: daemon-reload" called "systemctl daemon-reload"
+  check "schedule: names day, time, timezone" grep -q 'Wed.*03:30.*Europe/London' <<<"$out"
+}
+
+test_update_schedule_daily() {
+  export JUNIPER_DROPIN_DIR=$T/dropin
+  sched daily 03:30
+  check "schedule: daily drop-in" grep -qx 'OnCalendar=\*-\*-\* 03:30:00' "$JUNIPER_DROPIN_DIR/schedule.conf"
+}
+
+test_update_schedule_day_case_insensitive() {
+  export JUNIPER_DROPIN_DIR=$T/dropin
+  sched SaT 01:00
+  check "schedule: case-insensitive day" grep -qx 'OnCalendar=Sat \*-\*-\* 01:00:00' "$JUNIPER_DROPIN_DIR/schedule.conf"
+}
+
+test_update_schedule_time_only_keeps_day() {
+  export JUNIPER_DROPIN_DIR=$T/dropin
+  sched fri 03:30
+  sched 05:00
+  check "schedule: time-only keeps weekday" grep -qx 'OnCalendar=Fri \*-\*-\* 05:00:00' "$JUNIPER_DROPIN_DIR/schedule.conf"
+  sched daily 03:30
+  sched 06:00
+  check "schedule: time-only keeps daily" grep -qx 'OnCalendar=\*-\*-\* 06:00:00' "$JUNIPER_DROPIN_DIR/schedule.conf"
+}
+
+test_update_schedule_time_only_defaults_tue() {
+  export JUNIPER_DROPIN_DIR=$T/dropin
+  sched 05:00
+  check "schedule: time-only, no drop-in -> Tue" grep -qx 'OnCalendar=Tue \*-\*-\* 05:00:00' "$JUNIPER_DROPIN_DIR/schedule.conf"
 }
 
 test_update_schedule_rejects_bad_input() {
   export JUNIPER_DROPIN_DIR=$T/dropin
-  for bad in 24:00 3:30 03:3 '03:30;reboot' 'now'; do
-    # shellcheck disable=SC2016 # $0/$1 expand in the inner bash
-    check "schedule: rejects '$bad'" bash -c '! "$0" "$1" 2>/dev/null' "$LIBEXEC/update-schedule" "$bad"
+  for bad in 24:00 3:30 03:3 '03:30;reboot' now 'funday 04:00' 'tue 4:00' tue 'tue 04:00 extra'; do
+    # shellcheck disable=SC2016,SC2086 # $0/$@ expand in the inner bash; $bad splits into args on purpose
+    check "schedule: rejects '$bad'" bash -c '"$0" "$@" 2>/dev/null; [[ $? == 2 ]]' "$LIBEXEC/update-schedule" $bad
   done
   check "schedule: nothing written" test ! -e "$JUNIPER_DROPIN_DIR/schedule.conf"
 }
@@ -169,6 +200,16 @@ test_update_schedule_rejects_bad_input() {
 test_update_schedule_off() {
   "$LIBEXEC/update-schedule" off
   check "schedule off: timer disabled" called "systemctl disable --now juniper-reboot.timer"
+}
+
+test_dependabot_update_type() {
+  local c=$ROOT/.github/scripts/dependabot-update-type.sh
+  check "dependabot: major" test "$("$c" 'Bump actions/checkout from 4 to 7')" = major
+  check "dependabot: minor" test "$("$c" 'Bump foo/bar from 4.1.0 to 4.2.1')" = minor-or-patch
+  check "dependabot: v3 -> v3.1" test "$("$c" 'Bump foo/bar from v3 to v3.1')" = minor-or-patch
+  # shellcheck disable=SC2016 # literal backticks
+  check "dependabot: digest" test "$("$c" 'Bump almalinux/almalinux-bootc from `08b3612` to `9a1c2d3`')" = other
+  check "dependabot: unparseable" test "$("$c" 'Update stuff')" = other
 }
 
 health_env() {
