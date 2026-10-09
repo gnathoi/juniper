@@ -52,3 +52,6 @@ systemctl enable tailscaled.service firewalld.service avahi-daemon.service \
   podman-auto-update.timer
 systemctl --global enable podman-auto-update.timer
 systemctl mask bootc-fetch-apply-updates.timer
+
+# --- cleanup: package scriptlets leave runtime-only content that bootc lint rejects ---
+rm -rf /run/cloud-init /tmp/nvim.*
