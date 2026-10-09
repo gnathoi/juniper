@@ -1,4 +1,4 @@
-# Juniper — project status (2026-10-09)
+# Juniper — project status (2026-10-09, evening)
 
 Start here when picking the project up on another machine.
 
@@ -7,8 +7,19 @@ Start here when picking the project up on another machine.
 | | What | Spec | Plan | State |
 |---|---|---|---|---|
 | A | Images (`juniper-minimal`, `juniper`), CI, release train | `specs/2026-10-09-juniper-image-design.md` | `plans/2026-10-09-juniper-image-core.md` | Tasks 1–10 done on `main`; images public + signed; first release `build-20261009` published and verified; Task 11 (Pi 5 hardware acceptance) pending |
-| B | Tailscale field in Raspberry Pi Imager (fork, upstreamable) | `specs/2026-10-09-imager-tailscale-design.md` | `plans/2026-10-09-imager-tailscale.md` | Plan written, not started; no fork yet (see the plan's "Status and handoff") |
+| B | Tailscale field in Raspberry Pi Imager (own-use fork, no upstream PR) | `specs/2026-10-09-imager-tailscale-design.md` | `plans/2026-10-09-imager-tailscale.md` | Fork `gnathoi/rpi-imager` created, branch `feat/tailscale-customisation` at upstream `8e7e0b6f`; pre-flight scan done and ruled; Task 0 (local build) started; no code yet. Resume from the plan's "Status and handoff" |
 | C | Encryption at rest (OTP-bound LUKS2 + recovery passphrase, Pi 4/5) | not written | not written | Needs a feasibility spike first (OTP burn is irreversible; LUKS root with rpi-bootc-bootloader/ostree unproven) |
+
+## Tomorrow morning (2026-10-10), in order
+
+1. **CI on `main` is red.** The push build after merging #18 (run 37999745485) failed in `build (juniper)` → `Build and rechunk`. The cause was `502 Bad Gateway` while pulling a blob, a registry flake and not the changelog change. `build (juniper-minimal)` passed. Fix the follow-up below ("Retry the rechunk step's pull"): wrap the pull in the same 3-attempt retry the Push step uses. Then re-run (`gh run rerun 37999745485 --failed`) to get `main` green.
+2. **Check the changelog release test.** Dispatch run 37999760508 (`build_raw=true`, started 22:32 UTC) had both images built and the disk jobs queued at 22:45 UTC. Check: `gh run view 37999760508`. Then check that:
+   - release `build-20261009`'s notes contain the changelog entry plus "What's Changed";
+   - `main` has a `docs: changelog for build-20261009` commit by github-actions[bot], with Unreleased empty and the entry added to the existing `build-20261009` section (a same-day release);
+   - that push didn't start a `build` run.
+   If the stamp step failed, its log says why. A rerun of the release job is safe: it does nothing if the changelog is already stamped.
+3. **Imager fork (sub-project B):** finish Task 0, then Tasks 1–8 and Task 10. See the plan's "Status and handoff".
+4. **Flash the Pi 5:** use the plan's "Flashing a real card while the Juniper repo is private" (local `os-list.json` served on 127.0.0.1) with the fork's Imager, then work through Task 11's acceptance checks below. The plain `dd` route below still works if the Imager isn't ready.
 
 ## A: what is left
 
@@ -33,6 +44,8 @@ Start here when picking the project up on another machine.
 3. When it works: make the repo public (Actions become free; the README's `os-list.json` URL starts working for rpi-imager) — do the "before making the repo public" follow-up below first.
 
 ## What happened on 2026-10-09 (for context)
+
+- Evening: `CHANGELOG.md` added (#18). Release notes now come from its Unreleased section, and the release job stamps the entries under the tag on `main`. Unreleased entries go in the same PR as the change. The repo stays private while testing.
 
 - All PRs squash-merged (#1–#16); `main` CI green. Packages made public; both `:latest` images verify anonymously with `juniper.pub`.
 - Update size: rechunking split everything by RPM, but Juniper's own files and the Homebrew tarball shared one ~150 MB layer with the initramfs, so every build re-sent it. Fixed (#14) with `user.component` xattrs: separate `juniper` (~0.3 MB) and `homebrew` (~156 MB, changes only on `just bump-brew`) layers; `just check-layers` asserts this in CI.

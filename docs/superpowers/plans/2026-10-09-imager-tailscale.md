@@ -23,10 +23,43 @@
   - `system_files/usr/libexec/juniper/firstboot` shreds CIDATA `user-data`/`network-config` and cloud-init's cached copies.
   - `disk/render-os-list.sh` emits `init_format: "cloudinit"`, `capabilities: ["tailscale","passwordless_sudo"]`, and devices `pi5-64bit` and `pi4-64bit`.
   - `disk/bib-config.toml` makes partition 1 the FAT firmware partition with the label `CIDATA`. Imager writes `user-data`/`meta-data`/`network-config` to FAT partition 1 (`src/downloadthread.cpp:2790`, `:2825-2856`), so the files land in CIDATA.
-- **No fork exists yet.** This plan was written against upstream `8e7e0b6f` (tag v2.0.12). Every line number below refers to that commit. The plan has **not been executed**.
-- No Juniper GitHub release exists yet (`gh release list --repo gnathoi/juniper` is empty). Task 10 therefore uses a synthetic card image whose OS list is rendered by Juniper's own `render-os-list.sh`. The real-hardware boot check in that task waits for a Juniper release.
+- **Fork created on 2026-10-09:** `github.com/gnathoi/rpi-imager`, cloned at `~/workspace/rpi-imager-fork` (remote `upstream` = raspberrypi/rpi-imager). Branch `feat/tailscale-customisation` is at `8e7e0b6f`, which is still `upstream/main`, so every line number below is valid. No code commits yet, and nothing is pushed.
+- **The fork is for our own use. There will be no upstream PR** (owner decision, 2026-10-09). Task 11 is dropped and Task 9 is deferred: we build locally. The upstream-style constraints below stay because they're cheap and keep rebasing on upstream easy.
+- Juniper release `build-20261009` exists, so Task 10 Step 5 (real hardware) can run.
+- Execution uses superpowers:subagent-driven-development. Its ledger, pre-flight scan and task briefs/reports live in the git-ignored `.superpowers/sdd/2026-10-09-imager-tailscale/` in the Juniper checkout on the dev machine. If that folder is lost, the "Execution rulings" below and `git log` in the fork are the record.
 
-**Next human action: create the fork and the working clone.**
+**Resume here (2026-10-10 morning):**
+
+1. Task 0 (distrobox `imager-dev` + baseline build) was started on the evening of 2026-10-09. Check `ls ~/workspace/rpi-imager-fork/build/test/` and the ledger's `task-0-report.md`. If the report is missing, re-run Task 0 (the distrobox and the partial `build/` can be reused).
+2. Then Tasks 1–8 in order, then Task 10 Steps 1–3 (rootless route, see below), then Steps 4–5 with a real card and a Pi.
+
+**Execution rulings (2026-10-09, from the pre-flight scan):**
+
+- Spec deviations 1 (`--timeout=120s`) and 2 (list-form runcmd) are kept as argued below. Amend the spec's example YAML afterwards.
+- Task 1 also updates `doc/local_json/create_local_json.py` (it rejects unknown capabilities), its README and the schema notes.
+- Task 4 extends the existing `LogCapture` in `src/test/image_writer_test.cpp` (~14078) instead of adding a near-copy `DebugCapture`.
+- Task 7 adds a QML test for the OS-change scrub. It also extends `tst_skip_customisation`, `tst_step_reachability` and the chaos step lists for the new step. `skipAllCustomisation()` must clear the key and options from `customizationSettings`, not just `tailscaleEnabled`. An already-staged payload must not take the key to the card after Skip: restage or strip it. If that needs an upstream-wide redesign, clear the key and note the rest.
+- Task 8 narrows the fuzzer's newline invariant so the generator's fixed Tailscale lines don't trip it (input `"x\nruncmd:"` does today), while it still catches lines injected through fuzzed fields.
+- Task 10 Steps 1–3 run rootless, because the distrobox can't losetup or mount. Build the fake image as a plain file (`sfdisk` + `mkfs.vfat --offset` or mtools), write the "card" to a plain file if the CLI accepts one, and read CIDATA with `mtools -i card.img@@1M`. If the CLI insists on a block device, do that one write with `sudo` on the host.
+
+**Flashing a real card while the Juniper repo is private** (Task 10 Step 5; the README's `releases/latest/download/os-list.json` URL needs the repo to be public):
+
+```bash
+D=$(mktemp -d) && cd "$D"
+gh release download build-20261009 --repo gnathoi/juniper -p 'juniper-20261009.raw.xz*'
+cosign verify-blob --key ~/workspace/juniper/system_files/usr/share/pki/containers/juniper.pub \
+  --bundle juniper-20261009.raw.xz.bundle juniper-20261009.raw.xz
+xz -dk juniper-20261009.raw.xz        # render-os-list.sh hashes the expanded image (8.6 GB)
+~/workspace/juniper/disk/render-os-list.sh juniper juniper-20261009.raw juniper-20261009.raw.xz \
+  http://127.0.0.1:8000/juniper-20261009.raw.xz 20261009 >os-list.json
+rm juniper-20261009.raw
+python3 -m http.server 8000 --bind 127.0.0.1 &
+~/workspace/rpi-imager-fork/build/rpi-imager --repo http://127.0.0.1:8000/os-list.json
+```
+
+Check before relying on it: whether the Imager running inside the distrobox can open the SD card (it goes through udisks2 on the host's system D-Bus). If it can't, run it with `sudo -E` from the distrobox, or use the CLI with `--tailscale-authkey-file`. Once flashed, the Pi updates from `ghcr.io/gnathoi/*`, which is public, so a private repo doesn't stop updates. Create a **tagged**, one-off, pre-approved Tailscale key first, and tick "Enable Tailscale SSH" (see Observations).
+
+**How the fork and clone were made (done; for reference):**
 
 ```bash
 gh repo fork raspberrypi/rpi-imager --clone=false          # creates gnathoi/rpi-imager
