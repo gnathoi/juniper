@@ -1,0 +1,32 @@
+name: dependabot-automerge
+
+on:
+  workflow_run:
+    workflows: [build]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  merge:
+    # yamllint disable-line rule:line-length
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && startsWith(github.event.workflow_run.head_branch, 'dependabot/')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Squash-merge the green Dependabot PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          pr=$(gh pr list --state open --head "$BRANCH" --json number,headRefOid,author \
+            --jq ".[] | select(.headRefOid == \"$SHA\" and .author.login == \"app/dependabot\") | .number")
+          if [ -z "$pr" ]; then
+            echo "No open Dependabot PR for $BRANCH at $SHA; nothing to merge."
+            exit 0
+          fi
+          gh pr merge "$pr" --squash --delete-branch
