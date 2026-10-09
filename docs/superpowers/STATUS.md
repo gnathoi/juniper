@@ -60,7 +60,7 @@ Start here when picking the project up on another machine.
 - Homebrew baked into `juniper` from `ghcr.io/ublue-os/brew` pinned by digest, cosign-verified in CI; Dependabot ignores it; bump with `just bump-brew`.
 - Signatures: key-based cosign (public key `system_files/usr/share/pki/containers/juniper.pub`, private key only in the `SIGNING_SECRET` repo secret and the owner's password manager). Policy scoped to the namespace `ghcr.io/gnathoi`; no global reject (would break podman app pulls). The bootc origin is NOT switched to `--enforce-container-sigpolicy` (with the base's `insecureAcceptAnything` default that refuses every pull); the namespace policy still enforces on every update. cosign pinned to v2 (v3's bundle format is invisible to containers/image). SBOM attestations skip Rekor (too large); image signatures use it.
 - Release train: Dependabot Saturday → green minor/patch/digest auto-merge (majors wait; draft = hold) → Monday 02:00 UTC publish + disk images + signed release → Pis reboot Tuesday 04:00 local (+≤90 min). Pushes to `main` never publish.
-- Merge policy: squash merges.
+- Merge policy: squash merges. Commit subjects and PR titles (the squash subject) always start with a conventional prefix: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `build:`, `refactor:` (scope optional, e.g. `fix(ci):`).
 
 ## Known follow-ups (deliberately deferred)
 
