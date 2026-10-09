@@ -14,12 +14,14 @@
 
 - Base image: `quay.io/almalinuxorg/almalinux-bootc-rpi:10@sha256:08b361228495c05656b1367fb41507a79ea9b7eca293f21bbc5e4801e3355337` (index digest as of 2026-10-09; Dependabot bumps it).
 - Hardware: Pi 4, Pi 5, Pi 400/500, CM4/CM5. aarch64 only. GPT disk only. Dev target Pi 5 4GB.
-- Image ref is always fully qualified: `${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/juniper`, `IMAGE_REGISTRY` default `quay.io`, lowercased.
+- Published image: `ghcr.io/gnathoi/juniper` (CI computes `${IMAGE_REGISTRY:-ghcr.io}/${owner}/juniper`, lowercased; pushes with `GITHUB_TOKEN`, no registry secrets). The base image ref in the Containerfile is fully qualified with its registry (`quay.io/almalinuxorg/...`).
+- Repo `github.com/gnathoi/juniper` is **private**; the GHCR package is made **public** so Pis can pull updates. Release assets stay private until the repo goes public (the rpi-imager OS-list URL only works after that).
 - License Apache-2.0. Never copy files from `../bootc-images-rpi` (GPL-3.0); re-implement.
 - Everything shipped goes under `/usr` unless the tool only reads `/etc`. Nothing written to `/var` at build time. `bootc container lint` must pass.
 - Shell: bash, `set -euo pipefail`, 2-space indent (`shfmt -i 2 -ci`), shellcheck-clean. Every script overridable paths via `JUNIPER_*` env vars so tests can redirect them.
 - State markers live in `/var/lib/juniper/` (`firstboot.done`, `locked`).
-- Local image builds need an arm64 host or `qemu-user-static` (`sudo rpm-ostree install qemu-user-static` on an Atomic host, then reboot). Unit tests (`tests/unit.sh`) run natively and are the main TDD loop; image tasks may instead push a branch and let CI build.
+- **Image builds are verified on GitHub's arm64 runner, not locally** (the dev host has no arm64 emulation). Work happens on branch `impl/image-core`; to build and smoke-test the image: `git push origin impl/image-core && gh run watch --exit-status $(gh run list --branch impl/image-core --limit 1 --json databaseId -q '.[0].databaseId')`. The `build` job's "Smoke test" step runs `tests/image.sh`. Unit tests (`tests/unit.sh`) run natively and are the main TDD loop.
+- The arm64 runner has ~14 GB disk; the workflow frees space before building. Private-repo Actions minutes are billed, so batch pushes per task rather than per step.
 - Commits end with `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`.
 
 ## Deviations from the spec (decided while planning, spec updated in Task 1)
@@ -31,6 +33,7 @@
 - **Recipes cut:** `install-cockpit` (needs host bridge + Origins/serve config) and `setup-backup` (interactive restic config). Kept: `devbox`, `install-podlet`, `enable-metrics`.
 - **Tailscale IP lives in the MOTD status block**, not a fastfetch module (avoids showing it twice).
 - **Firewall uses stock zones** (`drop`, `trusted`) via `firewall-cmd`; no vendor zone files.
+- **Registry is GHCR** (`ghcr.io/gnathoi/juniper`, public package, private repo) instead of quay.io; CI moved into Task 1 so every task's image changes are verified on the arm64 runner.
 
 ## Review Focus
 
@@ -79,7 +82,7 @@ LICENSE, THIRD_PARTY.md, README.md, .gitignore
 ### Task 1: Skeleton, Containerfile, test harnesses
 
 **Files:**
-- Create: `Containerfile`, `build_files/build.sh`, `tests/unit.sh`, `tests/image.sh`, `Justfile`, `.gitignore`, `LICENSE`, `THIRD_PARTY.md`, `README.md`
+- Create: `Containerfile`, `build_files/build.sh`, `tests/unit.sh`, `tests/image.sh`, `Justfile`, `.gitignore`, `LICENSE`, `THIRD_PARTY.md`, `README.md`, `.pre-commit-config.yaml`, `.github/workflows/build.yml`
 - Modify: `docs/superpowers/specs/2026-10-09-juniper-image-design.md` (record the deviations above)
 
 **Interfaces:**
@@ -87,6 +90,7 @@ LICENSE, THIRD_PARTY.md, README.md, .gitignore
 - Produces: `tests/image.sh` — ordered list of assertions, new ones inserted above `echo "image smoke test: OK"`.
 - Produces: Justfile recipes `check`, `build`, `rechunk`, `test-image`, `build-raw ref out`; variables `image_ref`, `version`.
 - Produces: build args `IMAGE_REF` (no tag) and `IMAGE_VERSION` (YYYYMMDD) visible to `build.sh` as env.
+- Produces: workflow `.github/workflows/build.yml` with jobs `lint`, `build` (outputs `version`, `image_ref`, `digest`; steps "Smoke test", "Push"); env `PUBLISH`. Task 8 appends signing steps to `build`; Task 9 adds a `disk` job.
 
 - [ ] **Step 1: Record the planning deviations in the spec**
 
@@ -108,6 +112,11 @@ Append to `docs/superpowers/specs/2026-10-09-juniper-image-design.md`:
 - `install-cockpit` and `setup-backup` recipes dropped for v1.
 - Tailscale IP shown in the MOTD status block, not in fastfetch.
 - Firewall uses stock `drop`/`trusted` zones; no vendor zone files.
+- Registry is `ghcr.io/gnathoi/juniper` (pushed with `GITHUB_TOKEN`, package public, repo
+  private for now) instead of quay.io. The Containerfile's base image ref stays fully
+  qualified (`quay.io/almalinuxorg/...`).
+- CI triggers on pushes to any branch (build + test) instead of pull requests; publishing
+  happens on main, tags, the weekly cron and manual runs.
 ```
 
 - [ ] **Step 2: Write the unit-test harness**
@@ -207,7 +216,7 @@ COPY system_files /system_files
 
 FROM quay.io/almalinuxorg/almalinux-bootc-rpi:10@sha256:08b361228495c05656b1367fb41507a79ea9b7eca293f21bbc5e4801e3355337
 
-# Published image ref without tag (e.g. quay.io/me/juniper) and date version.
+# Published image ref without tag (e.g. ghcr.io/gnathoi/juniper) and date version.
 ARG IMAGE_REF=localhost/juniper
 ARG IMAGE_VERSION=dev
 
@@ -333,16 +342,176 @@ Podman quadlets, Distrobox, Homebrew, `ujust`, automatic updates with firmware r
 Status: under construction.
 ```
 
-- [ ] **Step 6: Build and run the smoke test**
+- [ ] **Step 6: Lint config and CI workflow (lint, arm64 build, smoke test, publish)**
 
-Run: `just build && just test-image`
-Expected: `image smoke test: OK`. If `bootc container lint --fatal-warnings` fails on a warning that comes from the unmodified base image (check by temporarily building with only the `FROM` line), drop `--fatal-warnings`, keep `bootc container lint`, and note the warning in a comment above the `RUN`.
+`.pre-commit-config.yaml`:
 
-- [ ] **Step 7: Commit**
+```yaml
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+  - repo: https://github.com/scop/pre-commit-shfmt
+    rev: v3.10.0-2
+    hooks:
+      - id: shfmt
+        args: [-w, -i, "2", -ci]
+  - repo: https://github.com/AleksaC/hadolint-py
+    rev: v2.12.0.3
+    hooks:
+      - id: hadolint
+        files: Containerfile
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.7
+    hooks:
+      - id: actionlint
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.35.1
+    hooks:
+      - id: yamllint
+        args: [-d, "{extends: default, rules: {line-length: {max: 120}, document-start: disable, truthy: {check-keys: false}}}"]
+  - repo: local
+    hooks:
+      - id: just-fmt
+        name: just --fmt --check
+        language: system
+        entry: bash -c 'for f in Justfile system_files/usr/share/juniper/just/*.just; do just --unstable --fmt --check --justfile "$f"; done'
+        files: (Justfile|\.just)$
+        pass_filenames: false
+      - id: unit-tests
+        name: tests/unit.sh
+        language: system
+        entry: tests/unit.sh
+        pass_filenames: false
+```
+
+Run: `pre-commit autoupdate && pre-commit run --all-files`
+Expected: all hooks pass (fix any shellcheck/shfmt/yamllint findings they raise in earlier tasks' files, then re-run).
+
+
+`.github/workflows/build.yml`:
+
+```yaml
+name: build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  schedule:
+    - cron: "0 2 * * 1"  # Mondays 02:00 UTC: pick up base image and package updates
+  workflow_dispatch:
+    inputs:
+      build_raw:
+        description: Also build the flashable .raw disk image and a release
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  # Branch pushes build and test only; main, tags, the weekly cron and manual runs publish.
+  PUBLISH: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: extractions/setup-just@v3
+      - uses: pre-commit/action@v3.0.1
+
+  build:
+    needs: lint
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      image_ref: ${{ steps.meta.outputs.image_ref }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v3
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /opt/ghc /usr/local/.ghcup
+          df -h /
+
+      - name: Image metadata
+        id: meta
+        env:
+          REGISTRY: ${{ vars.IMAGE_REGISTRY || 'ghcr.io' }}
+          NAMESPACE: ${{ github.repository_owner }}
+        run: |
+          ref="${REGISTRY}/${NAMESPACE}/juniper"
+          echo "image_ref=${ref,,}" >>"$GITHUB_OUTPUT"
+          echo "version=$(date -u +%Y%m%d)" >>"$GITHUB_OUTPUT"
+
+      - name: Build and rechunk
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          sudo "$(command -v just)" image_ref="$IMAGE_REF" version="$VERSION" build rechunk
+
+      - name: Smoke test
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+        run: sudo "$(command -v just)" image_ref="$IMAGE_REF" test-image "$IMAGE_REF:latest"
+
+      - name: Log in to registry
+        if: env.PUBLISH == 'true'
+        env:
+          REGISTRY: ${{ vars.IMAGE_REGISTRY || 'ghcr.io' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GITHUB_TOKEN" | sudo podman login -u "$GITHUB_ACTOR" --password-stdin "$REGISTRY"
+
+      - name: Push
+        id: push
+        if: env.PUBLISH == 'true'
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          for tag in latest "$VERSION" "sha-${GITHUB_SHA::7}"; do
+            for i in 1 2 3; do
+              sudo podman push --digestfile /tmp/digest "$IMAGE_REF:latest" "docker://$IMAGE_REF:$tag" && break
+              sleep $((10 * i))
+            done
+          done
+          echo "digest=$(cat /tmp/digest)" >>"$GITHUB_OUTPUT"
+```
+
+Run: `pre-commit run --all-files` → all hooks pass (fix what they flag, re-run).
+
+- [ ] **Step 7: Build and run the smoke test on CI**
+
+Run: `git checkout -b impl/image-core && git add -A && git commit -m "feat: image skeleton, test harnesses, CI" && git push -u origin impl/image-core`, then `gh run watch --exit-status <run id>`.
+Expected: `lint` green; `build` green with `image smoke test: OK` in the "Smoke test" step log (`gh run view <id> --log | grep "smoke test"`). If `bootc container lint --fatal-warnings` fails on a warning that comes from the unmodified base image, drop `--fatal-warnings`, keep `bootc container lint`, and note the warning in a comment above that `RUN`.
+
+- [ ] **Step 8: Commit any fixes**
 
 ```bash
 git add -A
-git commit -m "feat: image skeleton with os-release identity and test harnesses"
+git commit -m "fix: CI findings" && git push   # only if Step 7 needed changes
 ```
 
 ---
@@ -377,7 +546,7 @@ grep -q 'rootflags=noatime' /usr/lib/bootc/kargs.d/10-juniper.toml
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `just build && just test-image`
+Run: push the branch and watch CI (see Global Constraints)
 Expected: FAIL with `missing: tailscale`.
 
 - [ ] **Step 3: Install packages and stage Homebrew**
@@ -479,7 +648,7 @@ fi
 
 - [ ] **Step 5: Build and test**
 
-Run: `just build && just test-image`
+Run: push the branch and watch CI (see Global Constraints)
 Expected: `image smoke test: OK`. If `cloud-final.service` is not enabled, add it explicitly (already in the list) and check the unit name with `podman run --rm localhost/juniper:build systemctl list-unit-files 'cloud-*'`. If any EPEL package is missing, move it to a `ujust` brew install and note it in `THIRD_PARTY.md`.
 
 - [ ] **Step 6: Commit**
@@ -727,7 +896,7 @@ test -f /usr/share/juniper/cidata/user-data
 
 - [ ] **Step 7: Run tests**
 
-Run: `tests/unit.sh` → expected `all passed`. Then `just build && just test-image` → `image smoke test: OK`.
+Run: `tests/unit.sh` → expected `all passed`. Then CI (push + `gh run watch`) → `image smoke test: OK`.
 
 - [ ] **Step 8: Commit**
 
@@ -855,7 +1024,7 @@ Insert into `tests/image.sh`:
 firewall-offline-cmd --get-default-zone | grep -qx public
 ```
 
-- [ ] **Step 5: Run tests** — `tests/unit.sh` → `all passed`; `just build && just test-image` → OK.
+- [ ] **Step 5: Run tests** — `tests/unit.sh` → `all passed`; CI (push + `gh run watch`) → OK.
 
 - [ ] **Step 6: Commit**
 
@@ -1147,7 +1316,7 @@ grep -qx 'TRYBOOT=1' /etc/rpi-bootc-bootloader/tryboot.conf
 systemd-analyze verify /usr/lib/systemd/system/juniper-*.service /usr/lib/systemd/system/juniper-*.timer
 ```
 
-- [ ] **Step 6: Run tests** — `tests/unit.sh` → `all passed`; `just build && just test-image` → OK.
+- [ ] **Step 6: Run tests** — `tests/unit.sh` → `all passed`; CI (push + `gh run watch`) → OK.
 
 - [ ] **Step 7: Commit**
 
@@ -1180,7 +1349,7 @@ fastfetch --config /etc/xdg/fastfetch/config.jsonc --pipe >/dev/null
 HOME=/tmp /usr/libexec/juniper/motd | grep -q 'Tailscale'
 ```
 
-- [ ] **Step 2: Run to verify failure** — `just build && just test-image` → FAIL (`ujust: command not found`).
+- [ ] **Step 2: Run to verify failure** — CI (push + `gh run watch`) → FAIL (`ujust: command not found`).
 
 - [ ] **Step 3: ujust wrapper and recipes**
 
@@ -1412,7 +1581,7 @@ $1              |
 $1             _|_
 ```
 
-- [ ] **Step 5: Run tests** — `just build && just test-image` → OK. Also eyeball: `podman run --rm -it localhost/juniper:build fastfetch` and iterate on `logo.txt` until it looks like a juniper sprig.
+- [ ] **Step 5: Run tests** — CI (push + `gh run watch`) → OK. Also eyeball: `podman run --rm -it localhost/juniper:build fastfetch` and iterate on `logo.txt` until it looks like a juniper sprig.
 
 - [ ] **Step 6: Commit**
 
@@ -1423,72 +1592,16 @@ git commit -m "feat: ujust recipes, login MOTD and juniper fastfetch"
 
 ---
 
-### Task 7: Lint config and CI build/test/publish
+### Task 7: Dependabot, first publish, public package
 
 **Files:**
-- Create: `.pre-commit-config.yaml`, `.github/workflows/build.yml`, `.github/dependabot.yml`
+- Create: `.github/dependabot.yml`
 
 **Interfaces:**
-- Consumes: Justfile recipes `build`, `rechunk`, `test-image` (Task 1), `tests/unit.sh`.
-- Produces: workflow job `build` outputs `version` (YYYYMMDD) and `digest`; env `IMAGE_REF` lowercased. Task 8 adds signing; Task 9 adds the `disk` job.
-- Repo settings the user must create (Step 5): variables `IMAGE_REGISTRY` (optional), `IMAGE_NAMESPACE`; secrets `REGISTRY_USER`, `REGISTRY_PASSWORD`.
+- Consumes: workflow from Task 1 (publishes on `main`, tags, weekly cron, manual runs).
+- Produces: public package `ghcr.io/gnathoi/juniper` with tags `latest`, `YYYYMMDD`, `sha-xxxxxxx`.
 
-- [ ] **Step 1: Pre-commit config**
-
-`.pre-commit-config.yaml`:
-
-```yaml
-repos:
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
-    hooks:
-      - id: trailing-whitespace
-      - id: end-of-file-fixer
-      - id: check-yaml
-      - id: check-executables-have-shebangs
-      - id: check-shebang-scripts-are-executable
-  - repo: https://github.com/shellcheck-py/shellcheck-py
-    rev: v0.10.0.1
-    hooks:
-      - id: shellcheck
-  - repo: https://github.com/scop/pre-commit-shfmt
-    rev: v3.10.0-2
-    hooks:
-      - id: shfmt
-        args: [-w, -i, "2", -ci]
-  - repo: https://github.com/AleksaC/hadolint-py
-    rev: v2.12.0.3
-    hooks:
-      - id: hadolint
-        files: Containerfile
-  - repo: https://github.com/rhysd/actionlint
-    rev: v1.7.7
-    hooks:
-      - id: actionlint
-  - repo: https://github.com/adrienverge/yamllint
-    rev: v1.35.1
-    hooks:
-      - id: yamllint
-        args: [-d, "{extends: default, rules: {line-length: {max: 120}, document-start: disable, truthy: {check-keys: false}}}"]
-  - repo: local
-    hooks:
-      - id: just-fmt
-        name: just --fmt --check
-        language: system
-        entry: bash -c 'for f in Justfile system_files/usr/share/juniper/just/*.just; do just --unstable --fmt --check --justfile "$f"; done'
-        files: (Justfile|\.just)$
-        pass_filenames: false
-      - id: unit-tests
-        name: tests/unit.sh
-        language: system
-        entry: tests/unit.sh
-        pass_filenames: false
-```
-
-Run: `pre-commit autoupdate && pre-commit run --all-files`
-Expected: all hooks pass (fix any shellcheck/shfmt/yamllint findings they raise in earlier tasks' files, then re-run).
-
-- [ ] **Step 2: Dependabot**
+- [ ] **Step 1: Dependabot**
 
 `.github/dependabot.yml`:
 
@@ -1505,128 +1618,26 @@ updates:
       interval: weekly
 ```
 
-- [ ] **Step 3: Workflow**
-
-`.github/workflows/build.yml`:
-
-```yaml
-name: build
-
-on:
-  pull_request:
-  push:
-    branches: [main]
-    tags: ["v*"]
-  schedule:
-    - cron: "0 2 * * 1"  # Mondays 02:00 UTC: pick up base image and package updates
-  workflow_dispatch:
-    inputs:
-      build_raw:
-        description: Also build the flashable .raw disk image and a release
-        type: boolean
-        default: false
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-permissions:
-  contents: read
-
-env:
-  PUBLISH: ${{ github.event_name != 'pull_request' }}
-
-jobs:
-  lint:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - uses: extractions/setup-just@v3
-      - uses: pre-commit/action@v3.0.1
-
-  build:
-    needs: lint
-    runs-on: ubuntu-24.04-arm
-    outputs:
-      version: ${{ steps.meta.outputs.version }}
-      image_ref: ${{ steps.meta.outputs.image_ref }}
-      digest: ${{ steps.push.outputs.digest }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: extractions/setup-just@v3
-
-      - name: Image metadata
-        id: meta
-        env:
-          REGISTRY: ${{ vars.IMAGE_REGISTRY || 'quay.io' }}
-          NAMESPACE: ${{ vars.IMAGE_NAMESPACE || github.repository_owner }}
-        run: |
-          ref="${REGISTRY}/${NAMESPACE}/juniper"
-          echo "image_ref=${ref,,}" >>"$GITHUB_OUTPUT"
-          echo "version=$(date -u +%Y%m%d)" >>"$GITHUB_OUTPUT"
-
-      - name: Build and rechunk
-        env:
-          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
-          VERSION: ${{ steps.meta.outputs.version }}
-        run: |
-          sudo "$(command -v just)" image_ref="$IMAGE_REF" version="$VERSION" build rechunk
-
-      - name: Smoke test
-        env:
-          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
-        run: sudo "$(command -v just)" image_ref="$IMAGE_REF" test-image "$IMAGE_REF:latest"
-
-      - name: Log in to registry
-        if: env.PUBLISH == 'true'
-        env:
-          REGISTRY: ${{ vars.IMAGE_REGISTRY || 'quay.io' }}
-          REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
-          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
-        run: echo "$REGISTRY_PASSWORD" | sudo podman login -u "$REGISTRY_USER" --password-stdin "$REGISTRY"
-
-      - name: Push
-        id: push
-        if: env.PUBLISH == 'true'
-        env:
-          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
-          VERSION: ${{ steps.meta.outputs.version }}
-        run: |
-          for tag in latest "$VERSION" "sha-${GITHUB_SHA::7}"; do
-            for i in 1 2 3; do
-              sudo podman push --digestfile /tmp/digest "$IMAGE_REF:latest" "docker://$IMAGE_REF:$tag" && break
-              sleep $((10 * i))
-            done
-          done
-          echo "digest=$(cat /tmp/digest)" >>"$GITHUB_OUTPUT"
-```
-
-- [ ] **Step 4: Lint the workflow** — `pre-commit run --all-files` → actionlint/yamllint pass.
-
-- [ ] **Step 5: Repo setup (user action — confirm with the user before running)**
+Run: `pre-commit run --all-files` → pass. Commit and push:
 
 ```bash
-gh repo create <owner>/juniper --public --source . --push
-gh variable set IMAGE_NAMESPACE --body <quay-namespace>
-gh secret set REGISTRY_USER      # quay robot account name, e.g. <ns>+juniper_ci
-gh secret set REGISTRY_PASSWORD  # robot token
+git add .github/dependabot.yml
+git commit -m "ci: weekly Dependabot for actions and the base image digest"
+git push
 ```
 
-Create the quay.io repository `<ns>/juniper` as public and give the robot write access.
+- [ ] **Step 2: First publish from main**
 
-- [ ] **Step 6: Verify CI**
+Merge the branch so far: `gh pr create --base main --head impl/image-core --fill && gh pr merge --merge`. The push to `main` runs `build` with `PUBLISH=true`.
+Expected: `skopeo inspect docker://ghcr.io/gnathoi/juniper:latest` works **after** Step 3 (before it, the package is private and needs `skopeo login ghcr.io`).
 
-Open a PR from a branch: `lint` and `build` (no push) must be green. Merge: `build` pushes `:latest`, `:YYYYMMDD`, `:sha-xxxxxxx`. Check `skopeo inspect docker://quay.io/<ns>/juniper:latest`. Check the repo's Insights → Dependency graph → Dependabot lists `Containerfile`; if not, rename it to `Dockerfile` and update the Justfile `podman build` (add `-f Dockerfile`).
+- [ ] **Step 3: Make the package public (user action)**
 
-- [ ] **Step 7: Commit**
+GitHub → your profile → Packages → `juniper` → Package settings → Danger zone → Change visibility → Public. Then `skopeo inspect docker://ghcr.io/gnathoi/juniper:latest` succeeds without login.
 
-```bash
-git add -A
-git commit -m "ci: lint, arm64 build, smoke test, publish; weekly rebuild and Dependabot"
-```
+- [ ] **Step 4: Check Dependabot sees the Containerfile**
+
+Repo → Insights → Dependency graph → Dependabot: `Containerfile` listed under docker. If it is not, `git mv Containerfile Dockerfile`, change the Justfile `podman build` to add `-f Dockerfile`, and change hadolint's `files:` to `Dockerfile`.
 
 ---
 
@@ -1637,18 +1648,13 @@ git commit -m "ci: lint, arm64 build, smoke test, publish; weekly rebuild and De
 - Modify: `build_files/build.sh`, `system_files/usr/libexec/juniper/firstboot`, `tests/unit.sh`, `tests/image.sh`, `.github/workflows/build.yml`
 
 **Interfaces:**
-- Consumes: `build` job outputs `image_ref`, `digest` (Task 7); firstboot script (Task 3).
+- Consumes: `build` job outputs `image_ref`, `digest` (Task 1); firstboot script (Task 3).
 - Produces: `/etc/containers/policy.json` entry for `$IMAGE_REF` requiring `sigstoreSigned` with `/usr/share/pki/containers/juniper.pub`; secret `SIGNING_SECRET`.
 
-- [ ] **Step 1: Generate the key pair (user action — confirm first; the private key must never be committed)**
+- [ ] **Step 1: Check the key pair exists (the user generated it before execution)**
 
-```bash
-COSIGN_PASSWORD="" cosign generate-key-pair
-mkdir -p system_files/usr/share/pki/containers
-mv cosign.pub system_files/usr/share/pki/containers/juniper.pub
-gh secret set SIGNING_SECRET <cosign.key
-shred -u cosign.key
-```
+Run: `test -s system_files/usr/share/pki/containers/juniper.pub && gh secret list | grep -q SIGNING_SECRET && echo ok`
+Expected: `ok`. If not, stop and ask the user to run the key-generation commands from the execution handoff. Never create, read or commit a private key.
 
 - [ ] **Step 2: Failing tests**
 
@@ -1657,10 +1663,10 @@ Insert into `tests/unit.sh`:
 ```bash
 test_firstboot_enforces_signatures() {
   firstboot_env
-  stub bootc 'if [[ $1 == status ]]; then echo "{\"spec\":{\"image\":{\"image\":\"quay.io/ns/juniper:latest\"}}}"; fi'
+  stub bootc 'if [[ $1 == status ]]; then echo "{\"spec\":{\"image\":{\"image\":\"ghcr.io/gnathoi/juniper:latest\"}}}"; fi'
   "$LIBEXEC/firstboot"
   check "firstboot: switches origin to signature-enforced" \
-    called "bootc switch --mutate-in-place --enforce-container-sigpolicy quay.io/ns/juniper:latest"
+    called "bootc switch --mutate-in-place --enforce-container-sigpolicy ghcr.io/gnathoi/juniper:latest"
 }
 ```
 
@@ -1720,13 +1726,12 @@ Append to the `build` job in `.github/workflows/build.yml`:
         env:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
           DIGEST: ${{ steps.push.outputs.digest }}
-          REGISTRY: ${{ vars.IMAGE_REGISTRY || 'quay.io' }}
-          REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
-          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          REGISTRY: ${{ vars.IMAGE_REGISTRY || 'ghcr.io' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
           COSIGN_PASSWORD: ""
         run: |
-          echo "$REGISTRY_PASSWORD" | cosign login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
+          echo "$GITHUB_TOKEN" | cosign login "$REGISTRY" -u "$GITHUB_ACTOR" --password-stdin
           cosign sign --yes --key env://COSIGN_PRIVATE_KEY "$IMAGE_REF@$DIGEST"
 
       - name: SBOM
@@ -1736,8 +1741,8 @@ Append to the `build` job in `.github/workflows/build.yml`:
           image: ${{ steps.meta.outputs.image_ref }}@${{ steps.push.outputs.digest }}
           format: spdx-json
           output-file: sbom.spdx.json
-          registry-username: ${{ secrets.REGISTRY_USER }}
-          registry-password: ${{ secrets.REGISTRY_PASSWORD }}
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Attest SBOM
         if: env.PUBLISH == 'true'
@@ -1749,7 +1754,7 @@ Append to the `build` job in `.github/workflows/build.yml`:
         run: cosign attest --yes --key env://COSIGN_PRIVATE_KEY --type spdxjson --predicate sbom.spdx.json "$IMAGE_REF@$DIGEST"
 ```
 
-- [ ] **Step 6: Verify** — `tests/unit.sh` passes; image smoke test passes; after merge, `cosign verify --key system_files/usr/share/pki/containers/juniper.pub quay.io/<ns>/juniper:latest` succeeds.
+- [ ] **Step 6: Verify** — `tests/unit.sh` passes; CI smoke test passes; after merging to main, `cosign verify --key system_files/usr/share/pki/containers/juniper.pub ghcr.io/gnathoi/juniper:latest` succeeds.
 
 - [ ] **Step 7: Commit**
 
@@ -1767,8 +1772,8 @@ git commit -m "feat: cosign-signed images, enforced on device via containers pol
 - Modify: `.github/workflows/build.yml`, `README.md`, `tests/unit.sh`
 
 **Interfaces:**
-- Consumes: `/usr/share/juniper/cidata/*` from `system_files` (Task 3); `build` job outputs `image_ref`, `version` (Task 7).
-- Produces: release assets `juniper-<version>.raw.xz`, `SHA256SUMS`, `os-list.json`. Stable OS-list URL: `https://github.com/<owner>/juniper/releases/latest/download/os-list.json`.
+- Consumes: `/usr/share/juniper/cidata/*` from `system_files` (Task 3); `build` job outputs `image_ref`, `version` (Task 1).
+- Produces: release assets `juniper-<version>.raw.xz`, `SHA256SUMS`, `os-list.json`. While the repo is private these need `gh release download`; the stable OS-list URL `https://github.com/gnathoi/juniper/releases/latest/download/os-list.json` works for rpi-imager only once the repo is public.
 
 - [ ] **Step 1: Failing test for the OS list renderer**
 
@@ -1851,7 +1856,7 @@ minsize = "6 GiB"
 ```bash
 #!/usr/bin/env bash
 # Builds a flashable GPT .raw for Pi 4/5 from a pushed Juniper image (run as root):
-#   build-raw.sh quay.io/ns/juniper:latest juniper.raw
+#   build-raw.sh ghcr.io/gnathoi/juniper:latest juniper.raw
 # bootc-image-builder makes the disk; then the image's rpi-bootc-bootloader copies Pi
 # firmware, kernel and config into the CIDATA (FAT) partition, which bib can't do.
 set -euo pipefail
@@ -1915,6 +1920,10 @@ Append to `.github/workflows/build.yml` under `jobs:`:
     steps:
       - uses: actions/checkout@v4
       - uses: extractions/setup-just@v3
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /opt/ghc /usr/local/.ghcup
+          df -h /
       - run: sudo apt-get update && sudo apt-get install -y dosfstools xz-utils jq
       - name: Build raw disk
         run: sudo "$(command -v just)" build-raw "$IMAGE_REF:latest" "juniper-$VERSION.raw"
@@ -1963,7 +1972,7 @@ spirit of Bluefin and Bazzite.
    <https://login.tailscale.com/admin/settings/keys>. Tagged devices never expire, so the
    lockdown can't lock you out later.
 2. Flash with Raspberry Pi Imager (Juniper build) using our OS list:
-   `rpi-imager --repo https://github.com/<owner>/juniper/releases/latest/download/os-list.json`
+   `rpi-imager --repo https://github.com/gnathoi/juniper/releases/latest/download/os-list.json`
    and fill in user, SSH key, Wi-Fi, timezone and the Tailscale key.
    Or download `juniper-*.raw.xz` from Releases, flash it with any tool, and edit
    `user-data` on the small FAT partition (instructions in `README.txt` there).
@@ -1984,14 +1993,14 @@ spirit of Bluefin and Bazzite.
 
 ## Switch an existing AlmaLinux RPi bootc system
 
-    sudo bootc switch --enforce-container-sigpolicy quay.io/<ns>/juniper:latest
+    sudo bootc switch --enforce-container-sigpolicy ghcr.io/gnathoi/juniper:latest
 
 ## Build
 
     just check          # lint + unit tests
     just build          # arm64 image (arm64 host or qemu-user-static)
     just test-image
-    sudo just build-raw quay.io/<ns>/juniper:latest
+    sudo just build-raw ghcr.io/gnathoi/juniper:latest
 
 CI rebuilds weekly (Monday 02:00 UTC), on every merge, and on demand (Actions → build →
 Run workflow, tick "build_raw" for a disk image and release).
@@ -2001,7 +2010,7 @@ Run workflow, tick "build_raw" for a disk image and release).
 Apache-2.0. See THIRD_PARTY.md for bundled components.
 ```
 
-- [ ] **Step 5: Verify** — push, then Actions → build → Run workflow with `build_raw` ticked. Expected: release `build-YYYYMMDD` with `.raw.xz`, `os-list.json`, `SHA256SUMS`; `jq . os-list.json` shows correct sizes.
+- [ ] **Step 5: Verify** — push and merge to main, then `gh workflow run build -f build_raw=true` (or Actions → build → Run workflow with `build_raw` ticked). Expected: release `build-YYYYMMDD` with `.raw.xz`, `os-list.json`, `SHA256SUMS`; `jq . os-list.json` shows correct sizes.
 
 - [ ] **Step 6: Commit**
 
@@ -2019,7 +2028,7 @@ git commit -m "feat: flashable GPT disk image, rpi-imager OS list and release jo
 
 Nothing here can run in CI; this task proves the risky assumptions on real hardware. Record pass/fail and any fix commits in `docs/acceptance.md`.
 
-- [ ] **Step 1: Flash and first boot** — flash the release `.raw.xz` with `dd` (or Imager with the custom repo), edit `user-data` (user, SSH key, tagged Tailscale key, timezone) and add `network-config` for Wi-Fi. Boot. Expected within 5 minutes: node appears in the Tailscale admin console; `ssh` over Tailscale works.
+- [ ] **Step 1: Flash and first boot** — `gh release download --repo gnathoi/juniper --pattern 'juniper-*.raw.xz'`, flash it with `dd` (or Imager with the custom repo), edit `user-data` (user, SSH key, tagged Tailscale key, timezone) and add `network-config` for Wi-Fi. Boot. Expected within 5 minutes: node appears in the Tailscale admin console; `ssh` over Tailscale works.
 - [ ] **Step 2: First-boot effects** — on the Pi:
   - `sudo ls /etc/tailscale/authkey` → no such file
   - `sudo mount LABEL=CIDATA /mnt && grep -c tskey /mnt/user-data; ls /mnt/network-config; sudo umount /mnt` → `0` and no such file
