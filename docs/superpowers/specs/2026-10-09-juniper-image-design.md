@@ -266,3 +266,16 @@ updates.
   `sigstoreSigned` entry in `policy.json` is applied to every pull, so signatures are
   enforced on all updates without it. First `bootc switch` from another system is TOFU.
 - **F15:** `PRETTY_NAME` is `Juniper <version>` (no "AlmaLinux 10 bootc" suffix).
+
+## Weekly release train (2026-10-09)
+
+- Dependabot PRs auto-merge (squash) via `dependabot-automerge.yml`, triggered by a
+  successful `build` run (`workflow_run`) on a `dependabot/*` push, because branch
+  protection and native auto-merge are unavailable on this private repo's plan.
+- Pushes to `main` build and test only. `PUBLISH` is true for the weekly schedule
+  (Monday 02:00 UTC), `v*` tags, and manual runs on `main`. The schedule also builds the
+  disk images and a `build-<version>` release.
+- Devices: `juniper-update.timer` stays daily (stages, no-op when nothing new).
+  `juniper-reboot.timer` defaults to `Tue *-*-* 04:00:00` with 90 min random delay.
+  `ujust update-schedule [DAY] HH:MM | off` rewrites a drop-in (DAY: mon..sun or daily;
+  a bare HH:MM keeps the current day, default Tue).
