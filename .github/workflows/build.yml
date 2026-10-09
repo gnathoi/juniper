@@ -46,12 +46,14 @@ jobs:
       digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
-      - uses: extractions/setup-just@v3
 
       - name: Free disk space
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /opt/ghc /usr/local/.ghcup
           df -h /
+
+      # After the cleanup: setup-just installs into /opt/hostedtoolcache, which it deletes.
+      - uses: extractions/setup-just@v3
 
       - name: Image metadata
         id: meta
