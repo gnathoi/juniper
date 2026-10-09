@@ -33,12 +33,14 @@
 - **Recipes cut:** `install-cockpit` (needs host bridge + Origins/serve config) and `setup-backup` (interactive restic config). Kept: `devbox`, `install-podlet`, `enable-metrics`.
 - **Tailscale IP lives in the MOTD status block**, not a fastfetch module (avoids showing it twice).
 - **Firewall uses stock zones** (`drop`, `trusted`) via `firewall-cmd`; no vendor zone files.
+- **Homebrew is cloned on first boot, not baked in** (ruling R4): a tarball of a fresh clone is never byte-identical, so it would defeat rechunking and bloat every update. `juniper-brew-setup.service` clones into `/var/home/linuxbrew/.linuxbrew`, retrying until it succeeds.
+- **Every publish reports its update size** (ruling R5): layers and MiB changed versus the previous `:latest`, in the GitHub job summary.
 - **Registry is GHCR** (`ghcr.io/gnathoi/juniper`, public package, private repo) instead of quay.io; CI moved into Task 1 so every task's image changes are verified on the arm64 runner.
 
 ## Review Focus
 
 1. **No Tailscale key ever supplied** (or tailscaled broken): the Pi must stay a normal LAN box with SSH open forever — lockdown must never fire. Test in Task 4.
-2. **Power loss during first boot** before `firstboot.done`: the re-run must finish cleanly, and a half-extracted Homebrew must not be mistaken for a complete one. Test in Task 3.
+2. **Power loss during first boot** before `firstboot.done`: the re-run must finish cleanly, and an interrupted Homebrew clone must not be mistaken for a complete one. Test in Task 3.
 3. **Wi-Fi typo / no network on the very first boot:** the health check fails but this is not a tryboot, so it must not reboot (no boot loop). Test in Task 5.
 4. **Tailscale node key expiry after lockdown** locks the user out of a headless Pi. Expected behaviour: docs and the user-data template tell users to use a *tagged* auth key (key expiry disabled by default) and that `ujust lan-ssh on` is the escape hatch. Covered by the user-data template text (Task 3) and README (Task 9).
 5. **Timezone never set** (flashed without imager customisation): the reboot window silently runs in UTC. `update-schedule` must print which timezone it is using. Test in Task 5.
@@ -49,9 +51,10 @@
 
 ```
 Containerfile                                   build entry; FROM base@digest
-build_files/build.sh                            repos, packages, Homebrew staging, os-release, policy, enable units
+build_files/build.sh                            repos, packages, os-release, policy, enable units
 system_files/usr/bin/ujust                      just wrapper
-system_files/usr/libexec/juniper/firstboot      scrub CIDATA, retire cloud-init, Homebrew, sig enforcement
+system_files/usr/libexec/juniper/firstboot      scrub CIDATA, retire cloud-init, sig enforcement
+system_files/usr/libexec/juniper/brew-setup     clone Homebrew into /var/home/linuxbrew (first boot, retried)
 system_files/usr/libexec/juniper/lockdown       firewall → Tailscale only
 system_files/usr/libexec/juniper/apply-update   reboot into staged update via tryboot
 system_files/usr/libexec/juniper/update-schedule  set/show/disable reboot window
@@ -523,7 +526,6 @@ git commit -m "fix: CI findings" && git push   # only if Step 7 needed changes
 - Create: `system_files/usr/lib/systemd/zram-generator.conf`, `system_files/usr/lib/systemd/journald.conf.d/50-juniper.conf`, `system_files/usr/lib/systemd/system.conf.d/50-juniper-watchdog.conf`, `system_files/usr/lib/bootc/kargs.d/10-juniper.toml`, `system_files/etc/cloud/cloud.cfg.d/10-juniper-growpart.cfg`, `system_files/etc/profile.d/juniper-brew.sh`
 
 **Interfaces:**
-- Produces: `/usr/share/juniper/homebrew.tar.zst` containing top-level `.linuxbrew/` (consumed by Task 3 firstboot).
 - Produces: enabled units `tailscaled.service firewalld.service avahi-daemon.service cloud-init.service podman-auto-update.timer`; masked `bootc-fetch-apply-updates.timer`.
 
 - [ ] **Step 1: Add failing smoke assertions**
@@ -539,7 +541,6 @@ for unit in tailscaled.service firewalld.service avahi-daemon.service cloud-init
   [[ $(systemctl is-enabled "$unit") == enabled ]] || { echo "not enabled: $unit"; exit 1; }
 done
 [[ $(systemctl is-enabled bootc-fetch-apply-updates.timer) == masked ]]
-tar --zstd -tf /usr/share/juniper/homebrew.tar.zst .linuxbrew/bin/brew >/dev/null
 grep -q 'resize_what = "/var"' /usr/lib/python3*/site-packages/cloudinit/config/cc_resizefs.py
 grep -q 'rootflags=noatime' /usr/lib/bootc/kargs.d/10-juniper.toml
 ```
@@ -549,7 +550,7 @@ grep -q 'rootflags=noatime' /usr/lib/bootc/kargs.d/10-juniper.toml
 Run: push the branch and watch CI (see Global Constraints)
 Expected: FAIL with `missing: tailscale`.
 
-- [ ] **Step 3: Install packages and stage Homebrew**
+- [ ] **Step 3: Install packages**
 
 Append to `build_files/build.sh`:
 
@@ -573,15 +574,6 @@ sed -i 's@resize_what = "/"@resize_what = "/var"@' "$resizefs"
 grep -q 'resize_what = "/var"' "$resizefs"
 rm -f "$(dirname "$resizefs")"/__pycache__/cc_resizefs.*.pyc
 
-# --- Homebrew: staged here, extracted to /var/home/linuxbrew by juniper-firstboot ---
-brew_tag=$(curl -fsSL https://api.github.com/repos/Homebrew/brew/releases/latest | jq -r .tag_name)
-mkdir -p /tmp/linuxbrew/.linuxbrew/bin
-git clone --branch "$brew_tag" https://github.com/Homebrew/brew /tmp/linuxbrew/.linuxbrew/Homebrew
-ln -s ../Homebrew/bin/brew /tmp/linuxbrew/.linuxbrew/bin/brew
-mkdir -p /usr/share/juniper
-tar --zstd -cf /usr/share/juniper/homebrew.tar.zst -C /tmp/linuxbrew .linuxbrew
-rm -rf /tmp/linuxbrew
-
 # --- units ---
 systemctl enable tailscaled.service firewalld.service avahi-daemon.service \
   cloud-init-local.service cloud-init.service cloud-config.service cloud-final.service \
@@ -590,7 +582,6 @@ systemctl --global enable podman-auto-update.timer
 systemctl mask bootc-fetch-apply-updates.timer
 ```
 
-(Full clone, not `--depth 1`: `brew update` needs history.)
 
 - [ ] **Step 4: Add the config files**
 
@@ -640,7 +631,7 @@ growpart:
 `system_files/etc/profile.d/juniper-brew.sh`:
 
 ```sh
-# Homebrew on PATH once juniper-firstboot has extracted it.
+# Homebrew on PATH once juniper-brew-setup has cloned it.
 if [ -x /home/linuxbrew/.linuxbrew/bin/brew ]; then
   eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
 fi
@@ -655,7 +646,7 @@ Expected: `image smoke test: OK`. If `cloud-final.service` is not enabled, add i
 
 ```bash
 git add -A
-git commit -m "feat: packages, Homebrew staging, SD-card-friendly system config"
+git commit -m "feat: packages and SD-card-friendly system config"
 ```
 
 ---
@@ -663,12 +654,13 @@ git commit -m "feat: packages, Homebrew staging, SD-card-friendly system config"
 ### Task 3: First boot (CIDATA scrub, cloud-init retirement, Homebrew, Tailscale join)
 
 **Files:**
-- Create: `system_files/usr/libexec/juniper/firstboot`, `system_files/usr/lib/systemd/system/juniper-firstboot.service`, `system_files/usr/lib/systemd/system/juniper-tailscale-join.service`, `system_files/usr/share/juniper/cidata/user-data`, `system_files/usr/share/juniper/cidata/meta-data`, `system_files/usr/share/juniper/cidata/README.txt`
+- Create: `system_files/usr/libexec/juniper/firstboot`, `system_files/usr/libexec/juniper/brew-setup`, `system_files/usr/lib/systemd/system/juniper-firstboot.service`, `system_files/usr/lib/systemd/system/juniper-brew-setup.service`, `system_files/usr/lib/systemd/system/juniper-tailscale-join.service`, `system_files/usr/share/juniper/cidata/user-data`, `system_files/usr/share/juniper/cidata/meta-data`, `system_files/usr/share/juniper/cidata/README.txt`
 - Modify: `tests/unit.sh`, `tests/image.sh`, `build_files/build.sh`
 
 **Interfaces:**
-- Consumes: `/usr/share/juniper/homebrew.tar.zst` (Task 2).
-- Produces: `/usr/libexec/juniper/firstboot` honouring env `JUNIPER_STATE_DIR`, `JUNIPER_SHARE`, `JUNIPER_CIDATA_DIR` (skip mount when set), `JUNIPER_CLOUD_DISABLED`, `JUNIPER_BREW_HOME`. Function `enforce_signatures` is added in Task 8.
+- Consumes: `git-core` in the image and `/etc/profile.d/juniper-brew.sh` (Task 2).
+- Produces: `/usr/libexec/juniper/firstboot` honouring env `JUNIPER_STATE_DIR`, `JUNIPER_SHARE`, `JUNIPER_CIDATA_DIR` (skip mount when set), `JUNIPER_CLOUD_DISABLED`. Function `enforce_signatures` is added in Task 8.
+- Produces: `/usr/libexec/juniper/brew-setup` honouring `JUNIPER_BREW_HOME`, `JUNIPER_BREW_REPO`.
 - Produces: `/usr/share/juniper/cidata/*` (consumed by Task 9 `build-raw.sh`).
 
 - [ ] **Step 1: Write failing tests**
@@ -678,35 +670,66 @@ Insert into `tests/unit.sh` above `# --- runner ---`:
 ```bash
 firstboot_env() {
   export JUNIPER_SHARE=$T/share JUNIPER_CIDATA_DIR=$T/cidata \
-    JUNIPER_CLOUD_DISABLED=$T/cloud-init.disabled JUNIPER_BREW_HOME=$T/linuxbrew
-  mkdir -p "$JUNIPER_SHARE/cidata" "$JUNIPER_CIDATA_DIR" "$T/src/.linuxbrew/bin"
+    JUNIPER_CLOUD_DISABLED=$T/cloud-init.disabled
+  mkdir -p "$JUNIPER_SHARE/cidata" "$JUNIPER_CIDATA_DIR"
   echo "#cloud-config template" >"$JUNIPER_SHARE/cidata/user-data"
   echo "secret wifi" >"$JUNIPER_CIDATA_DIR/network-config"
   echo "secret tskey" >"$JUNIPER_CIDATA_DIR/user-data"
-  echo brew >"$T/src/.linuxbrew/bin/brew"
-  tar --zstd -cf "$JUNIPER_SHARE/homebrew.tar.zst" -C "$T/src" .linuxbrew
 }
 
-test_firstboot_scrubs_and_installs() {
+test_firstboot_scrubs_cidata() {
   firstboot_env
   "$LIBEXEC/firstboot"
   check "firstboot: network-config removed" test ! -e "$JUNIPER_CIDATA_DIR/network-config"
   check "firstboot: user-data replaced by template" grep -q template "$JUNIPER_CIDATA_DIR/user-data"
   check "firstboot: no secrets left on CIDATA" not_grep_dir secret "$JUNIPER_CIDATA_DIR"
   check "firstboot: cloud-init disabled" test -e "$JUNIPER_CLOUD_DISABLED"
-  check "firstboot: brew extracted" test -f "$JUNIPER_BREW_HOME/.linuxbrew/bin/brew"
-  check "firstboot: brew chowned to uid 1000" called "chown -R 1000:1000 $JUNIPER_BREW_HOME"
   check "firstboot: marked done" test -e "$JUNIPER_STATE_DIR/firstboot.done"
 }
 
 test_firstboot_rerun_after_power_loss() {
   firstboot_env
-  # Simulate a crash mid-extraction: a partial temp dir from the previous attempt.
+  "$LIBEXEC/firstboot"
+  "$LIBEXEC/firstboot"
+  check "firstboot rerun: still scrubbed" not_grep_dir secret "$JUNIPER_CIDATA_DIR"
+  check "firstboot rerun: marked done" test -e "$JUNIPER_STATE_DIR/firstboot.done"
+}
+
+brew_env() {
+  export JUNIPER_BREW_HOME=$T/linuxbrew JUNIPER_BREW_REPO=https://example.invalid/brew
+  # Fake clone: create the destination (last argument) with a brew entrypoint.
+  stub git 'dest=${*: -1}; mkdir -p "$dest/bin"; echo brew >"$dest/bin/brew"'
+}
+
+test_brew_setup_installs() {
+  brew_env
+  "$LIBEXEC/brew-setup"
+  check "brew: cloned from repo" called "git clone --quiet https://example.invalid/brew"
+  check "brew: entrypoint linked" test -L "$JUNIPER_BREW_HOME/.linuxbrew/bin/brew"
+  check "brew: Homebrew checkout in place" test -f "$JUNIPER_BREW_HOME/.linuxbrew/Homebrew/bin/brew"
+  check "brew: chowned to uid 1000" called "chown -R 1000:1000 $JUNIPER_BREW_HOME"
+}
+
+test_brew_setup_recovers_from_interrupted_clone() {
+  brew_env
   mkdir -p "$JUNIPER_BREW_HOME/.linuxbrew.partial/junk"
-  "$LIBEXEC/firstboot"
-  "$LIBEXEC/firstboot"
-  check "firstboot rerun: brew complete" test -f "$JUNIPER_BREW_HOME/.linuxbrew/bin/brew"
-  check "firstboot rerun: partial removed" test ! -e "$JUNIPER_BREW_HOME/.linuxbrew.partial"
+  "$LIBEXEC/brew-setup"
+  check "brew: partial replaced" test ! -e "$JUNIPER_BREW_HOME/.linuxbrew.partial"
+  check "brew: complete after recovery" test -L "$JUNIPER_BREW_HOME/.linuxbrew/bin/brew"
+}
+
+test_brew_setup_failed_clone_is_not_installed() {
+  brew_env
+  stub git 'exit 128'
+  check "brew: clone failure exits non-zero (systemd retries)" bash -c '! "$0"' "$LIBEXEC/brew-setup"
+  check "brew: nothing that looks installed" test ! -e "$JUNIPER_BREW_HOME/.linuxbrew"
+}
+
+test_brew_setup_idempotent() {
+  brew_env
+  mkdir -p "$JUNIPER_BREW_HOME/.linuxbrew"
+  "$LIBEXEC/brew-setup"
+  check "brew: existing install left alone" not_called git
 }
 
 test_firstboot_mounts_cidata_by_label() {
@@ -738,14 +761,13 @@ Expected: FAIL lines for the firstboot tests (`No such file or directory: .../fi
 ```bash
 #!/usr/bin/env bash
 # One-shot first-boot setup, after cloud-init (juniper-firstboot.service):
-# scrub secrets off the unencrypted CIDATA partition, retire cloud-init, install Homebrew.
+# scrub secrets off the unencrypted CIDATA partition and retire cloud-init.
 # Safe to re-run: every step is idempotent.
 set -euo pipefail
 
 state_dir=${JUNIPER_STATE_DIR:-/var/lib/juniper}
 share=${JUNIPER_SHARE:-/usr/share/juniper}
 cloud_disabled=${JUNIPER_CLOUD_DISABLED:-/etc/cloud/cloud-init.disabled}
-brew_home=${JUNIPER_BREW_HOME:-/var/home/linuxbrew}
 cidata_dir=${JUNIPER_CIDATA_DIR:-}
 
 scrub_cidata() {
@@ -763,24 +785,35 @@ scrub_cidata() {
   sync
 }
 
-install_brew() {
-  [[ -d $brew_home/.linuxbrew ]] && return 0
-  # Extract beside the target and rename, so a power cut never leaves a half tree
-  # that looks installed.
-  rm -rf "$brew_home/.linuxbrew.partial"
-  mkdir -p "$brew_home/.linuxbrew.partial"
-  tar --zstd -xf "$share/homebrew.tar.zst" -C "$brew_home/.linuxbrew.partial"
-  mv "$brew_home/.linuxbrew.partial/.linuxbrew" "$brew_home/.linuxbrew"
-  rm -rf "$brew_home/.linuxbrew.partial"
-  chown -R 1000:1000 "$brew_home"
-}
-
 scrub_cidata
 touch "$cloud_disabled"
-install_brew
 mkdir -p "$state_dir"
 touch "$state_dir/firstboot.done"
 ```
+
+`system_files/usr/libexec/juniper/brew-setup` (chmod +x):
+
+```bash
+#!/usr/bin/env bash
+# Installs Homebrew into /var/home/linuxbrew on first boot (juniper-brew-setup.service).
+# Cloned here rather than baked into the image so image updates stay small; brew keeps
+# itself updated afterwards. Exits non-zero on failure so systemd retries.
+set -euo pipefail
+
+brew_home=${JUNIPER_BREW_HOME:-/var/home/linuxbrew}
+repo=${JUNIPER_BREW_REPO:-https://github.com/Homebrew/brew}
+
+[[ -d $brew_home/.linuxbrew ]] && exit 0
+# Clone beside the target and rename, so an interrupted clone never looks installed.
+rm -rf "$brew_home/.linuxbrew.partial"
+mkdir -p "$brew_home/.linuxbrew.partial/bin"
+git clone --quiet "$repo" "$brew_home/.linuxbrew.partial/Homebrew"
+ln -s ../Homebrew/bin/brew "$brew_home/.linuxbrew.partial/bin/brew"
+mv "$brew_home/.linuxbrew.partial" "$brew_home/.linuxbrew"
+chown -R 1000:1000 "$brew_home"
+```
+
+(Full clone, not `--depth 1`: `brew update` needs history.)
 
 Note: with the stubbed `mount`, the label test cannot write into the temp dir's real content but `cp`/`rm` still operate on the empty temp dir, so the script completes; the `|| true` in the test only guards against environment differences.
 
@@ -790,7 +823,7 @@ Note: with the stubbed `mount`, the label test cannot write into the temp dir's 
 
 ```ini
 [Unit]
-Description=Juniper first-boot setup (scrub CIDATA, retire cloud-init, Homebrew)
+Description=Juniper first-boot setup (scrub CIDATA, retire cloud-init)
 After=cloud-final.service
 ConditionPathExists=!/var/lib/juniper/firstboot.done
 
@@ -798,6 +831,25 @@ ConditionPathExists=!/var/lib/juniper/firstboot.done
 Type=oneshot
 ExecStart=/usr/libexec/juniper/firstboot
 RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`system_files/usr/lib/systemd/system/juniper-brew-setup.service`:
+
+```ini
+[Unit]
+Description=Install Homebrew into /var/home/linuxbrew
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/var/home/linuxbrew/.linuxbrew
+
+[Service]
+Type=exec
+ExecStart=/usr/libexec/juniper/brew-setup
+Restart=on-failure
+RestartSec=5min
 
 [Install]
 WantedBy=multi-user.target
@@ -824,7 +876,7 @@ RestartSec=60
 WantedBy=multi-user.target
 ```
 
-Append to the `systemctl enable` line in `build_files/build.sh`: `juniper-firstboot.service juniper-tailscale-join.service`.
+Append to the `systemctl enable` line in `build_files/build.sh`: `juniper-firstboot.service juniper-brew-setup.service juniper-tailscale-join.service`.
 
 - [ ] **Step 5: Add the CIDATA template files**
 
@@ -887,7 +939,7 @@ Both files are wiped from this partition after first boot.
 Insert into `tests/image.sh` above the final echo:
 
 ```bash
-for unit in juniper-firstboot.service juniper-tailscale-join.service; do
+for unit in juniper-firstboot.service juniper-brew-setup.service juniper-tailscale-join.service; do
   [[ $(systemctl is-enabled "$unit") == enabled ]] || { echo "not enabled: $unit"; exit 1; }
 done
 systemd-analyze verify /usr/lib/systemd/system/juniper-*.service
@@ -902,7 +954,7 @@ Run: `tests/unit.sh` → expected `all passed`. Then CI (push + `gh run watch`) 
 
 ```bash
 git add -A
-git commit -m "feat: first boot scrubs CIDATA secrets, retires cloud-init, joins tailnet"
+git commit -m "feat: first boot scrubs CIDATA secrets, retires cloud-init, joins tailnet, installs Homebrew"
 ```
 
 ---
@@ -1635,7 +1687,27 @@ Expected: `skopeo inspect docker://ghcr.io/gnathoi/juniper:latest` works **after
 
 GitHub → your profile → Packages → `juniper` → Package settings → Danger zone → Change visibility → Public. Then `skopeo inspect docker://ghcr.io/gnathoi/juniper:latest` succeeds without login.
 
-- [ ] **Step 4: Check Dependabot sees the Containerfile**
+- [ ] **Step 4: Report update size on every publish (ruling R5)**
+
+In `.github/workflows/build.yml`, replace the `Push` step's `run:` so it records the previous `:latest` layer digests before pushing and writes a summary afterwards (keep the existing per-tag retry/`exit 1` logic exactly as it is, between the two new blocks):
+
+```bash
+          creds="$GITHUB_ACTOR:$GITHUB_TOKEN"
+          command -v skopeo >/dev/null || sudo apt-get install -y skopeo
+          prev=$(skopeo inspect --creds "$creds" "docker://$IMAGE_REF:latest" 2>/dev/null \
+            | jq -c '[.LayersData[].Digest]' || echo '[]')
+
+          # ... existing per-tag push loop and digest output, unchanged ...
+
+          skopeo inspect --creds "$creds" "docker://$IMAGE_REF@$(cat /tmp/digest)" | jq -r --argjson prev "$prev" '
+            [.LayersData[] | select(.Digest as $d | $prev | index($d) | not)] as $new
+            | "### Update size\n\(($new | length)) of \(.LayersData | length) layers changed, \((([$new[].Size] | add) // 0) / 1048576 | floor) MiB to download"' \
+            >>"$GITHUB_STEP_SUMMARY"
+```
+
+and add `GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}` to that step's `env:`. Run `pre-commit run --all-files` → clean. Verify on the next main publish: the run summary shows "Update size". After a no-op rebuild (re-run the workflow on main without changes) it should report only a few small layers changed (os-release/version metadata); if it reports most layers changed, rechunking isn't producing stable layers — record the numbers in the Task 7 report.
+
+- [ ] **Step 5: Check Dependabot sees the Containerfile**
 
 Repo → Insights → Dependency graph → Dependabot: `Containerfile` listed under docker. If it is not, `git mv Containerfile Dockerfile`, change the Justfile `podman build` to add `-f Dockerfile`, and change hadolint's `files:` to `Dockerfile`.
 
