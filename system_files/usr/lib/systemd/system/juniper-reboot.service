@@ -1,0 +1,6 @@
+[Unit]
+Description=Reboot into a staged Juniper update
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/juniper/apply-update

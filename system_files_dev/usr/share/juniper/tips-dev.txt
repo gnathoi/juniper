@@ -1,0 +1,2 @@
+`distrobox create` gives you a mutable dev box; the host stays immutable.
+Homebrew installs CLI tools into your home: `brew install <tool>`.

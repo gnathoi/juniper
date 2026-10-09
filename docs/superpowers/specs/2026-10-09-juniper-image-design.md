@@ -197,3 +197,64 @@ tarball URLs — adopt Renovate later if more pins appear.
 4. Raw image origin must point at the registry ref so `bootc upgrade` works out of the box.
 5. Name: "Juniper" overlaps Juniper Networks' trademark (networking gear). Fine for a
    personal project; reconsider before wider promotion.
+
+## Changes made during planning (2026-10-09)
+
+- Rollback uses rpi-bootc-bootloader firmware tryboot (`TRYBOOT=1`) instead of greenboot,
+  which needs GRUB boot counting. Updates reboot with `rpi-bootc-bootloader tryreboot`;
+  `juniper-healthcheck` runs `rpi-bootc-bootloader sync` on a healthy boot and reboots an
+  unhealthy tryboot so the firmware falls back.
+- No `90-juniper.cfg` cloud-init module override: the imager's apt package request fails
+  fast and harmlessly on bootc.
+- Tailscale join is `juniper-tailscale-join.service` (runs while `/etc/tailscale/authkey`
+  exists, retries every 60 s); the CIDATA template only needs `write_files`.
+- Lockdown is triggered by a 5-minute `juniper-lockdown.timer` that disables itself once
+  locked, not a path unit.
+- `install-cockpit` and `setup-backup` recipes dropped for v1.
+- Tailscale IP shown in the MOTD status block, not in fastfetch.
+- Firewall uses stock `drop`/`trusted` zones; no vendor zone files.
+- Registry is `ghcr.io/gnathoi/juniper` (pushed with `GITHUB_TOKEN`, package public, repo
+  private for now) instead of quay.io. The Containerfile's base image ref stays fully
+  qualified (`quay.io/almalinuxorg/...`).
+- CI triggers on pushes to any branch (build + test) instead of pull requests; publishing
+  happens on main, tags, the weekly cron and manual runs.
+
+## Image variants (added 2026-10-09, user-approved)
+
+One Containerfile, two published images:
+
+```
+quay.io/almalinuxorg/almalinux-bootc-rpi:10@sha256:…
+  └─ stage "minimal"  → ghcr.io/gnathoi/juniper-minimal   (appliance base: build FROM this)
+       └─ stage "juniper" → ghcr.io/gnathoi/juniper         (dev box = minimal + user tools)
+```
+
+| | minimal | juniper (full) |
+|---|---|---|
+| Tailscale, flash-time join, lockdown, `lan-ssh` | ✅ | ✅ |
+| podman, quadlets, `podman auto-update`, firewalld | ✅ | ✅ |
+| cloud-init first boot, CIDATA scrub | ✅ | ✅ |
+| Updates, tryboot fallback, health check, signing | ✅ | ✅ |
+| zram, journald cap, watchdog, noatime | ✅ | ✅ |
+| `ujust` core: update, update-schedule, lan-ssh, tailscale-*, pi-status, enable-metrics | ✅ | ✅ |
+| MOTD status block (Tailscale, update state) | ✅ | ✅ |
+| fastfetch with the juniper logo | — | ✅ |
+| Homebrew, distrobox, git, tmux, neovim, btop, ripgrep, fzf | — | ✅ |
+| `ujust devbox`, `install-podlet` | — | ✅ |
+
+- Shared content: `system_files/` + `build_files/build.sh`. Dev-only: `system_files_dev/` +
+  `build_files/dev.sh`; `main.just` uses `import? "dev.just"`.
+- os-release `IMAGE_ID`/`VARIANT_ID` = `juniper-minimal` | `juniper`.
+- CI builds, tests, publishes, signs and reports update size per image (matrix); releases
+  carry a disk image per image and one `os-list.json` with both.
+- `examples/appliance/` shows building on minimal (package + quadlet) and adding your own
+  signing policy; devices follow whatever image they were switched to.
+
+## Homebrew (supersedes the earlier "baked tarball" line, 2026-10-09)
+
+Full image only. Copied from `ghcr.io/ublue-os/brew`, pinned by digest, its cosign
+signature verified in CI against ublue's key (`ci/ublue-brew.pub`). ublue's
+`brew-setup.service` extracts it to `/var/home/linuxbrew` on first boot (offline-capable);
+their `brew-update`/`brew-upgrade` timers keep it current. Dependabot ignores the pin;
+`just bump-brew` moves it deliberately, so the ~150 MB tarball never rides along in routine
+updates.

@@ -1,0 +1,191 @@
+name: build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  schedule:
+    - cron: "0 2 * * 1"  # Mondays 02:00 UTC: pick up base image and package updates
+  workflow_dispatch:
+    inputs:
+      build_raw:
+        description: Also build the flashable .raw disk image and a release
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  # Branch pushes build and test only; main, tags, the weekly cron and manual runs publish.
+  # yamllint disable-line rule:line-length
+  PUBLISH: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: extractions/setup-just@v3
+      - uses: pre-commit/action@v3.0.1
+
+  build:
+    needs: lint
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [juniper-minimal, juniper]
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /opt/ghc /usr/local/.ghcup
+          df -h /
+
+      # After the cleanup: setup-just installs into /opt/hostedtoolcache, which it deletes.
+      - uses: extractions/setup-just@v3
+
+      - name: Image metadata
+        id: meta
+        env:
+          REGISTRY: ${{ vars.IMAGE_REGISTRY || 'ghcr.io' }}
+          NAMESPACE: ${{ github.repository_owner }}
+        run: |
+          ref="${REGISTRY}/${NAMESPACE}/${{ matrix.image }}"
+          echo "image_ref=${ref,,}" >>"$GITHUB_OUTPUT"
+          echo "version=$(date -u +%Y%m%d)" >>"$GITHUB_OUTPUT"
+
+      # cosign v2 on purpose: v3's bundle/referrers format isn't read by containers/image's
+      # sigstore-attachments lookup, so devices would reject updates.
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.5.2
+
+      - name: Verify pinned Homebrew image signature
+        if: matrix.image == 'juniper'
+        run: just verify-brew
+
+      - name: Build and rechunk
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          sudo "$(command -v just)" image="${{ matrix.image }}" image_ref="$IMAGE_REF" version="$VERSION" build rechunk
+
+      - name: Smoke test
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+        run: sudo "$(command -v just)" image="${{ matrix.image }}" image_ref="$IMAGE_REF" test-image "$IMAGE_REF:latest"
+
+      - name: Log in to registry
+        if: env.PUBLISH == 'true'
+        env:
+          REGISTRY: ${{ vars.IMAGE_REGISTRY || 'ghcr.io' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GITHUB_TOKEN" | sudo podman login -u "$GITHUB_ACTOR" --password-stdin "$REGISTRY"
+
+      - name: Push
+        id: push
+        if: env.PUBLISH == 'true'
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+          IMAGE_NAME: ${{ matrix.image }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          creds="$GITHUB_ACTOR:$GITHUB_TOKEN"
+          command -v skopeo >/dev/null || sudo apt-get install -y skopeo
+          prev=$(skopeo inspect --creds "$creds" "docker://$IMAGE_REF:latest" 2>/dev/null \
+            | jq -c '[.LayersData[].Digest]' || echo '[]')
+          prev=${prev:-[]}
+
+          for tag in latest "$VERSION" "sha-${GITHUB_SHA::7}"; do
+            pushed=false
+            for i in 1 2 3; do
+              if sudo podman push --digestfile /tmp/digest "$IMAGE_REF:latest" "docker://$IMAGE_REF:$tag"; then
+                pushed=true
+                break
+              fi
+              sleep $((10 * i))
+            done
+            if [ "$pushed" != true ]; then
+              echo "::error::failed to push tag $tag after 3 attempts"
+              exit 1
+            fi
+          done
+          echo "digest=$(cat /tmp/digest)" >>"$GITHUB_OUTPUT"
+
+          # Best-effort: a failed report must not fail the step (signing runs after it).
+          (
+            set -o pipefail
+            skopeo inspect --creds "$creds" "docker://$IMAGE_REF@$(cat /tmp/digest)" \
+              | jq -r --arg name "$IMAGE_NAME" --argjson prev "$prev" '
+                [.LayersData[] | select(.Digest as $d | $prev | index($d) | not)] as $new
+                | "### Update size: \($name)\n"
+                  + "\($new | length) of \(.LayersData | length) layers changed, "
+                  + "\((([$new[].Size] | add) // 0) / 104857.6 | round / 10) MiB to download"' \
+              >>"$GITHUB_STEP_SUMMARY"
+          ) || echo "::warning::update-size report failed for $IMAGE_NAME"
+
+      - name: Sign
+        if: env.PUBLISH == 'true'
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          REGISTRY: ${{ vars.IMAGE_REGISTRY || 'ghcr.io' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+          COSIGN_PASSWORD: ""
+        run: |
+          echo "$GITHUB_TOKEN" | cosign login "$REGISTRY" -u "$GITHUB_ACTOR" --password-stdin
+          cosign sign --yes --key env://COSIGN_PRIVATE_KEY "$IMAGE_REF@$DIGEST"
+
+      - name: Verify signature with the on-device key
+        if: env.PUBLISH == 'true'
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: cosign verify --key system_files/usr/share/pki/containers/juniper.pub "$IMAGE_REF@$DIGEST" >/dev/null
+
+      - name: SBOM
+        if: env.PUBLISH == 'true'
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.meta.outputs.image_ref }}@${{ steps.push.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attest SBOM
+        if: env.PUBLISH == 'true'
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+          COSIGN_PASSWORD: ""
+        run: |
+          cosign attest --yes --key env://COSIGN_PRIVATE_KEY --type spdxjson \
+            --predicate sbom.spdx.json "$IMAGE_REF@$DIGEST"
+
+      - name: Verify SBOM attestation
+        if: env.PUBLISH == 'true'
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          cosign verify-attestation --key system_files/usr/share/pki/containers/juniper.pub \
+            --type spdxjson "$IMAGE_REF@$DIGEST" >/dev/null

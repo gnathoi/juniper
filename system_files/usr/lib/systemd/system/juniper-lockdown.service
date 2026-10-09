@@ -1,0 +1,7 @@
+[Unit]
+Description=Lock the firewall down to Tailscale once joined
+After=firewalld.service tailscaled.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/juniper/lockdown

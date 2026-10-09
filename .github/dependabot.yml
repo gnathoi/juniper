@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # Homebrew tarball: bumped deliberately with `just bump-brew` (each bump is ~150 MB
+      # for devices; brew updates itself on the device anyway).
+      - dependency-name: "*ublue-os/brew*"

@@ -1,0 +1,8 @@
+Run `ujust` to see every Juniper command.
+Long-running services belong in Podman quadlets: /etc/containers/systemd/*.container
+`ujust update-schedule 03:30` moves the nightly update reboot window.
+`bootc status` shows booted, staged and rollback images.
+Tailscale SSH is on: `ssh <user>@<hostname>` from any device on your tailnet.
+`ujust pi-status` shows temperature and throttling.
+`ujust lan-ssh on` re-opens SSH on the local network if Tailscale ever goes away.
+`podman auto-update` keeps containers with AutoUpdate=registry current every night.

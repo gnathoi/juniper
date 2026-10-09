@@ -1,0 +1,3 @@
+#!/usr/bin/bash
+# Juniper's command runner (Bluefin-style): ujust <recipe>, or ujust to list.
+exec just --justfile /usr/share/juniper/just/main.just --working-directory "$PWD" "$@"

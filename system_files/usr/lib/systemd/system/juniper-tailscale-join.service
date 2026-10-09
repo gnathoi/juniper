@@ -1,0 +1,16 @@
+[Unit]
+Description=Join the tailnet with the auth key provided at flash time
+After=network-online.target tailscaled.service cloud-final.service
+Wants=network-online.target tailscaled.service
+ConditionPathExists=/etc/tailscale/authkey
+
+[Service]
+Type=exec
+# The key is deleted only after a successful join, so failures retry (every minute, and
+# again on every boot) until it works.
+ExecStart=/bin/sh -c 'tailscale up --ssh --auth-key=file:/etc/tailscale/authkey --timeout=120s && shred -u /etc/tailscale/authkey'
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Login banner: fastfetch, then Juniper status. Shown by /etc/profile.d/juniper-motd.sh.
+set -uo pipefail
+
+state_dir=${JUNIPER_STATE_DIR:-/var/lib/juniper}
+# shellcheck source=/dev/null
+. /usr/lib/os-release
+
+row() { printf '  \e[1;32m%-10s\e[0m %s\n' "$1" "$2"; }
+
+if ip=$(tailscale ip -4 2>/dev/null) && [[ -n $ip ]]; then
+  if [[ -e $state_dir/locked ]]; then fw="firewall: Tailscale only"; else fw="firewall: LAN open"; fi
+  ts="${ip%%$'\n'*} ($fw)"
+else
+  ts="not connected - run: ujust tailscale-up"
+fi
+
+if [[ -e /run/ostree/staged-deployment ]]; then
+  when=$(systemctl show juniper-reboot.timer -P NextElapseUSecRealtime 2>/dev/null)
+  upd="staged, reboots ${when:-manually (ujust update)}"
+else
+  upd="up to date"
+fi
+
+# fastfetch ships only in the full image.
+if command -v fastfetch >/dev/null; then fastfetch; fi
+row Image "${PRETTY_NAME}"
+row Tailscale "$ts"
+row Update "$upd"
+row Tip "$(cat /usr/share/juniper/tips*.txt 2>/dev/null | shuf -n1)"
+printf '\n  ujust for commands · ujust toggle-motd to hide this\n\n'

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Firewall the Pi down to Tailscale once it has joined a tailnet. Fires automatically once
+# (juniper-lockdown.timer); afterwards `ujust lan-ssh on|off` adjusts it.
+# Without a tailnet the Pi stays a normal LAN box: locking it then would brick it.
+set -euo pipefail
+
+state_dir=${JUNIPER_STATE_DIR:-/var/lib/juniper}
+[[ -e $state_dir/locked ]] && exit 0
+
+backend=$(tailscale status --json 2>/dev/null | jq -r '.BackendState // empty' || true)
+[[ $backend == Running ]] || exit 0
+
+firewall-cmd --permanent --zone=trusted --add-interface=tailscale0
+firewall-cmd --permanent --zone=drop --add-port=41641/udp
+firewall-cmd --set-default-zone=drop
+firewall-cmd --reload
+mkdir -p "$state_dir"
+touch "$state_dir/locked"
+# ponytail: polling timer; retire it now that its job is done.
+systemctl disable --now juniper-lockdown.timer
+echo "Locked down: only Tailscale traffic can reach this Pi. 'ujust lan-ssh on' re-opens LAN SSH."

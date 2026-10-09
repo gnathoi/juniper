@@ -1,0 +1,12 @@
+[Unit]
+Description=Juniper first-boot setup (scrub CIDATA, retire cloud-init)
+After=cloud-final.service
+ConditionPathExists=!/var/lib/juniper/firstboot.done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/juniper/firstboot
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
