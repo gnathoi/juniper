@@ -34,7 +34,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
       - uses: pre-commit/action@v3.0.1
 
   build:
@@ -55,7 +55,7 @@ jobs:
           df -h /
 
       # After the cleanup: setup-just installs into /opt/hostedtoolcache, which it deletes.
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
 
       - name: Image metadata
         id: meta
