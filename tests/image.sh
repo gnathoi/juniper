@@ -37,7 +37,10 @@ grep -q 'resize_what = "/var"' /usr/lib/python3*/site-packages/cloudinit/config/
 grep -q 'rootflags=noatime' /usr/lib/bootc/kargs.d/10-juniper.toml
 
 need_enabled juniper-firstboot.service juniper-tailscale-join.service
-systemd-analyze verify /usr/lib/systemd/system/juniper-*.service
+need_enabled juniper-update.timer juniper-reboot.timer juniper-healthcheck.service
+need_cmds rpi-bootc-bootloader
+grep -qx 'TRYBOOT=1' /etc/rpi-bootc-bootloader/tryboot.conf
+systemd-analyze verify /usr/lib/systemd/system/juniper-*.service /usr/lib/systemd/system/juniper-*.timer
 test -f /usr/share/juniper/cidata/user-data
 [[ $(systemctl is-enabled juniper-lockdown.timer) == enabled ]]
 firewall-offline-cmd --get-default-zone | grep -qx public

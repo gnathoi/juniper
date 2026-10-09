@@ -116,6 +116,77 @@ test_lockdown_only_once() {
   check "lockdown: idempotent" not_called firewall-cmd
 }
 
+test_apply_update_without_staged() {
+  stub bootc 'echo "{\"status\":{\"staged\":null}}"'
+  "$LIBEXEC/apply-update"
+  check "apply-update: no staged -> no reboot" not_called rpi-bootc-bootloader
+}
+
+test_apply_update_with_staged() {
+  stub bootc 'echo "{\"status\":{\"staged\":{\"image\":{}}}}"'
+  "$LIBEXEC/apply-update"
+  check "apply-update: staged -> tryreboot" called "rpi-bootc-bootloader tryreboot"
+}
+
+test_update_schedule_sets_time() {
+  export JUNIPER_DROPIN_DIR=$T/dropin
+  stub timedatectl 'echo Europe/London'
+  out=$("$LIBEXEC/update-schedule" 03:30)
+  check "schedule: drop-in written" grep -qx 'OnCalendar=\*-\*-\* 03:30:00' "$JUNIPER_DROPIN_DIR/schedule.conf"
+  check "schedule: resets OnCalendar first" grep -qx 'OnCalendar=' "$JUNIPER_DROPIN_DIR/schedule.conf"
+  check "schedule: timer re-enabled" called "systemctl enable --now juniper-reboot.timer"
+  check "schedule: names the timezone" grep -q 'Europe/London' <<<"$out"
+}
+
+test_update_schedule_rejects_bad_input() {
+  export JUNIPER_DROPIN_DIR=$T/dropin
+  for bad in 24:00 3:30 03:3 '03:30;reboot' 'now'; do
+    # shellcheck disable=SC2016 # $0/$1 expand in the inner bash
+    check "schedule: rejects '$bad'" bash -c '! "$0" "$1" 2>/dev/null' "$LIBEXEC/update-schedule" "$bad"
+  done
+  check "schedule: nothing written" test ! -e "$JUNIPER_DROPIN_DIR/schedule.conf"
+}
+
+test_update_schedule_off() {
+  "$LIBEXEC/update-schedule" off
+  check "schedule off: timer disabled" called "systemctl disable --now juniper-reboot.timer"
+}
+
+health_env() {
+  export JUNIPER_HEALTH_TRIES=1 JUNIPER_HEALTH_INTERVAL=0 JUNIPER_TRYBOOT_FLAG=$T/tryboot
+}
+
+test_healthcheck_healthy_confirms() {
+  health_env
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  "$LIBEXEC/healthcheck"
+  check "health: healthy -> make booted the firmware default" called "rpi-bootc-bootloader sync"
+}
+
+test_healthcheck_unhealthy_tryboot_falls_back() {
+  health_env
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  "$LIBEXEC/healthcheck" || true
+  check "health: unhealthy tryboot -> reboot" called "systemctl reboot"
+  check "health: unhealthy -> no sync" not_called "rpi-bootc-bootloader sync"
+}
+
+test_healthcheck_first_boot_no_network_no_loop() {
+  health_env
+  "$LIBEXEC/healthcheck" || true
+  check "health: unhealthy normal boot -> no reboot" not_called "systemctl reboot"
+}
+
+test_healthcheck_requires_tailscale_once_locked() {
+  health_env
+  touch "$JUNIPER_STATE_DIR/locked"
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  stub tailscale "echo '{\"BackendState\":\"NeedsLogin\"}'"
+  "$LIBEXEC/healthcheck" || true
+  check "health: locked + tailscale down -> fall back" called "systemctl reboot"
+}
+
 # --- runner ---
 for t in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do
   setup

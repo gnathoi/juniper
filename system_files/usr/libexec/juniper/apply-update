@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Reboot into a staged update (juniper-reboot.timer, `ujust update`).
+# Uses firmware tryboot: the new deployment boots once; juniper-healthcheck makes it the
+# default, otherwise the next boot falls back to the current one. A plain reboot would
+# keep the old deployment because tryboot.conf sets TRYBOOT=1.
+set -euo pipefail
+
+if [[ $(bootc status --json | jq '.status.staged != null') != true ]]; then
+  echo "No staged update; not rebooting."
+  exit 0
+fi
+exec rpi-bootc-bootloader tryreboot

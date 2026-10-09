@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Every boot (juniper-healthcheck.service): if the system is healthy, make the booted
+# deployment the firmware default; if an update booted via tryboot is unhealthy, reboot
+# so the firmware falls back to the previous deployment.
+# ponytail: a bad update is retried at each reboot window until a fixed image ships; add a
+# known-bad digest list if that ever matters.
+set -euo pipefail
+
+state_dir=${JUNIPER_STATE_DIR:-/var/lib/juniper}
+tries=${JUNIPER_HEALTH_TRIES:-20}
+interval=${JUNIPER_HEALTH_INTERVAL:-15}
+tryboot_flag=${JUNIPER_TRYBOOT_FLAG:-/proc/device-tree/chosen/bootloader/tryboot}
+
+healthy() {
+  [[ -n $(ip route show default) ]] || return 1
+  # Tailscale is only required once the Pi has joined (and is firewalled to it).
+  if [[ -e $state_dir/locked ]]; then
+    [[ $(tailscale status --json 2>/dev/null | jq -r '.BackendState // empty') == Running ]] || return 1
+  fi
+}
+
+in_tryboot() {
+  # Big-endian u32 set by the Pi bootloader when it booted tryboot.txt.
+  [[ -r $tryboot_flag ]] && [[ $(od -An -tu4 --endian=big "$tryboot_flag" | tr -d ' ') != 0 ]]
+}
+
+for ((i = 0; i < tries; i++)); do
+  if healthy; then
+    rpi-bootc-bootloader sync
+    exit 0
+  fi
+  sleep "$interval"
+done
+
+echo "Health check failed: no default route or Tailscale not running." >&2
+if in_tryboot; then
+  echo "Unhealthy update under tryboot; rebooting into the previous deployment." >&2
+  systemctl reboot
+fi
+exit 1
