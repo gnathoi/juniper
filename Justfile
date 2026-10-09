@@ -63,9 +63,9 @@ check-layers:
     #!/usr/bin/bash
     set -euo pipefail
     hist=$(podman history --no-trunc --format '{{{{.Size}}\t{{{{.CreatedBy}}' {{ image_ref }}:latest)
-    grep -v '^0 B' <<<"$hist"
+    echo "$hist"
     want=(juniper)
     [[ {{ image }} == juniper ]] && want+=(homebrew)
     for w in "${want[@]}"; do
-      grep -v '^0 B' <<<"$hist" | grep -qi "$w" || { echo "no $w layer" >&2; exit 1; }
+      grep -qP "^(?!0B)[0-9.]+[kMG]?B\\s+$w\\s*$" <<<"$hist" || { echo "no $w layer" >&2; exit 1; }
     done

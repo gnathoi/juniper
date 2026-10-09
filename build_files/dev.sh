@@ -18,9 +18,10 @@ for p in sys.stdin.read().split("\0"):
     if p:
         os.setxattr(p, "user.component", sys.argv[1].encode(), follow_symlinks=False)
 ' "$1"; }
-find /ctx/system_files_dev \( -type f -o -type l \) -printf '/%P\0' | tag juniper
+# regular files only: Linux rejects user.* xattrs on symlinks
+find /ctx/system_files_dev -type f -printf '/%P\0' | tag juniper
 # From ublue-os/brew (bind-mounted at /brew): everything COPY'd in, plus the tarball
-find /brew \( -type f -o -type l \) -printf '/%P\0' | tag homebrew
+find /brew -type f -printf '/%P\0' | tag homebrew
 
 # --- cleanup: package scriptlets leave runtime-only content that bootc lint rejects ---
 rm -rf /tmp/nvim.*

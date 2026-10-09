@@ -72,7 +72,8 @@ for p in sys.stdin.read().split("\0"):
     if p:
         os.setxattr(p, "user.component", sys.argv[1].encode(), follow_symlinks=False)
 ' "$1"; }
-find /ctx/system_files \( -type f -o -type l \) -printf '/%P\0' | tag juniper
+# regular files only: Linux rejects user.* xattrs on symlinks
+find /ctx/system_files -type f -printf '/%P\0' | tag juniper
 printf '%s\0' /usr/lib/os-release /etc/containers/policy.json /etc/containers/registries.d/juniper.yaml \
   /etc/yum.repos.d/tailscale.repo | tag juniper
 
