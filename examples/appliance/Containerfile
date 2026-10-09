@@ -1,0 +1,13 @@
+# Example appliance built on Juniper Minimal: one extra package and one quadlet service.
+# Build: podman build --platform linux/arm64 -t ghcr.io/you/sensor-box:latest examples/appliance
+# hadolint ignore=DL3007
+FROM ghcr.io/gnathoi/juniper-minimal:latest
+
+# hadolint ignore=DL3041
+RUN dnf -y install i2c-tools && dnf clean all
+
+# Quadlets shipped in the image live in /usr/share/containers/systemd (immutable, updated
+# with the image); ones you add on a device go in /etc/containers/systemd.
+COPY sensor.container /usr/share/containers/systemd/sensor.container
+
+RUN bootc container lint

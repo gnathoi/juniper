@@ -9,6 +9,7 @@ own licenses (full texts in the image under /usr/share/licenses):
 | rpi-bootc-bootloader (in base) | see upstream | github.com/kfox1111/rpi-bootc-bootloader |
 | Tailscale | BSD-3-Clause | pkgs.tailscale.com |
 | Homebrew | BSD-2-Clause | github.com/Homebrew/brew |
+| ublue-os/brew (Homebrew tarball + units, juniper image) | Apache-2.0 | github.com/ublue-os/brew |
 | fastfetch | MIT | EPEL |
 | distrobox | GPL-3.0 | EPEL |
 | just | CC0-1.0 | EPEL |

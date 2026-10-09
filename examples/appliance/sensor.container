@@ -1,0 +1,11 @@
+[Unit]
+Description=Example sensor: log the SoC temperature every minute
+
+[Container]
+Image=docker.io/library/alpine:3.20
+Exec=sh -c 'while true; do cat /sys/class/thermal/thermal_zone0/temp; sleep 60; done'
+Volume=/sys/class/thermal:/sys/class/thermal:ro
+AutoUpdate=registry
+
+[Install]
+WantedBy=multi-user.target

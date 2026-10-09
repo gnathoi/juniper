@@ -178,7 +178,8 @@ jobs:
           COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
           COSIGN_PASSWORD: ""
         run: |
-          cosign attest --yes --key env://COSIGN_PRIVATE_KEY --type spdxjson \
+          # The full-OS SBOM is too large for the public Rekor log; trust is key-based anyway.
+          cosign attest --yes --tlog-upload=false --key env://COSIGN_PRIVATE_KEY --type spdxjson \
             --predicate sbom.spdx.json "$IMAGE_REF@$DIGEST"
 
       - name: Verify SBOM attestation
@@ -187,5 +188,93 @@ jobs:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
           DIGEST: ${{ steps.push.outputs.digest }}
         run: |
-          cosign verify-attestation --key system_files/usr/share/pki/containers/juniper.pub \
-            --type spdxjson "$IMAGE_REF@$DIGEST" >/dev/null
+          # No tlog entry exists for the attestation (see Attest SBOM).
+          cosign verify-attestation --insecure-ignore-tlog=true \
+            --key system_files/usr/share/pki/containers/juniper.pub --type spdxjson "$IMAGE_REF@$DIGEST" >/dev/null
+
+  disk:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.build_raw)
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [juniper-minimal, juniper]
+    env:
+      IMAGE: ${{ matrix.image }}
+      VERSION: ${{ needs.build.outputs.version }}
+      TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', needs.build.outputs.version) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /opt/ghc /usr/local/.ghcup
+          df -h /
+      - uses: extractions/setup-just@v3
+      - run: sudo apt-get update && sudo apt-get install -y dosfstools xz-utils jq
+      - name: Log in to registry
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GITHUB_TOKEN" | sudo podman login -u "$GITHUB_ACTOR" --password-stdin ghcr.io
+      - name: Build raw disk
+        env:
+          REF: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+        run: sudo "$(command -v just)" build-raw "${REF,,}:latest" "$IMAGE-$VERSION.raw"
+      - name: Compress and render OS list entry
+        run: |
+          sudo chown "$USER" "$IMAGE-$VERSION.raw"
+          xz -T0 -k "$IMAGE-$VERSION.raw"
+          disk/render-os-list.sh "$IMAGE" "$IMAGE-$VERSION.raw" "$IMAGE-$VERSION.raw.xz" \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$IMAGE-$VERSION.raw.xz" \
+            "$VERSION" >"os-list-$IMAGE.json"
+          rm "$IMAGE-$VERSION.raw"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: disk-${{ matrix.image }}
+          path: |
+            ${{ matrix.image }}-${{ env.VERSION }}.raw.xz
+            os-list-${{ matrix.image }}.json
+          retention-days: 3
+
+  release:
+    needs: [build, disk]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', needs.build.outputs.version) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: disk-*
+          merge-multiple: true
+      - name: Merge OS lists and checksum
+        run: |
+          jq -s '{os_list: [.[].os_list[]]}' os-list-juniper.json os-list-juniper-minimal.json >os-list.json
+          sha256sum ./*.raw.xz os-list.json >SHA256SUMS
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.5.2
+      - name: Sign disk images and checksums (ruling R9)
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+          COSIGN_PASSWORD: ""
+        run: |
+          for f in ./*.raw.xz SHA256SUMS; do
+            cosign sign-blob --yes --key env://COSIGN_PRIVATE_KEY --bundle "$f.bundle" "$f"
+            cosign verify-blob --key system_files/usr/share/pki/containers/juniper.pub --bundle "$f.bundle" "$f"
+          done
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: Juniper ${{ env.VERSION }}
+          files: |
+            *.raw.xz
+            *.bundle
+            os-list.json
+            SHA256SUMS

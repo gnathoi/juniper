@@ -236,6 +236,33 @@ test_healthcheck_healthy_tryboot_confirms() {
   check "health: healthy tryboot -> no reboot" not_called "systemctl reboot"
 }
 
+test_render_os_list() {
+  printf 'rawbytes' >"$T/j.raw"
+  printf 'xz' >"$T/j.raw.xz"
+  "$ROOT/disk/render-os-list.sh" juniper "$T/j.raw" "$T/j.raw.xz" https://example/j.raw.xz 20261009 >"$T/os.json"
+  check "os-list: url" jq -e '.os_list[0].url == "https://example/j.raw.xz"' "$T/os.json"
+  check "os-list: name" jq -e '.os_list[0].name == "Juniper 20261009"' "$T/os.json"
+  check "os-list: extract_size" jq -e '.os_list[0].extract_size == 8' "$T/os.json"
+  # shellcheck disable=SC2016 # $h is a jq variable
+  check "os-list: sha256 of raw" jq -e --arg h "$(sha256sum "$T/j.raw" | cut -d' ' -f1)" '.os_list[0].extract_sha256 == $h' "$T/os.json"
+  check "os-list: cloudinit + tailscale capability" jq -e '.os_list[0].init_format == "cloudinit" and (.os_list[0].capabilities | index("tailscale"))' "$T/os.json"
+  check "os-list: pi4+pi5 only" jq -e '.os_list[0].devices == ["pi5-64bit","pi4-64bit"]' "$T/os.json"
+}
+
+test_render_os_list_minimal() {
+  printf 'rawbytes' >"$T/m.raw"
+  printf 'xz' >"$T/m.raw.xz"
+  "$ROOT/disk/render-os-list.sh" juniper-minimal "$T/m.raw" "$T/m.raw.xz" https://example/m.raw.xz 20261009 >"$T/os.json"
+  check "os-list minimal: name" jq -e '.os_list[0].name == "Juniper Minimal 20261009"' "$T/os.json"
+  check "os-list minimal: no dev tools claimed" jq -e '.os_list[0].description | test("Homebrew") | not' "$T/os.json"
+}
+
+test_render_os_list_rejects_unknown_image() {
+  printf 'x' >"$T/x.raw"
+  # shellcheck disable=SC2016 # $0/$1 expand in the inner bash
+  check "os-list: unknown image rejected" bash -c '! "$0" nope "$1" "$1" u v 2>/dev/null' "$ROOT/disk/render-os-list.sh" "$T/x.raw"
+}
+
 # --- runner ---
 for t in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do
   setup
