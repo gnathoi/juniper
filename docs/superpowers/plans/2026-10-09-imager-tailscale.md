@@ -218,7 +218,7 @@ jq -e '.. | objects | select(."$id"? == "#/properties/os_list/items/anyOf/0/prop
 In the same object's `"description"` (line 493), insert this text after `'passwordless_sudo' (enables passwordless sudo option in user setup), `:
 
 ```
-'tailscale' (the OS ships Tailscale preinstalled; enables joining a tailnet on first boot with an auth key. Imager never installs Tailscale. Honoured for init_format cloudinit and cloudinit-rpi only), 
+'tailscale' (the OS ships Tailscale preinstalled; enables joining a tailnet on first boot with an auth key. Imager never installs Tailscale. Honoured for init_format cloudinit and cloudinit-rpi only),
 ```
 
 Leave `os-list-schema.html` alone. It is generated, it is already stale (it doesn't list `passwordless_sudo`), and upstream doesn't maintain it.
