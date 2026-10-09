@@ -25,6 +25,19 @@ rm -f "$(dirname "$resizefs")"/__pycache__/cc_resizefs.*.pyc
 # --- files (after packages so RPM payloads cannot overwrite what Juniper ships) ---
 cp -a /ctx/system_files/. /
 
+# --- signature policy: every image under our namespace (juniper, juniper-minimal) must carry
+# our cosign signature. Scoped to OS images only: a global reject would also stop podman
+# pulling unsigned app images for quadlets.
+namespace=${IMAGE_REF%/*}
+jq --arg ns "$namespace" \
+  '.transports.docker[$ns] = [{"type": "sigstoreSigned",
+     "keyPath": "/usr/share/pki/containers/juniper.pub",
+     "signedIdentity": {"type": "matchRepository"}}]' \
+  /etc/containers/policy.json >/tmp/policy.json
+mv /tmp/policy.json /etc/containers/policy.json
+printf 'docker:\n  %s:\n    use-sigstore-attachments: true\n' "$namespace" \
+  >/etc/containers/registries.d/juniper.yaml
+
 # --- identity ---
 case $IMAGE_NAME in
   juniper-minimal) pretty="Juniper Minimal" ;;

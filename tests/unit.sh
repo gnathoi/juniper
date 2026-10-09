@@ -85,6 +85,15 @@ test_firstboot_mounts_cidata_by_label() {
   check "firstboot: unmounts it" called "umount"
 }
 
+test_firstboot_enforces_signatures() {
+  firstboot_env
+  # shellcheck disable=SC2016 # $1 expands inside the stub, not here
+  stub bootc 'if [[ $1 == status ]]; then echo "{\"spec\":{\"image\":{\"image\":\"ghcr.io/gnathoi/juniper:latest\"}}}"; fi'
+  "$LIBEXEC/firstboot"
+  check "firstboot: switches origin to signature-enforced" \
+    called "bootc switch --mutate-in-place --enforce-container-sigpolicy ghcr.io/gnathoi/juniper:latest"
+}
+
 test_lockdown_waits_for_join() {
   stub tailscale "echo '{\"BackendState\":\"NeedsLogin\"}'"
   "$LIBEXEC/lockdown"

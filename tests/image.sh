@@ -56,6 +56,12 @@ done
 motd=$(HOME=/tmp /usr/libexec/juniper/motd)
 grep -q 'Tailscale' <<<"$motd"
 
+jq -e '[.transports.docker[][] | select(.type == "sigstoreSigned" and .keyPath == "/usr/share/pki/containers/juniper.pub")] | length == 1' /etc/containers/policy.json >/dev/null
+# R8: scoped to the namespace, not one image, so juniper <-> juniper-minimal switches stay enforced.
+jq -e '[.transports.docker | to_entries[] | select(.value[0].keyPath == "/usr/share/pki/containers/juniper.pub") | .key | contains("juniper") | not] == [true]' /etc/containers/policy.json >/dev/null
+grep -q 'use-sigstore-attachments: true' /etc/containers/registries.d/juniper.yaml
+bootc switch --mutate-in-place --enforce-container-sigpolicy quay.io/x/y --help >/dev/null
+
 if [[ $IMAGE_ID == juniper ]]; then
   # --- full image only ---
   need_cmds distrobox fastfetch btop rg fzf nvim tmux git zstd

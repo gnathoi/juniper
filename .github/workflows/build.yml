@@ -134,3 +134,37 @@ jobs:
                   + "\((([$new[].Size] | add) // 0) / 104857.6 | round / 10) MiB to download"' \
               >>"$GITHUB_STEP_SUMMARY"
           ) || echo "::warning::update-size report failed for $IMAGE_NAME"
+
+      - name: Sign
+        if: env.PUBLISH == 'true'
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          REGISTRY: ${{ vars.IMAGE_REGISTRY || 'ghcr.io' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+          COSIGN_PASSWORD: ""
+        run: |
+          echo "$GITHUB_TOKEN" | cosign login "$REGISTRY" -u "$GITHUB_ACTOR" --password-stdin
+          cosign sign --yes --key env://COSIGN_PRIVATE_KEY "$IMAGE_REF@$DIGEST"
+
+      - name: SBOM
+        if: env.PUBLISH == 'true'
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.meta.outputs.image_ref }}@${{ steps.push.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Attest SBOM
+        if: env.PUBLISH == 'true'
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+          COSIGN_PASSWORD: ""
+        run: |
+          cosign attest --yes --key env://COSIGN_PRIVATE_KEY --type spdxjson \
+            --predicate sbom.spdx.json "$IMAGE_REF@$DIGEST"

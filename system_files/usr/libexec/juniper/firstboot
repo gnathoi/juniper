@@ -24,7 +24,17 @@ scrub_cidata() {
   sync
 }
 
+enforce_signatures() {
+  # Images written by bootc-image-builder don't enforce signatures; switch the origin in
+  # place (no new deployment) so every future `bootc upgrade` verifies the cosign signature.
+  local ref
+  ref=$(bootc status --json | jq -r '.spec.image.image // empty')
+  [[ -n $ref ]] || return 0
+  bootc switch --mutate-in-place --enforce-container-sigpolicy "$ref"
+}
+
 scrub_cidata
+enforce_signatures
 touch "$cloud_disabled"
 mkdir -p "$state_dir"
 touch "$state_dir/firstboot.done"
