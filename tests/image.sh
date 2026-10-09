@@ -45,6 +45,15 @@ test -f /usr/share/juniper/cidata/user-data
 [[ $(systemctl is-enabled juniper-lockdown.timer) == enabled ]]
 firewall-offline-cmd --get-default-zone | grep -qx public
 
+recipes=$(ujust --summary | tr ' ' '\n')
+for r in update update-schedule lan-ssh tailscale-up tailscale-ssh toggle-motd enable-metrics pi-status; do
+  grep -qx "$r" <<<"$recipes" || {
+    echo "missing recipe: $r"
+    exit 1
+  }
+done
+HOME=/tmp /usr/libexec/juniper/motd | grep -q 'Tailscale'
+
 if [[ $IMAGE_ID == juniper ]]; then
   # --- full image only ---
   need_cmds distrobox fastfetch btop rg fzf nvim tmux git zstd
@@ -52,6 +61,13 @@ if [[ $IMAGE_ID == juniper ]]; then
   test -s /usr/share/homebrew.tar.zst
   test -f /etc/profile.d/brew.sh
   just --justfile /usr/share/juniper/just/dev.just --summary | tr ' ' '\n' | grep -qx devbox
+  for r in devbox install-podlet; do
+    grep -qx "$r" <<<"$recipes" || {
+      echo "missing recipe: $r"
+      exit 1
+    }
+  done
+  fastfetch --config /etc/xdg/fastfetch/config.jsonc --pipe >/dev/null
 else
   # --- minimal only: no developer tooling ---
   for cmd in distrobox fastfetch nvim tmux btop git; do
@@ -62,6 +78,10 @@ else
   done
   test ! -e /usr/share/homebrew.tar.zst
   test ! -e /usr/share/juniper/just/dev.just
+  if grep -qx devbox <<<"$recipes"; then
+    echo "dev recipe in minimal: devbox"
+    exit 1
+  fi
 fi
 
 echo "image smoke test: OK ($IMAGE_ID)"
