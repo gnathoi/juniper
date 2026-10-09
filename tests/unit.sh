@@ -202,6 +202,16 @@ test_update_schedule_off() {
   check "schedule off: timer disabled" called "systemctl disable --now juniper-reboot.timer"
 }
 
+test_dependabot_update_type() {
+  local c=$ROOT/.github/scripts/dependabot-update-type.sh
+  check "dependabot: major" test "$("$c" 'Bump actions/checkout from 4 to 7')" = major
+  check "dependabot: minor" test "$("$c" 'Bump foo/bar from 4.1.0 to 4.2.1')" = minor-or-patch
+  check "dependabot: v3 -> v3.1" test "$("$c" 'Bump foo/bar from v3 to v3.1')" = minor-or-patch
+  # shellcheck disable=SC2016 # literal backticks
+  check "dependabot: digest" test "$("$c" 'Bump almalinux/almalinux-bootc from `08b3612` to `9a1c2d3`')" = other
+  check "dependabot: unparseable" test "$("$c" 'Update stuff')" = other
+}
+
 health_env() {
   export JUNIPER_HEALTH_TRIES=1 JUNIPER_HEALTH_INTERVAL=0 JUNIPER_TRYBOOT_FLAG=$T/tryboot
 }

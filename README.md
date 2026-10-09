@@ -91,11 +91,15 @@ the current image; use `ujust switch`/`ujust update`.
 
 ## Release train
 
-Dependabot PRs merge themselves once CI is green. Pushes to `main` build and test but do not
-publish. One weekly run (Monday 02:00 UTC) publishes both signed images, the disk images and
-a release. Pis then reboot into it on Tuesday 04:00 local time, plus up to 90 minutes of
-random delay; change that with `ujust update-schedule`. For something urgent, run
-`gh workflow run build -f build_raw=true` on `main`. Each publish reports how many layers
+Dependabot PRs (checked Saturdays) merge themselves once CI is green, except major version
+bumps, which wait for manual review. Merges are not rebuilt on `main`, so Monday's run is the
+first full test of them (GitHub emails you if a scheduled run fails). Your pushes to `main`
+build and test but do not publish. One weekly run (Monday 02:00 UTC) publishes both signed
+images, the disk images and a release. Pis then reboot into it on Tuesday 04:00 local time,
+plus up to 90 minutes of random delay; change that with `ujust update-schedule`. For
+something urgent, run `gh workflow run build` on `main` to publish the images now (add
+`-f build_raw=true` for disk images and a release), then `ujust update` on devices;
+otherwise they apply it at the next Tuesday window. Each publish reports how many layers
 and MiB a device downloads.
 
 ## License

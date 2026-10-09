@@ -4,8 +4,8 @@ update:
     sudo /usr/libexec/juniper/apply-update
 
 # Show the schedule, or set the reboot window: `tue 04:00`, `daily 03:30`, `05:00` (keep day), `off`
-update-schedule a="" b="":
-    sudo /usr/libexec/juniper/update-schedule {{ if a == "" { "" } else { quote(a) } }} {{ if b == "" { "" } else { quote(b) } }}
+update-schedule day_or_time="" time="":
+    sudo /usr/libexec/juniper/update-schedule {{ if day_or_time == "" { "" } else { quote(day_or_time) } }} {{ if time == "" { "" } else { quote(time) } }}
 
 # Switch to another image (e.g. ghcr.io/you/sensor-box:latest) and reboot into it now
 switch image:
