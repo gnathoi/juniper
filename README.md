@@ -10,7 +10,7 @@ Bazzite.
 | Tailscale, flash-time join, firewall lockdown, `ujust lan-ssh` | yes | yes |
 | Podman + quadlets, nightly `podman auto-update`, firewalld | yes | yes |
 | cloud-init first boot, secrets scrubbed from the boot partition | yes | yes |
-| Signed nightly updates, reboot window, firmware tryboot fallback | yes | yes |
+| Signed weekly updates, reboot window, firmware tryboot fallback | yes | yes |
 | zram, journald cap, hardware watchdog, `noatime` | yes | yes |
 | `ujust` core: update, update-schedule, lan-ssh, tailscale-*, pi-status, enable-metrics | yes | yes |
 | Login status (Tailscale, update state) | yes | yes |
@@ -18,11 +18,26 @@ Bazzite.
 | Homebrew, distrobox, git, tmux, neovim, btop, ripgrep, fzf |  | yes |
 | `ujust devbox`, `ujust install-podlet` |  | yes |
 
-Images: `ghcr.io/gnathoi/juniper-minimal` and `ghcr.io/gnathoi/juniper`. Every image,
-disk image and checksum file is cosign-signed; devices only accept signed OS updates
-(`cosign verify --key system_files/usr/share/pki/containers/juniper.pub ghcr.io/gnathoi/juniper:latest`).
-Signatures are enforced for everything under `ghcr.io/gnathoi`, so any future image published
-there must be signed with the same key.
+## Images
+
+Dev box (minimal + developer tools):
+
+```
+ghcr.io/gnathoi/juniper:latest
+```
+
+Appliance base, to build `FROM`:
+
+```
+ghcr.io/gnathoi/juniper-minimal:latest
+```
+
+Every image, disk image and checksum is cosign-signed, and Pis only accept signed OS
+updates (required for everything under `ghcr.io/gnathoi`). Verify with:
+
+```
+cosign verify --key system_files/usr/share/pki/containers/juniper.pub ghcr.io/gnathoi/juniper:latest
+```
 
 ## On login
 
