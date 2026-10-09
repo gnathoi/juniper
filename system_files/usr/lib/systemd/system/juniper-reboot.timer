@@ -1,8 +1,8 @@
 [Unit]
-Description=Nightly reboot window for staged Juniper updates (ujust update-schedule)
+Description=Weekly reboot window for staged Juniper updates (ujust update-schedule)
 
 [Timer]
-OnCalendar=*-*-* 04:00:00
+OnCalendar=Tue *-*-* 04:00:00
 RandomizedDelaySec=90min
 
 [Install]

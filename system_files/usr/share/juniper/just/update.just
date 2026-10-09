@@ -3,9 +3,9 @@ update:
     sudo bootc upgrade
     sudo /usr/libexec/juniper/apply-update
 
-# Show the update schedule, set the reboot window (HH:MM local time) or turn it off
-update-schedule time="":
-    sudo /usr/libexec/juniper/update-schedule {{ quote(time) }}
+# Show the schedule, or set the reboot window: `tue 04:00`, `daily 03:30`, `05:00` (keep day), `off`
+update-schedule a="" b="":
+    sudo /usr/libexec/juniper/update-schedule {{ if a == "" { "" } else { quote(a) } }} {{ if b == "" { "" } else { quote(b) } }}
 
 # Switch to another image (e.g. ghcr.io/you/sensor-box:latest) and reboot into it now
 switch image:
