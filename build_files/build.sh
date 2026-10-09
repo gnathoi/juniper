@@ -23,16 +23,6 @@ sed -i 's@resize_what = "/"@resize_what = "/var"@' "$resizefs"
 grep -q 'resize_what = "/var"' "$resizefs"
 rm -f "$(dirname "$resizefs")"/__pycache__/cc_resizefs.*.pyc
 
-# --- Homebrew: staged here, extracted to /var/home/linuxbrew by juniper-firstboot ---
-# Full clone, not --depth 1: `brew update` needs history.
-brew_tag=$(curl -fsSL https://api.github.com/repos/Homebrew/brew/releases/latest | jq -r .tag_name)
-mkdir -p /tmp/linuxbrew/.linuxbrew/bin
-git clone --branch "$brew_tag" https://github.com/Homebrew/brew /tmp/linuxbrew/.linuxbrew/Homebrew
-ln -s ../Homebrew/bin/brew /tmp/linuxbrew/.linuxbrew/bin/brew
-mkdir -p /usr/share/juniper
-tar --zstd -cf /usr/share/juniper/homebrew.tar.zst -C /tmp/linuxbrew .linuxbrew
-rm -rf /tmp/linuxbrew
-
 # --- files (after packages so RPM payloads cannot overwrite what Juniper ships) ---
 cp -a /ctx/system_files/. /
 

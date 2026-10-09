@@ -20,7 +20,6 @@ for unit in tailscaled.service firewalld.service avahi-daemon.service cloud-init
   }
 done
 [[ $(systemctl is-enabled bootc-fetch-apply-updates.timer) == masked ]]
-tar --zstd -tf /usr/share/juniper/homebrew.tar.zst .linuxbrew/bin/brew >/dev/null
 grep -q 'resize_what = "/var"' /usr/lib/python3*/site-packages/cloudinit/config/cc_resizefs.py
 grep -q 'rootflags=noatime' /usr/lib/bootc/kargs.d/10-juniper.toml
 
