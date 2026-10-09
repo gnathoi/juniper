@@ -30,7 +30,7 @@
 
 **Resume here (2026-10-10 morning):**
 
-1. Task 0 (distrobox `imager-dev` + baseline build) was started on the evening of 2026-10-09. Check `ls ~/workspace/rpi-imager-fork/build/test/` and the ledger's `task-0-report.md`. If the report is missing, re-run Task 0 (the distrobox and the partial `build/` can be reused).
+1. Task 0 is done (2026-10-09): distrobox `imager-dev` (Fedora 44, Qt 6.11.2), `build/` complete, and the baseline suites are green with 0 failures. A full build takes ~10 min, an incremental one ~2m20s. Build with `distrobox enter imager-dev -- bash -lc 'cd ~/workspace/rpi-imager-fork && cmake --build build -j16 -- -k 0'`. Keep the `-k 0`: upstream's `device_io_limits_test` doesn't compile (`::getpid` without `<unistd.h>`), so skip it in ctest. Never `git add -A`: `fetch-vendor-deps.sh` leaves `src/dependencies/vendor/libarchive` showing as modified.
 2. Then Tasks 1–8 in order, then Task 10 Steps 1–3 (rootless route, see below), then Steps 4–5 with a real card and a Pi.
 
 **Execution rulings (2026-10-09, from the pre-flight scan):**
