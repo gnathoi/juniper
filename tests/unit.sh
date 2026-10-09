@@ -15,10 +15,12 @@ setup() {
   export CALLS=$T/calls JUNIPER_STATE_DIR=$T/state
   mkdir -p "$T/bin" "$JUNIPER_STATE_DIR"
   : >"$CALLS"
-  for cmd in bootc tailscale firewall-cmd systemctl shred ip rpi-bootc-bootloader \
+  for cmd in bootc tailscale firewall-cmd systemctl ip rpi-bootc-bootloader \
     mount umount blkid chown timedatectl; do
     stub "$cmd" ''
   done
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub shred 'if [[ $1 == -u ]]; then rm -f "$2"; fi'
   export PATH=$T/bin:$ORIG_PATH
 }
 
@@ -85,23 +87,21 @@ test_firstboot_mounts_cidata_by_label() {
   check "firstboot: unmounts it" called "umount"
 }
 
-test_firstboot_enforces_signatures() {
+test_firstboot_purges_cloud_init_cache() {
   firstboot_env
-  # shellcheck disable=SC2016 # $1 expands inside the stub, not here
-  stub bootc 'if [[ $1 == status ]]; then echo "{\"spec\":{\"image\":{\"image\":\"ghcr.io/gnathoi/juniper:latest\"}}}"; fi'
+  export JUNIPER_CLOUD_DIR=$T/cloud
+  local i=$JUNIPER_CLOUD_DIR/instances/iid-1
+  mkdir -p "$i"
+  echo "secret tskey" >"$i/user-data.txt"
+  echo "secret tskey" >"$i/user-data.txt.i"
+  echo "secret tskey" >"$i/cloud-config.txt"
+  echo "secret tskey" >"$i/obj.pkl"
+  echo keep >"$i/datasource"
   "$LIBEXEC/firstboot"
-  check "firstboot: switches origin to signature-enforced" \
-    called "bootc switch --mutate-in-place --enforce-container-sigpolicy ghcr.io/gnathoi/juniper:latest"
-}
-
-test_firstboot_warns_without_image_ref() {
-  firstboot_env
-  # shellcheck disable=SC2016 # $1 expands inside the stub, not here
-  stub bootc 'if [[ $1 == status ]]; then echo "{}"; fi'
-  err=$("$LIBEXEC/firstboot" 2>&1 >/dev/null)
-  check "firstboot: warns when enforcement skipped" \
-    grep -q "no image ref in bootc status; signature enforcement NOT applied" <<<"$err"
-  check "firstboot: no switch without ref" not_called "bootc switch"
+  check "firstboot: cached user-data removed" not_grep_dir secret "$JUNIPER_CLOUD_DIR"
+  check "firstboot: cache files gone" test ! -e "$i/user-data.txt" -a ! -e "$i/user-data.txt.i" \
+    -a ! -e "$i/cloud-config.txt" -a ! -e "$i/obj.pkl"
+  check "firstboot: other instance files kept" test -e "$i/datasource"
 }
 
 test_lockdown_waits_for_join() {

@@ -53,6 +53,7 @@ block (Image, Tailscale, Update, Tip), without the logo and system summary.
 |---|---|
 | `ujust` | list everything |
 | `ujust update` | update and reboot now |
+| `ujust switch IMAGE` | switch to another image and reboot into it now |
 | `ujust update-schedule 03:30` / `off` | move or disable the reboot window |
 | `ujust lan-ssh on` / `off` | re-open SSH on the local network (escape hatch) |
 | `ujust tailscale-up` | log in to Tailscale interactively |
@@ -70,7 +71,14 @@ packages and quadlets, push, `bootc switch` the device to it.
 
 ## Switch an existing AlmaLinux RPi bootc system
 
-    sudo bootc switch --enforce-container-sigpolicy ghcr.io/gnathoi/juniper:latest
+    cosign verify --key <juniper.pub> ghcr.io/gnathoi/juniper:latest
+    sudo bootc switch ghcr.io/gnathoi/juniper:latest
+    sudo /usr/libexec/juniper/apply-update   # only on a Juniper device: `ujust switch IMAGE` does both
+
+The first switch is trust-on-first-use, so verify the image first with
+[`juniper.pub`](system_files/usr/share/pki/containers/juniper.pub) (this repo). After the
+switch, Juniper's policy enforces the signature on every later update. A plain reboot keeps
+the current image; use `ujust switch`/`ujust update`.
 
 ## Build
 
