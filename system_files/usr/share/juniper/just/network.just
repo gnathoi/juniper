@@ -13,6 +13,8 @@ lan-ssh state:
 tailscale-up:
     sudo tailscale up --ssh
     sudo systemctl start juniper-lockdown.service
+    echo "Tip: disable key expiry for this machine in the Tailscale admin console."
+    echo "Once locked down, an expired key cuts off access ('ujust lan-ssh on' only helps if you still have a way in)."
 
 # Turn Tailscale SSH on or off
 tailscale-ssh state:

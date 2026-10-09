@@ -1,2 +1,4 @@
-# Fewer writes to the SD card. rpi-bootc-bootloader copies BLS options to cmdline.txt.
-kargs = ["rootflags=noatime"]
+# rootflags=noatime: fewer writes to the SD card. rpi-bootc-bootloader copies BLS options to cmdline.txt.
+# panic/rd.*: a kernel panic or initramfs failure must reboot (so a bad tryboot update falls
+# back to the previous deployment) instead of waiting at an emergency shell nobody can reach.
+kargs = ["rootflags=noatime", "panic=10", "rd.shell=0", "rd.emergency=reboot"]

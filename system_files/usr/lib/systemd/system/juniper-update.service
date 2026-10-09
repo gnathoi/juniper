@@ -1,6 +1,6 @@
 [Unit]
 Description=Download and stage the latest Juniper image
-After=network-online.target
+After=network-online.target juniper-healthcheck.service
 Wants=network-online.target
 
 [Service]
