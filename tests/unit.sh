@@ -212,6 +212,51 @@ test_dependabot_update_type() {
   check "dependabot: unparseable" test "$("$c" 'Update stuff')" = other
 }
 
+changelog_env() {
+  C=$ROOT/.github/scripts/changelog.sh
+  printf '%s\n' '# Changelog' '' '## Unreleased' '' '### Added' '' '- Thing A' '  wrapped.' '' \
+    '### Fixed' '' '- Bug B' '' '## build-20261009 (2026-10-09)' '' '- First.' >"$T/built.md"
+  # main gained an entry after the built commit
+  sed 's/^  wrapped\.$/&\n- Thing C/' "$T/built.md" >"$T/main.md"
+  "$C" unreleased "$T/built.md" >"$T/notes"
+}
+
+test_changelog_stamp() {
+  changelog_env
+  "$C" stamp "$T/main.md" build-20261016 2026-10-16 "$T/notes"
+  printf '%s\n' '# Changelog' '' '## Unreleased' '' '### Added' '' '- Thing C' '' \
+    '## build-20261016 (2026-10-16)' '' '### Added' '' '- Thing A' '  wrapped.' '' '### Fixed' '' \
+    '- Bug B' '' '## build-20261009 (2026-10-09)' '' '- First.' >"$T/want.md"
+  check "changelog: stamp moves built entries, keeps later ones" diff "$T/want.md" "$T/main.md"
+  check "changelog: section = released notes" diff "$T/notes" <("$C" section "$T/main.md" build-20261016)
+  cp "$T/main.md" "$T/once.md"
+  "$C" stamp "$T/main.md" build-20261016 2026-10-16 "$T/notes"
+  check "changelog: rerun of the same commit is a no-op" diff "$T/once.md" "$T/main.md"
+}
+
+test_changelog_same_day_release() {
+  changelog_env
+  "$C" stamp "$T/main.md" build-20261016 2026-10-16 "$T/notes"
+  "$C" unreleased "$T/main.md" >"$T/notes2"
+  "$C" stamp "$T/main.md" build-20261016 2026-10-16 "$T/notes2"
+  check "changelog: one section per tag" test "$(grep -c '^## build-20261016' "$T/main.md")" = 1
+  check "changelog: second release added to it" grep -qx -- '- Thing C' <("$C" section "$T/main.md" build-20261016)
+  check "changelog: Unreleased emptied" test -z "$("$C" unreleased "$T/main.md")"
+}
+
+test_changelog_empty_unreleased() {
+  printf '%s\n' '## Unreleased' '' '## build-20261009 (2026-10-09)' '' '- First.' >"$T/c.md"
+  cp "$T/c.md" "$T/orig.md"
+  "$ROOT/.github/scripts/changelog.sh" unreleased "$T/c.md" >"$T/notes"
+  check "changelog: nothing unreleased" test ! -s "$T/notes"
+  "$ROOT/.github/scripts/changelog.sh" stamp "$T/c.md" build-20261016 2026-10-16 "$T/notes"
+  check "changelog: empty stamp is a no-op" diff "$T/orig.md" "$T/c.md"
+}
+
+test_changelog_repo_file() {
+  check "changelog: CHANGELOG.md has Unreleased" grep -qx '## Unreleased' "$ROOT/CHANGELOG.md"
+}
+
 health_env() {
   export JUNIPER_HEALTH_TRIES=1 JUNIPER_HEALTH_INTERVAL=0 JUNIPER_TRYBOOT_FLAG=$T/tryboot
 }

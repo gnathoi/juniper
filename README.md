@@ -117,6 +117,10 @@ something urgent, run `gh workflow run build` on `main` to publish the images no
 otherwise they apply it at the next Tuesday window. Each publish reports how many layers
 and MiB a device downloads.
 
+Note user-facing changes under Unreleased in [CHANGELOG.md](CHANGELOG.md) in the same PR.
+Each release uses that section as its notes (plus the list of merged PRs), then moves it
+under the release's tag on `main`.
+
 ## License
 
 Apache-2.0. See THIRD_PARTY.md for bundled components.

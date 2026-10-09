@@ -267,6 +267,20 @@ jobs:
       TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', needs.build.outputs.version) }}
     steps:
       - uses: actions/checkout@v7
+      # The changelog is stamped on the latest main, which may have moved on since the build.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          path: main
+      - name: Release notes from CHANGELOG.md
+        run: |
+          .github/scripts/changelog.sh unreleased CHANGELOG.md >unreleased.md
+          .github/scripts/changelog.sh stamp main/CHANGELOG.md "$TAG" \
+            "${VERSION:0:4}-${VERSION:4:2}-${VERSION:6:2}" unreleased.md
+          .github/scripts/changelog.sh section main/CHANGELOG.md "$TAG" >notes.md
+          if [ ! -s notes.md ]; then
+            echo "No Juniper changes; rebuilt on the latest upstream packages." >notes.md
+          fi
       - uses: actions/download-artifact@v7
         with:
           pattern: disk-*
@@ -291,8 +305,31 @@ jobs:
         with:
           tag_name: ${{ env.TAG }}
           name: Juniper ${{ env.VERSION }}
+          body_path: notes.md
+          generate_release_notes: true
           files: |
             *.raw.xz
             *.bundle
             os-list.json
             SHA256SUMS
+      # After the release, so the changelog never names a release that doesn't exist.
+      # GITHUB_TOKEN pushes don't trigger workflows, and this is docs-only anyway.
+      - name: Commit the stamped changelog to main
+        working-directory: main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for i in 1 2 3; do
+            # Re-stamp on a fresh main if a push raced us.
+            if [ "$i" -gt 1 ]; then
+              git fetch -q origin main && git reset -q --hard origin/main
+              ../.github/scripts/changelog.sh stamp CHANGELOG.md "$TAG" \
+                "${VERSION:0:4}-${VERSION:4:2}-${VERSION:6:2}" ../unreleased.md
+            fi
+            if git diff --quiet; then exit 0; fi
+            git commit -qam "docs: changelog for $TAG"
+            if git push -q origin HEAD:main; then exit 0; fi
+            sleep $((5 * i))
+          done
+          echo "::error::could not push the changelog for $TAG; move its entries by hand"
+          exit 1
