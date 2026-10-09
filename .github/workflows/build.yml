@@ -105,6 +105,7 @@ jobs:
           command -v skopeo >/dev/null || sudo apt-get install -y skopeo
           prev=$(skopeo inspect --creds "$creds" "docker://$IMAGE_REF:latest" 2>/dev/null \
             | jq -c '[.LayersData[].Digest]' || echo '[]')
+          prev=${prev:-[]}
 
           for tag in latest "$VERSION" "sha-${GITHUB_SHA::7}"; do
             pushed=false
@@ -122,10 +123,14 @@ jobs:
           done
           echo "digest=$(cat /tmp/digest)" >>"$GITHUB_OUTPUT"
 
-          skopeo inspect --creds "$creds" "docker://$IMAGE_REF@$(cat /tmp/digest)" \
-            | jq -r --arg name "$IMAGE_NAME" --argjson prev "$prev" '
-              [.LayersData[] | select(.Digest as $d | $prev | index($d) | not)] as $new
-              | "### Update size: \($name)\n"
-                + "\($new | length) of \(.LayersData | length) layers changed, "
-                + "\((([$new[].Size] | add) // 0) / 1048576 | floor) MiB to download"' \
-            >>"$GITHUB_STEP_SUMMARY"
+          # Best-effort: a failed report must not fail the step (signing runs after it).
+          (
+            set -o pipefail
+            skopeo inspect --creds "$creds" "docker://$IMAGE_REF@$(cat /tmp/digest)" \
+              | jq -r --arg name "$IMAGE_NAME" --argjson prev "$prev" '
+                [.LayersData[] | select(.Digest as $d | $prev | index($d) | not)] as $new
+                | "### Update size: \($name)\n"
+                  + "\($new | length) of \(.LayersData | length) layers changed, "
+                  + "\((([$new[].Size] | add) // 0) / 104857.6 | round / 10) MiB to download"' \
+              >>"$GITHUB_STEP_SUMMARY"
+          ) || echo "::warning::update-size report failed for $IMAGE_NAME"
