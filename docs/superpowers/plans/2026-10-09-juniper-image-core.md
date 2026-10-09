@@ -1941,13 +1941,13 @@ Repo → Insights → Dependency graph → Dependabot: `Containerfile` listed un
 - Modify: `build_files/build.sh`, `system_files/usr/libexec/juniper/firstboot`, `tests/unit.sh`, `tests/image.sh`, `.github/workflows/build.yml`
 
 **Interfaces:**
-- Consumes: `build` job outputs `image_ref`, `digest` (Task 1); firstboot script (Task 4).
-- Produces: `/etc/containers/policy.json` entry for `$IMAGE_REF` requiring `sigstoreSigned` with `/usr/share/pki/containers/juniper.pub`; secret `SIGNING_SECRET`.
+- Consumes: per-leg `steps.meta.outputs.image_ref` and `steps.push.outputs.digest` (Tasks 1/3); firstboot script (Task 4); the user's public key at `~/.config/juniper/cosign.pub` and repo secret `SIGNING_SECRET` (already created by the user).
+- Produces: `/etc/containers/policy.json` entry for the **namespace** `${IMAGE_REF%/*}` (e.g. `ghcr.io/gnathoi`, ruling R8 — covers both images, so switching between them still requires signatures) requiring `sigstoreSigned` with `/usr/share/pki/containers/juniper.pub`; matching `registries.d/juniper.yaml`.
 
-- [ ] **Step 1: Check the key pair exists (the user generated it before execution)**
+- [ ] **Step 1: Install the public key (the user generated the pair; the private key is only in GitHub Secrets)**
 
-Run: `test -s system_files/usr/share/pki/containers/juniper.pub && gh secret list | grep -q SIGNING_SECRET && echo ok`
-Expected: `ok`. If not, stop and ask the user to run the key-generation commands from the execution handoff. Never create, read or commit a private key.
+Run: `install -Dm644 ~/.config/juniper/cosign.pub system_files/usr/share/pki/containers/juniper.pub && gh secret list --repo gnathoi/juniper | grep -q SIGNING_SECRET && echo ok`
+Expected: `ok`. If not, stop and report NEEDS_CONTEXT. Never create, read or commit a private key.
 
 - [ ] **Step 2: Failing tests**
 
@@ -1967,6 +1967,8 @@ Insert into `tests/image.sh`:
 
 ```bash
 jq -e '[.transports.docker[][] | select(.type == "sigstoreSigned" and .keyPath == "/usr/share/pki/containers/juniper.pub")] | length == 1' /etc/containers/policy.json >/dev/null
+# R8: scoped to the namespace, not one image, so juniper <-> juniper-minimal switches stay enforced.
+jq -e '[.transports.docker | to_entries[] | select(.value[0].keyPath == "/usr/share/pki/containers/juniper.pub") | .key | contains("juniper") | not] == [true]' /etc/containers/policy.json >/dev/null
 grep -q 'use-sigstore-attachments: true' /etc/containers/registries.d/juniper.yaml
 bootc switch --mutate-in-place --enforce-container-sigpolicy quay.io/x/y --help >/dev/null
 ```
@@ -1993,14 +1995,17 @@ and call it: `enforce_signatures` on the line after `scrub_cidata`. The other fi
 Append to `build_files/build.sh` after the `cp -a` of system_files:
 
 ```bash
-# --- signature policy: updates of this image must carry our cosign signature ---
-jq --arg ref "$IMAGE_REF" \
-  '.transports.docker[$ref] = [{"type": "sigstoreSigned",
+# --- signature policy: every image under our namespace (juniper, juniper-minimal) must carry
+# our cosign signature. Scoped to OS images only: a global reject would also stop podman
+# pulling unsigned app images for quadlets.
+namespace=${IMAGE_REF%/*}
+jq --arg ns "$namespace" \
+  '.transports.docker[$ns] = [{"type": "sigstoreSigned",
      "keyPath": "/usr/share/pki/containers/juniper.pub",
      "signedIdentity": {"type": "matchRepository"}}]' \
   /etc/containers/policy.json >/tmp/policy.json
 mv /tmp/policy.json /etc/containers/policy.json
-printf 'docker:\n  %s:\n    use-sigstore-attachments: true\n' "$IMAGE_REF" \
+printf 'docker:\n  %s:\n    use-sigstore-attachments: true\n' "$namespace" \
   >/etc/containers/registries.d/juniper.yaml
 ```
 
@@ -2066,7 +2071,7 @@ git commit -m "feat: cosign-signed images, enforced on device via containers pol
 
 **Interfaces:**
 - Consumes: `/usr/share/juniper/cidata/*` from `system_files` (Task 4); `build` job output `version` and the matrix image names (Task 3).
-- Produces: release assets `juniper-<version>.raw.xz`, `juniper-minimal-<version>.raw.xz`, `SHA256SUMS`, `os-list.json` (both images). While the repo is private these need `gh release download`; the stable OS-list URL `https://github.com/gnathoi/juniper/releases/latest/download/os-list.json` works for rpi-imager only once the repo is public.
+- Produces: release assets `juniper-<version>.raw.xz`, `juniper-minimal-<version>.raw.xz`, `SHA256SUMS`, their `.bundle` cosign signatures (R9), `os-list.json` (both images). While the repo is private these need `gh release download`; the stable OS-list URL `https://github.com/gnathoi/juniper/releases/latest/download/os-list.json` works for rpi-imager only once the repo is public.
 
 - [ ] **Step 1: Failing test for the OS list renderer**
 
@@ -2287,12 +2292,22 @@ Append to `.github/workflows/build.yml` under `jobs:` (`disk` runs once per imag
         run: |
           jq -s '{os_list: [.[].os_list[]]}' os-list-juniper.json os-list-juniper-minimal.json >os-list.json
           sha256sum ./*.raw.xz os-list.json >SHA256SUMS
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign disk images and checksums (ruling R9)
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+          COSIGN_PASSWORD: ""
+        run: |
+          for f in ./*.raw.xz SHA256SUMS; do
+            cosign sign-blob --yes --key env://COSIGN_PRIVATE_KEY --bundle "$f.bundle" "$f"
+          done
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
           name: Juniper ${{ env.VERSION }}
           files: |
             *.raw.xz
+            *.bundle
             os-list.json
             SHA256SUMS
 ```
@@ -2393,7 +2408,9 @@ Bazzite.
 | Homebrew, distrobox, git, tmux, neovim, btop, ripgrep, fzf | — | ✅ |
 | `ujust devbox`, `ujust install-podlet` | — | ✅ |
 
-Images: `ghcr.io/gnathoi/juniper-minimal` and `ghcr.io/gnathoi/juniper` (cosign-signed).
+Images: `ghcr.io/gnathoi/juniper-minimal` and `ghcr.io/gnathoi/juniper`. Every image,
+disk image and checksum file is cosign-signed; devices only accept signed OS updates
+(`cosign verify --key system_files/usr/share/pki/containers/juniper.pub ghcr.io/gnathoi/juniper:latest`).
 
 ## Install
 
@@ -2403,8 +2420,12 @@ Images: `ghcr.io/gnathoi/juniper-minimal` and `ghcr.io/gnathoi/juniper` (cosign-
 2. Flash with Raspberry Pi Imager (Juniper build) using our OS list:
    `rpi-imager --repo https://github.com/gnathoi/juniper/releases/latest/download/os-list.json`
    and fill in user, SSH key, Wi-Fi, timezone and the Tailscale key.
-   Or download `juniper-*.raw.xz` / `juniper-minimal-*.raw.xz` from Releases, flash it with
-   any tool, and edit `user-data` on the small FAT partition (see `README.txt` there).
+   Or download `juniper-*.raw.xz` / `juniper-minimal-*.raw.xz` (+ its `.bundle`) from
+   Releases, verify it, flash it with any tool, and edit `user-data` on the small FAT
+   partition (see `README.txt` there):
+
+       cosign verify-blob --key system_files/usr/share/pki/containers/juniper.pub \
+         --bundle juniper-YYYYMMDD.raw.xz.bundle juniper-YYYYMMDD.raw.xz
 3. Boot. The Pi joins your tailnet; `ssh <user>@<hostname>` over Tailscale.
 
 ## Everyday commands
