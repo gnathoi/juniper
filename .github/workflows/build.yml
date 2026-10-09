@@ -40,10 +40,12 @@ jobs:
   build:
     needs: lint
     runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [juniper-minimal, juniper]
     outputs:
       version: ${{ steps.meta.outputs.version }}
-      image_ref: ${{ steps.meta.outputs.image_ref }}
-      digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
 
@@ -61,21 +63,27 @@ jobs:
           REGISTRY: ${{ vars.IMAGE_REGISTRY || 'ghcr.io' }}
           NAMESPACE: ${{ github.repository_owner }}
         run: |
-          ref="${REGISTRY}/${NAMESPACE}/juniper"
+          ref="${REGISTRY}/${NAMESPACE}/${{ matrix.image }}"
           echo "image_ref=${ref,,}" >>"$GITHUB_OUTPUT"
           echo "version=$(date -u +%Y%m%d)" >>"$GITHUB_OUTPUT"
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Verify pinned Homebrew image signature
+        if: matrix.image == 'juniper'
+        run: just verify-brew
 
       - name: Build and rechunk
         env:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          sudo "$(command -v just)" image_ref="$IMAGE_REF" version="$VERSION" build rechunk
+          sudo "$(command -v just)" image="${{ matrix.image }}" image_ref="$IMAGE_REF" version="$VERSION" build rechunk
 
       - name: Smoke test
         env:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
-        run: sudo "$(command -v just)" image_ref="$IMAGE_REF" test-image "$IMAGE_REF:latest"
+        run: sudo "$(command -v just)" image="${{ matrix.image }}" image_ref="$IMAGE_REF" test-image "$IMAGE_REF:latest"
 
       - name: Log in to registry
         if: env.PUBLISH == 'true'

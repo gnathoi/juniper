@@ -1,15 +1,32 @@
-image_ref := "localhost/juniper"
+image := "juniper"
+image_ref := "localhost/" + image
 version := `date -u +%Y%m%d`
+target := if image == "juniper-minimal" { "minimal" } else { "juniper" }
 
 # Lint and unit-test (same checks as CI's lint job)
 check:
     pre-commit run --all-files
 
-# Build the arm64 image as {{ image_ref }}:build (needs arm64 or qemu-user-static)
+# Build {{ image }} for arm64 as {{ image_ref }}:build (needs arm64 or qemu-user-static)
 build:
-    podman build --platform linux/arm64 \
-      --build-arg IMAGE_REF={{ image_ref }} --build-arg IMAGE_VERSION={{ version }} \
+    podman build --platform linux/arm64 --target {{ target }} \
+      --build-arg IMAGE_REF={{ image_ref }} --build-arg IMAGE_NAME={{ image }} \
+      --build-arg IMAGE_VERSION={{ version }} \
       -t {{ image_ref }}:build .
+
+# Verify the cosign signature of the pinned ublue-os/brew image (CI runs this first)
+verify-brew:
+    cosign verify --key ci/ublue-brew.pub \
+      "$(grep -oP '^FROM \Kghcr\.io/ublue-os/brew@sha256:[0-9a-f]{64}' Containerfile)" >/dev/null
+
+# Move the Homebrew pin to ublue-os/brew's current :latest (rare: brew self-updates on device)
+bump-brew:
+    #!/usr/bin/bash
+    set -euo pipefail
+    digest=sha256:$(skopeo inspect --raw docker://ghcr.io/ublue-os/brew:latest | sha256sum | cut -d' ' -f1)
+    sed -i -E "s|(ghcr\.io/ublue-os/brew@)sha256:[0-9a-f]{64}|\1$digest|" Containerfile
+    just verify-brew
+    git diff --stat Containerfile
 
 # Rechunk :build into :latest and :{{ version }} (rootful podman storage)
 rechunk:

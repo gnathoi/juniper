@@ -2,7 +2,7 @@
 # Builds the Juniper layer. Runs once inside the Containerfile with /ctx mounted.
 set -xeuo pipefail
 
-: "${IMAGE_REF:?}" "${IMAGE_VERSION:?}"
+: "${IMAGE_REF:?}" "${IMAGE_NAME:?}" "${IMAGE_VERSION:?}"
 
 # --- repositories ---
 dnf -y install dnf-plugins-core https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
@@ -12,8 +12,7 @@ curl -fsSLo /etc/yum.repos.d/tailscale.repo https://pkgs.tailscale.com/stable/rh
 # --- packages ---
 dnf -y install \
   podman firewalld cloud-init cloud-utils-growpart zram-generator \
-  git-core tmux jq rsync zstd NetworkManager-wifi avahi \
-  distrobox fastfetch just btop ripgrep fzf neovim \
+  jq rsync NetworkManager-wifi avahi just \
   tailscale
 dnf clean all
 
@@ -27,12 +26,20 @@ rm -f "$(dirname "$resizefs")"/__pycache__/cc_resizefs.*.pyc
 cp -a /ctx/system_files/. /
 
 # --- identity ---
+case $IMAGE_NAME in
+  juniper-minimal) pretty="Juniper Minimal" ;;
+  juniper) pretty="Juniper" ;;
+  *)
+    echo "unknown IMAGE_NAME: $IMAGE_NAME" >&2
+    exit 1
+    ;;
+esac
 sed -i '/^\(PRETTY_NAME\|VARIANT\|VARIANT_ID\|IMAGE_ID\|IMAGE_VERSION\)=/d' /usr/lib/os-release
 cat >>/usr/lib/os-release <<EOT
-PRETTY_NAME="Juniper ${IMAGE_VERSION} (AlmaLinux 10 bootc)"
-VARIANT="Juniper"
-VARIANT_ID=juniper
-IMAGE_ID=juniper
+PRETTY_NAME="${pretty} ${IMAGE_VERSION} (AlmaLinux 10 bootc)"
+VARIANT="${pretty}"
+VARIANT_ID=${IMAGE_NAME}
+IMAGE_ID=${IMAGE_NAME}
 IMAGE_VERSION=${IMAGE_VERSION}
 EOT
 
@@ -44,4 +51,4 @@ systemctl --global enable podman-auto-update.timer
 systemctl mask bootc-fetch-apply-updates.timer
 
 # --- cleanup: package scriptlets leave runtime-only content that bootc lint rejects ---
-rm -rf /run/cloud-init /tmp/nvim.*
+rm -rf /run/cloud-init
