@@ -20,7 +20,7 @@ repos:
     rev: v2.15.1
     hooks:
       - id: hadolint
-        files: Containerfile
+        files: (^|/)Containerfile$
   - repo: https://github.com/rhysd/actionlint
     rev: v1.7.12
     hooks:
