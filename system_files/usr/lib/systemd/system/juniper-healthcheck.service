@@ -4,7 +4,8 @@ After=network-online.target tailscaled.service juniper-firstboot.service
 Wants=network-online.target
 
 [Service]
-Type=exec
+Type=oneshot
+TimeoutStartSec=10min
 ExecStart=/usr/libexec/juniper/healthcheck
 
 [Install]

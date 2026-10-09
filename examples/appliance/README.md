@@ -7,7 +7,8 @@ quadlets with nightly auto-update, signed nightly OS updates with firmware fallb
 1. Copy this directory, edit `Containerfile` and add your `*.container` quadlets.
 2. Build for arm64 and push to your registry (CI: copy Juniper's `build.yml` matrix leg).
 3. Flash a Juniper Minimal disk image, then on the device:
-   `sudo bootc switch ghcr.io/you/sensor-box:latest` — from then on the device follows
+   `ujust switch ghcr.io/you/sensor-box:latest` (a plain reboot keeps the current image;
+   `ujust switch`/`ujust update` reboot into the new one) — from then on the device follows
    your image, with the same nightly update window and tryboot fallback.
 
 **Signatures.** Juniper's policy only covers Juniper's own images, so a device switched
@@ -24,4 +25,5 @@ Containerfile:
         && printf 'docker:\n  ghcr.io/you/sensor-box:\n    use-sigstore-attachments: true\n' \
           >/etc/containers/registries.d/sensor-box.yaml
 
-and switch with `sudo bootc switch --enforce-container-sigpolicy ghcr.io/you/sensor-box:latest`.
+Adding that policy entry is what enforces your signature on every update; switch with
+`ujust switch ghcr.io/you/sensor-box:latest` once the signed image is pushed.

@@ -26,7 +26,7 @@ for r,line in enumerate(logo_src):
         elif ch=='▝': R(x+CW/2,y,CW/2,CH/2,f)
         c+=1; i+=1
 logo_w=max(len(re.sub(r'\$\d','',l)) for l in logo_src)
-info=[("title",None),("sep",None),("OS","Juniper 20261009 (AlmaLinux 10 bootc) aarch64"),("Host","Raspberry Pi 5 Model B Rev 1.0"),
+info=[("title",None),("sep",None),("OS","Juniper 20261009 aarch64"),("Host","Raspberry Pi 5 Model B Rev 1.0"),
  ("Kernel","Linux 6.12.47-v8.2.el10"),("Uptime","3 days, 4 hours, 12 mins"),("CPU","BCM2712 (4) @ 2.40 GHz - 51.6°C"),
  ("Memory","1.12 GiB / 3.95 GiB (28%)"),("Swap","0 B / 1.97 GiB (0%)"),("Disk (/var)","6.84 GiB / 57.3 GiB (12%) - xfs"),("Local IP (wlan0)","192.168.1.42/24")]
 texts=[]; ix=X0+(logo_w+3)*CW
@@ -41,7 +41,7 @@ for r,(k,v) in enumerate(info):
     elif k=="sep": texts.append(T(ix,y,[("-"*15,TXT,False)]))
     else: texts.append(T(ix,y,[(k,KEY,True),(": "+v,TXT,False)]))
 rows=max(len(logo_src),len(info))
-motd=[("Image","Juniper 20261009 (AlmaLinux 10 bootc)"),("Tailscale","100.101.7.42 (firewall: Tailscale only)"),
+motd=[("Image","Juniper 20261009"),("Tailscale","100.101.7.42 (firewall: Tailscale only)"),
  ("Update","staged, reboots Sat 2026-10-10 04:37:12 BST"),("Tip","`ujust pi-status` shows temperature and throttling.")]
 y0=Y0+(rows+1)*CH
 for r,(k,v) in enumerate(motd): texts.append(T(X0+2*CW,y0+r*CH+CH*0.75,[(f"{k:<10} ",KEY,True),(v,TXT,False)]))

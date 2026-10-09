@@ -113,7 +113,7 @@
 </g>
 <text x="196.8" y="39.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">juniper</tspan><tspan fill="#c9d1d9">@</tspan><tspan fill="#3fb950" font-weight="bold">juniper</tspan></text>
 <text x="196.8" y="59.0" xml:space="preserve"><tspan fill="#c9d1d9">---------------</tspan></text>
-<text x="196.8" y="79.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">OS</tspan><tspan fill="#c9d1d9">: Juniper 20261009 (AlmaLinux 10 bootc) aarch64</tspan></text>
+<text x="196.8" y="79.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">OS</tspan><tspan fill="#c9d1d9">: Juniper 20261009 aarch64</tspan></text>
 <text x="196.8" y="99.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Host</tspan><tspan fill="#c9d1d9">: Raspberry Pi 5 Model B Rev 1.0</tspan></text>
 <text x="196.8" y="119.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Kernel</tspan><tspan fill="#c9d1d9">: Linux 6.12.47-v8.2.el10</tspan></text>
 <text x="196.8" y="139.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Uptime</tspan><tspan fill="#c9d1d9">: 3 days, 4 hours, 12 mins</tspan></text>
@@ -122,7 +122,7 @@
 <text x="196.8" y="199.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Swap</tspan><tspan fill="#c9d1d9">: 0 B / 1.97 GiB (0%)</tspan></text>
 <text x="196.8" y="219.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Disk (/var)</tspan><tspan fill="#c9d1d9">: 6.84 GiB / 57.3 GiB (12%) - xfs</tspan></text>
 <text x="196.8" y="239.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Local IP (wlan0)</tspan><tspan fill="#c9d1d9">: 192.168.1.42/24</tspan></text>
-<text x="43.2" y="279.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Image      </tspan><tspan fill="#c9d1d9">Juniper 20261009 (AlmaLinux 10 bootc)</tspan></text>
+<text x="43.2" y="279.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Image      </tspan><tspan fill="#c9d1d9">Juniper 20261009</tspan></text>
 <text x="43.2" y="299.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Tailscale  </tspan><tspan fill="#c9d1d9">100.101.7.42 (firewall: Tailscale only)</tspan></text>
 <text x="43.2" y="319.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Update     </tspan><tspan fill="#c9d1d9">staged, reboots Sat 2026-10-10 04:37:12 BST</tspan></text>
 <text x="43.2" y="339.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Tip        </tspan><tspan fill="#c9d1d9">`ujust pi-status` shows temperature and throttling.</tspan></text>

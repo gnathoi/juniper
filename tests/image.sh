@@ -34,7 +34,9 @@ need_enabled tailscaled.service firewalld.service avahi-daemon.service cloud-ini
   cloud-final.service podman-auto-update.timer
 [[ $(systemctl is-enabled bootc-fetch-apply-updates.timer) == masked ]]
 grep -q 'resize_what = "/var"' /usr/lib/python3*/site-packages/cloudinit/config/cc_resizefs.py
-grep -q 'rootflags=noatime' /usr/lib/bootc/kargs.d/10-juniper.toml
+for k in rootflags=noatime panic=10 rd.shell=0 rd.emergency=reboot; do
+  grep -q "$k" /usr/lib/bootc/kargs.d/10-juniper.toml
+done
 
 need_enabled juniper-firstboot.service juniper-tailscale-join.service
 need_enabled juniper-update.timer juniper-reboot.timer juniper-healthcheck.service
@@ -46,7 +48,7 @@ test -f /usr/share/juniper/cidata/user-data
 firewall-offline-cmd --get-default-zone | grep -qx public
 
 recipes=$(ujust --summary | tr ' ' '\n')
-for r in update update-schedule lan-ssh tailscale-up tailscale-ssh toggle-motd enable-metrics pi-status; do
+for r in update switch update-schedule lan-ssh tailscale-up tailscale-ssh toggle-motd enable-metrics pi-status; do
   grep -qx "$r" <<<"$recipes" || {
     echo "missing recipe: $r"
     exit 1
@@ -60,7 +62,6 @@ jq -e '[.transports.docker[][] | select(.type == "sigstoreSigned" and .keyPath =
 # R8: scoped to the namespace, not one image, so juniper <-> juniper-minimal switches stay enforced.
 jq -e '[.transports.docker | to_entries[] | select(.value[0].keyPath == "/usr/share/pki/containers/juniper.pub") | .key | contains("juniper") | not] == [true]' /etc/containers/policy.json >/dev/null
 grep -q 'use-sigstore-attachments: true' /etc/containers/registries.d/juniper.yaml
-bootc switch --mutate-in-place --enforce-container-sigpolicy quay.io/x/y --help >/dev/null
 
 if [[ $IMAGE_ID == juniper ]]; then
   # --- full image only ---

@@ -49,7 +49,7 @@ case $IMAGE_NAME in
 esac
 sed -i '/^\(PRETTY_NAME\|VARIANT\|VARIANT_ID\|IMAGE_ID\|IMAGE_VERSION\)=/d' /usr/lib/os-release
 cat >>/usr/lib/os-release <<EOT
-PRETTY_NAME="${pretty} ${IMAGE_VERSION} (AlmaLinux 10 bootc)"
+PRETTY_NAME="${pretty} ${IMAGE_VERSION}"
 VARIANT="${pretty}"
 VARIANT_ID=${IMAGE_NAME}
 IMAGE_ID=${IMAGE_NAME}

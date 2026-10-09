@@ -258,3 +258,11 @@ signature verified in CI against ublue's key (`ci/ublue-brew.pub`). ublue's
 their `brew-update`/`brew-upgrade` timers keep it current. Dependabot ignores the pin;
 `just bump-brew` moves it deliberately, so the ~150 MB tarball never rides along in routine
 updates.
+
+## Changes after final review (2026-10-09)
+
+- **F1:** `firstboot` no longer runs `bootc switch --enforce-container-sigpolicy` (it made
+  every later pull fail against the base `insecureAcceptAnything` default). The namespace
+  `sigstoreSigned` entry in `policy.json` is applied to every pull, so signatures are
+  enforced on all updates without it. First `bootc switch` from another system is TOFU.
+- **F15:** `PRETTY_NAME` is `Juniper <version>` (no "AlmaLinux 10 bootc" suffix).

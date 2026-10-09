@@ -14,9 +14,17 @@ if ip=$(tailscale ip -4 2>/dev/null) && [[ -n $ip ]]; then
 else
   ts="not connected - run: ujust tailscale-up"
 fi
+# An interactive login makes an expiring node; once locked down, expiry cuts off access.
+exp=$(tailscale status --json 2>/dev/null | jq -r '.Self.KeyExpiry // empty' 2>/dev/null)
+if [[ -n $exp ]]; then
+  ts+=" - key expires ${exp%%T*}; disable key expiry for this machine in the Tailscale admin console"
+fi
 
-if [[ -e /run/ostree/staged-deployment ]]; then
+if systemctl -q is-failed juniper-update.service; then
+  upd="update failed - see: journalctl -u juniper-update"
+elif [[ -e /run/ostree/staged-deployment ]]; then
   when=$(systemctl show juniper-reboot.timer -P NextElapseUSecRealtime 2>/dev/null)
+  [[ $when == n/a ]] && when=
   upd="staged, reboots ${when:-manually (ujust update)}"
 else
   upd="up to date"

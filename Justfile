@@ -9,6 +9,20 @@ check:
 
 # Build {{ image }} for arm64 as {{ image_ref }}:build (needs arm64 or qemu-user-static)
 build:
+    #!/usr/bin/bash
+    set -euo pipefail
+    # Pre-pull base images with retries: registries drop connections transiently.
+    stages=$(grep -oiP '^FROM \S+ AS \K\S+' Containerfile || true)
+    for img in $(grep -oP '^FROM \K\S+' Containerfile); do
+      [[ $img == scratch ]] && continue
+      grep -qixF "$img" <<<"$stages" && continue
+      for i in 1 2 3; do
+        podman pull --platform linux/arm64 "$img" && continue 2
+        sleep $((10 * i))
+      done
+      echo "failed to pull $img" >&2
+      exit 1
+    done
     podman build --platform linux/arm64 --target {{ target }} \
       --build-arg IMAGE_REF={{ image_ref }} --build-arg IMAGE_NAME={{ image }} \
       --build-arg IMAGE_VERSION={{ version }} \

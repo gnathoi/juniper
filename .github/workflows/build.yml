@@ -24,11 +24,13 @@ permissions:
 env:
   # Branch pushes build and test only; main, tags, the weekly cron and manual runs publish.
   # yamllint disable-line rule:line-length
-  PUBLISH: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+  PUBLISH: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
 
 jobs:
   lint:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -157,7 +159,10 @@ jobs:
         env:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
           DIGEST: ${{ steps.push.outputs.digest }}
-        run: cosign verify --key system_files/usr/share/pki/containers/juniper.pub "$IMAGE_REF@$DIGEST" >/dev/null
+        run: |
+          cosign verify --key system_files/usr/share/pki/containers/juniper.pub "$IMAGE_REF@$DIGEST" >/dev/null
+          # Devices pull :latest, so check the tag too.
+          cosign verify --key system_files/usr/share/pki/containers/juniper.pub "$IMAGE_REF:latest" >/dev/null
 
       - name: SBOM
         if: env.PUBLISH == 'true'
@@ -194,7 +199,8 @@ jobs:
 
   disk:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.build_raw)
+    # yamllint disable-line rule:line-length
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.build_raw)
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
@@ -219,10 +225,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: echo "$GITHUB_TOKEN" | sudo podman login -u "$GITHUB_ACTOR" --password-stdin ghcr.io
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.5.2
       - name: Build raw disk
         env:
           REF: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
-        run: sudo "$(command -v just)" build-raw "${REF,,}:latest" "$IMAGE-$VERSION.raw"
+        run: |
+          cosign verify --key system_files/usr/share/pki/containers/juniper.pub "${REF,,}:latest" >/dev/null
+          sudo "$(command -v just)" build-raw "${REF,,}:latest" "$IMAGE-$VERSION.raw"
       - name: Compress and render OS list entry
         run: |
           sudo chown "$USER" "$IMAGE-$VERSION.raw"

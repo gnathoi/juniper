@@ -16,4 +16,5 @@ file named network-config here:
           "MyNetwork":
             password: "secret"
 
-Both files are wiped from this partition after first boot.
+Edits here apply only on the very first boot. Afterwards user-data is replaced by this
+template and network-config is removed. To fix a Wi-Fi typo later, use Ethernet or re-flash.
