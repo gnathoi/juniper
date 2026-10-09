@@ -96,6 +96,7 @@ test_firstboot_enforces_signatures() {
 
 test_firstboot_warns_without_image_ref() {
   firstboot_env
+  # shellcheck disable=SC2016 # $1 expands inside the stub, not here
   stub bootc 'if [[ $1 == status ]]; then echo "{}"; fi'
   err=$("$LIBEXEC/firstboot" 2>&1 >/dev/null)
   check "firstboot: warns when enforcement skipped" \
