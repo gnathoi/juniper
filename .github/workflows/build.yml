@@ -243,7 +243,7 @@ jobs:
           sudo "$(command -v just)" build-raw "${REF,,}:latest" "$IMAGE-$VERSION.raw"
       - name: Compress and render OS list entry
         run: |
-          sudo chown "$USER" "$IMAGE-$VERSION.raw"
+          sudo chown "$USER:$(id -gn)" "$IMAGE-$VERSION.raw"
           xz -T0 -k "$IMAGE-$VERSION.raw"
           disk/render-os-list.sh "$IMAGE" "$IMAGE-$VERSION.raw" "$IMAGE-$VERSION.raw.xz" \
             "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$IMAGE-$VERSION.raw.xz" \
