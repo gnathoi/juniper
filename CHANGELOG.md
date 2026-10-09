@@ -10,11 +10,11 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+## build-20261009 (2026-10-09)
+
 ### Added
 
 - Release notes come from this changelog, and each release moves its entries under its tag.
-
-## build-20261009 (2026-10-09)
 
 First release.
 
