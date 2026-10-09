@@ -62,7 +62,7 @@ build-raw ref out="juniper.raw":
 check-layers:
     #!/usr/bin/bash
     set -euo pipefail
-    hist=$(podman history --no-trunc --format '{{{{.Size}}}}\t{{{{.CreatedBy}}}}' {{ image_ref }}:latest)
+    hist=$(podman history --no-trunc --format '{{{{.Size}}\t{{{{.CreatedBy}}' {{ image_ref }}:latest)
     grep -v '^0 B' <<<"$hist"
     want=(juniper)
     [[ {{ image }} == juniper ]] && want+=(homebrew)
