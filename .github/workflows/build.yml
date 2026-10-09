@@ -92,9 +92,17 @@ jobs:
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
           for tag in latest "$VERSION" "sha-${GITHUB_SHA::7}"; do
+            pushed=false
             for i in 1 2 3; do
-              sudo podman push --digestfile /tmp/digest "$IMAGE_REF:latest" "docker://$IMAGE_REF:$tag" && break
+              if sudo podman push --digestfile /tmp/digest "$IMAGE_REF:latest" "docker://$IMAGE_REF:$tag"; then
+                pushed=true
+                break
+              fi
               sleep $((10 * i))
             done
+            if [ "$pushed" != true ]; then
+              echo "::error::failed to push tag $tag after 3 attempts"
+              exit 1
+            fi
           done
           echo "digest=$(cat /tmp/digest)" >>"$GITHUB_OUTPUT"
