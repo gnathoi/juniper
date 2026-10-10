@@ -1,7 +1,7 @@
 image := "juniper"
 image_ref := "localhost/" + image
 version := `date -u +%Y%m%d`
-target := if image == "juniper-minimal" { "minimal" } else { "juniper" }
+target := if image == "juniper-minimal" { "minimal" } else if image == "juniper-desktop" { "desktop" } else { "juniper" }
 
 # Lint and unit-test (same checks as CI's lint job)
 check:
@@ -101,7 +101,7 @@ check-layers:
     hist=$(podman history --no-trunc --format '{{{{.Size}}\t{{{{.CreatedBy}}' {{ image_ref }}:latest)
     echo "$hist"
     want=(juniper)
-    [[ {{ image }} == juniper ]] && want+=(homebrew)
+    [[ {{ image }} == juniper || {{ image }} == juniper-desktop ]] && want+=(homebrew)
     for w in "${want[@]}"; do
       grep -qP "^(?!0B)[0-9.]+[kMG]?B\\s+$w\\s*$" <<<"$hist" || { echo "no $w layer" >&2; exit 1; }
     done

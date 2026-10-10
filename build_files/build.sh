@@ -70,6 +70,7 @@ printf 'docker:\n  %s:\n    use-sigstore-attachments: true\n' "$namespace" \
 case $IMAGE_NAME in
   juniper-minimal) pretty="Juniper Minimal" ;;
   juniper) pretty="Juniper" ;;
+  juniper-desktop) pretty="Juniper Desktop" ;;
   *)
     echo "unknown IMAGE_NAME: $IMAGE_NAME" >&2
     exit 1
