@@ -370,7 +370,7 @@ network:
       optional: true
       regulatory-domain: "GB"
       access-points:
-        "Silence Of The Lans":
+        "My Home Network":
           password: "hunter2hunter2"
 EOF
   "$LIBEXEC/wifi-import"
@@ -379,9 +379,9 @@ EOF
   check "wifi: keyfile mode 600" test "$(stat -c %a "$f" 2>/dev/null)" = 600
   check "wifi: type wifi" test "$(kf "$f" connection type)" = wifi
   check "wifi: interface wlan0" test "$(kf "$f" connection interface-name)" = wlan0
-  check "wifi: id is the SSID" test "$(kf "$f" connection id)" = "Silence Of The Lans"
+  check "wifi: id is the SSID" test "$(kf "$f" connection id)" = "My Home Network"
   check "wifi: ssid as bytes" test "$(kf "$f" wifi ssid)" = \
-    "83;105;108;101;110;99;101;32;79;102;32;84;104;101;32;76;97;110;115;"
+    "77;121;32;72;111;109;101;32;78;101;116;119;111;114;107;"
   check "wifi: wpa-psk" test "$(kf "$f" wifi-security key-mgmt)" = wpa-psk
   check "wifi: psk" test "$(kf "$f" wifi-security psk)" = hunter2hunter2
   check "wifi: dhcp" test "$(kf "$f" ipv4 method)" = auto
@@ -452,7 +452,7 @@ ssh_keys:
   - ssh-ed25519 AAAAC3two yubikey
 tailscale_authkey: tskey-auth-abc123
 wifi:
-  ssid: 'Silence Of "The" Lans: 5G'
+  ssid: 'My "Home" Network: 5G'
   password: 'p#ss: word'
   country: GB
 EOF
@@ -481,11 +481,11 @@ test_render_cidata_network_config() {
   local n=$T/out/network-config
   check "cidata: network-config mode 600" test "$(stat -c %a "$n" 2>/dev/null)" = 600
   check "cidata: wifi ssid + password" test "$(yget "$n" 'd["network"]["wifis"]["wlan0"]["access-points"]')" = \
-    "{'Silence Of \"The\" Lans: 5G': {'password': 'p#ss: word'}}"
+    "{'My \"Home\" Network: 5G': {'password': 'p#ss: word'}}"
   check "cidata: regulatory domain" test "$(yget "$n" 'd["network"]["wifis"]["wlan0"]["regulatory-domain"]')" = GB
   # The same importer path the image uses must accept it.
   JUNIPER_CIDATA_DIR=$T/out JUNIPER_NM_DIR=$T/nm JUNIPER_MODPROBE_DIR=$T/mp "$LIBEXEC/wifi-import" >/dev/null
-  check "cidata: image imports it" grep -q '^id=Silence Of "The" Lans: 5G$' "$T/nm/juniper-wifi-1.nmconnection"
+  check "cidata: image imports it" grep -q '^id=My "Home" Network: 5G$' "$T/nm/juniper-wifi-1.nmconnection"
 }
 
 test_render_cidata_minimal_config() {
