@@ -151,6 +151,20 @@ Monday at 02:00 UTC with that week's dependency and security updates. Pis downlo
 and reboot into it on Tuesday at 04:00 local time, within a 90-minute window; change that
 with `ujust update-schedule`, or apply it now with `ujust update`.
 
+## Acknowledgements
+
+Juniper stands on other people's work:
+
+- [AlmaLinux's bootc images for Raspberry Pi](https://github.com/AlmaLinux/bootc-images-rpi),
+  the base image, and [bootc](https://github.com/bootc-dev/bootc) itself.
+- [rpi-bootc-bootloader](https://github.com/kfox1111/rpi-bootc-bootloader), which makes Pi
+  firmware tryboot and rollback work with bootc.
+- [Universal Blue](https://universal-blue.org)'s [Bluefin](https://github.com/ublue-os/bluefin)
+  and [Bazzite](https://github.com/ublue-os/bazzite), where the overall approach and `ujust`
+  come from, and [ublue-os/brew](https://github.com/ublue-os/brew) for Homebrew on bootc.
+- [Zirconium](https://github.com/zirconium-dev/zirconium), whose niri setup informs the planned
+  desktop image.
+
 ## License
 
 Apache-2.0. See [THIRD_PARTY.md](THIRD_PARTY.md) for bundled components and where to get
@@ -158,15 +172,3 @@ their source.
 
 Raspberry Pi is a trademark of Raspberry Pi Ltd. AlmaLinux is a trademark of the AlmaLinux
 OS Foundation. Juniper is an independent project, not affiliated with or endorsed by either.
-
-## Citing
-
-```bibtex
-@software{juniper_pi_2026,
-  author  = {Hey, Nathaniel},
-  title   = {Juniper: opinionated bootc images for Raspberry Pi},
-  year    = {2026},
-  url     = {https://github.com/gnathoi/juniper},
-  license = {Apache-2.0}
-}
-```
