@@ -68,7 +68,7 @@ The config ([`examples/flash.yaml`](examples/flash.yaml)) holds the image (`juni
 `juniper-minimal`), hostname, user, SSH keys, timezone, Tailscale key and Wi-Fi. `just flash`
 downloads the latest release (or pass a tag or a local `.raw.xz` as a third argument),
 checks its cosign signature, refuses anything but a removable, USB or SD card disk, shows
-what it will write and asks you to type the device name before erasing it.
+what it will write and asks for a y/N before erasing it.
 
 ### Flash by hand (any OS)
 

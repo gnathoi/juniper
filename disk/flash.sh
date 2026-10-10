@@ -89,8 +89,8 @@ echo "Image:     $(basename "$xz")"
 echo
 lsblk -o NAME,SIZE,TYPE,TRAN,MODEL,LABEL,MOUNTPOINTS "$dev"
 echo
-read -rp "Everything on $dev will be erased. Type $dev to continue: " answer
-[[ $answer == "$dev" ]] || die "not confirmed; nothing written"
+read -rp "Erase everything on $dev and flash it? [y/N] " answer
+[[ $answer == [yY] || $answer == [yY][eE][sS] ]] || die "not confirmed; nothing written"
 
 # run0 (systemd/polkit) works for admins without sudo rights; JUNIPER_AS_ROOT overrides.
 if [[ $(id -u) == 0 ]]; then
