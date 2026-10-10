@@ -160,6 +160,9 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
     swaylock swayidle swaync pipewire wireplumber flatpak notify-send
   need_enabled greetd.service
   systemd-analyze verify greetd.service
+  grep -q '^GPGKey=' /etc/flatpak/remotes.d/flathub.flatpakrepo
+  need_enabled juniper-flatpak-setup.service juniper-flatpak-update.timer
+  systemd-analyze verify juniper-flatpak-setup.service juniper-flatpak-update.service
   # niri accepts Juniper's defaults, the /etc config, and the stub desktop-config writes.
   niri validate -c /usr/share/juniper/niri/juniper.kdl
   niri validate -c /etc/niri/config.kdl
@@ -168,6 +171,7 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
   head -2 "$t/.config/niri/config.kdl" | grep -q '^include "/usr/share/juniper/niri/juniper.kdl"'
   rm -rf "$t"
   grep -qx 'desktop-config' <<<"$recipes"
+  grep -qx 'flatpak-setup' <<<"$recipes"
   ls /usr/lib64/dri/v3d_dri.so /usr/lib64/dri/vc4_dri.so >/dev/null
   ls /usr/lib/modules/*/kernel/drivers/gpu/drm/v3d/v3d.ko* >/dev/null
   # The COPRs are build-time only: devices never pull from them.
@@ -191,6 +195,10 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
 else
   if command -v niri >/dev/null || [[ -e /usr/share/juniper/just/desktop.just ]]; then
     echo "desktop content in a headless image"
+    exit 1
+  fi
+  if ls /etc/flatpak/remotes.d/flathub.flatpakrepo /usr/lib/systemd/system/juniper-flatpak-* 2>/dev/null; then
+    echo "flatpak units or remote in a headless image"
     exit 1
   fi
   # The base defaults to graphical.target; nothing graphical starts without a display manager.

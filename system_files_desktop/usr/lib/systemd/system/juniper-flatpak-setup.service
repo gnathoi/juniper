@@ -1,0 +1,13 @@
+[Unit]
+Description=Install Firefox and the Bazaar app store from Flathub (first boot)
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=!/var/lib/juniper/flatpak-setup.done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/juniper/flatpak-setup
+TimeoutStartSec=60min
+
+[Install]
+WantedBy=multi-user.target

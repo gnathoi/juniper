@@ -800,6 +800,21 @@ test_desktop_lock_first_survives_notify_failure() {
   check "lock-first: notify-send failing -> no lock" not_called "swaylock"
 }
 
+test_flatpak_setup_installs_apps_once() {
+  stub flatpak ''
+  stub runuser ''
+  "$LIBEXEC_DESKTOP/flatpak-setup" >/dev/null
+  check "flatpak: installs Firefox and Bazaar from flathub" \
+    called "flatpak install --system --noninteractive --or-update flathub org.mozilla.firefox io.github.kolunmi.Bazaar"
+  check "flatpak: marked done" test -e "$JUNIPER_STATE_DIR/flatpak-setup.done"
+}
+
+test_flatpak_setup_offline_retries() {
+  stub flatpak 'exit 1'
+  check "flatpak: failure is reported" fails "$LIBEXEC_DESKTOP/flatpak-setup"
+  check "flatpak: failure not marked done (retried next boot)" test ! -e "$JUNIPER_STATE_DIR/flatpak-setup.done"
+}
+
 # --- runner ---
 for t in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do
   setup

@@ -41,6 +41,7 @@ done
 
 # --- units ---
 systemctl enable greetd.service
+systemctl enable juniper-flatpak-setup.service juniper-flatpak-update.timer
 systemctl set-default graphical.target
 
 # --- layers ---

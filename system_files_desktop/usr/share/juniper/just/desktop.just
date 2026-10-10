@@ -20,3 +20,7 @@ desktop-lock-idle state="":
       "") [[ -e $f ]] && echo "Lock on idle: off" || echo "Lock on idle: on" ;;
       *) echo "usage: ujust desktop-lock-idle [on|off]" >&2; exit 2 ;;
     esac
+
+# Install (or finish installing) Firefox and the Bazaar app store from Flathub
+flatpak-setup:
+    sudo /usr/libexec/juniper/flatpak-setup

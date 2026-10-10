@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# First boot (juniper-flatpak-setup.service) and `ujust flatpak-setup`: install Firefox and the
+# Bazaar app store from Flathub, system-wide. Marked done only on success, so a first boot
+# without internet retries on the next boot. --or-update makes reruns finish a partial install.
+set -euo pipefail
+state=${JUNIPER_STATE_DIR:-/var/lib/juniper}
+apps=(org.mozilla.firefox io.github.kolunmi.Bazaar)
+
+flatpak install --system --noninteractive --or-update flathub "${apps[@]}"
+mkdir -p "$state"
+touch "$state/flatpak-setup.done"
+
+# Tell the desktop user, if they're logged in (best-effort).
+user=$(getent passwd 1000 | cut -d: -f1) || exit 0
+if [[ -S /run/user/1000/bus ]]; then
+  runuser -u "$user" -- env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+    notify-send "Apps ready" "Firefox and the Bazaar app store are installed." || true
+fi
