@@ -14,6 +14,26 @@
 
 ## Status and handoff
 
+**Parked on 2026-10-10 (owner decision).** `just flash DEVICE CONFIG` (Juniper #24) now writes
+everything this fork was for (user, SSH keys, Wi-Fi, timezone, hostname, Tailscale key) from a
+YAML file, so the fork is only worth resuming for a GUI or macOS/Windows path. Before resuming:
+
+- **Two joins now race for the key.** Juniper #22 moved `juniper-tailscale-join.service` to
+  `After=cloud-init.service` (it was `After=cloud-final.service`, which made an ordering cycle
+  that dropped the join on hardware). It now usually runs before cloud-final's `runcmd`, joins
+  with `--ssh` and shreds the key, so this plan's `runcmd` join then fails (harmless, but
+  cloud-init reports an error, and its `--hostname`/`--login-server` are never applied). For
+  Juniper images the `runcmd` join is redundant: emit only the `write_files` key, e.g. behind a
+  second capability such as `tailscale-join`, and keep `runcmd` for images that don't join
+  themselves. Rework Tasks 1–2 and the Observations below accordingly.
+- **The image now accepts what stock Imager writes.** Juniper #22 added `juniper-wifi-import`
+  (netplan v2 `wifis:` from `network-config`, incl. `renderer: networkd` and
+  `regulatory-domain`, into NetworkManager) and `prefer_fqdn_over_hostname: false`.
+- **Untested idea:** stock Imager with Juniper's OS list may already cover everything but the
+  Tailscale key (then `ujust tailscale-up` over the LAN; the lockdown waits for the join).
+  Check whether its Debian-isms (`apt:`, `packages: [avahi-daemon]`) make cloud-init on Alma
+  report errors or fail.
+
 **Status on 2026-10-09:**
 
 - The spec was approved on 2026-10-09: `docs/superpowers/specs/2026-10-09-imager-tailscale-design.md`.
