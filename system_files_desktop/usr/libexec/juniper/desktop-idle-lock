@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Started by niri (juniper.kdl): lock after 10 min idle unless `ujust desktop-lock-idle off`;
-# always set logind's idle hint after 30 min (the reboot window waits for it).
+# always set logind's idle hint after 30 min (the reboot window waits for it). Never lock when
+# the user has no usable password (greetd-config's flag says 0): it could not be unlocked.
+# No flag at all: lock (fail closed).
 set -euo pipefail
-if [[ -e ${XDG_CONFIG_HOME:-$HOME/.config}/juniper/no-idle-lock ]]; then
+flag=${JUNIPER_LOCK_FLAG:-/run/juniper/desktop-lock}
+if [[ -e ${XDG_CONFIG_HOME:-$HOME/.config}/juniper/no-idle-lock || $(cat "$flag" 2>/dev/null || echo 1) == 0 ]]; then
   exec swayidle -w idlehint 1800
 fi
 exec swayidle -w timeout 600 'swaylock -f' before-sleep 'swaylock -f' idlehint 1800

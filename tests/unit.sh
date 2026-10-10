@@ -774,6 +774,32 @@ test_desktop_idle_lock() {
   check "idle-lock: off -> no lock" not_called "swaylock"
 }
 
+test_desktop_idle_lock_honours_password_flag() {
+  export HOME=$T/home XDG_CONFIG_HOME=$T/home/.config JUNIPER_LOCK_FLAG=$T/desktop-lock
+  stub swayidle ''
+  echo 0 >"$JUNIPER_LOCK_FLAG"
+  "$LIBEXEC_DESKTOP/desktop-idle-lock"
+  check "idle-lock: no password -> idle hint only" called "swayidle -w idlehint 1800"
+  check "idle-lock: no password -> no lock" not_called "swaylock"
+  : >"$CALLS"
+  echo 1 >"$JUNIPER_LOCK_FLAG"
+  "$LIBEXEC_DESKTOP/desktop-idle-lock"
+  check "idle-lock: password -> locks" called "swayidle -w timeout 600 swaylock -f"
+  : >"$CALLS"
+  rm -f "$JUNIPER_LOCK_FLAG"
+  "$LIBEXEC_DESKTOP/desktop-idle-lock"
+  check "idle-lock: no flag -> locks (fail closed)" called "swayidle -w timeout 600 swaylock -f"
+}
+
+test_desktop_lock_first_survives_notify_failure() {
+  export JUNIPER_LOCK_FLAG=$T/desktop-lock
+  stub swaylock ''
+  stub notify-send 'exit 1'
+  echo 0 >"$JUNIPER_LOCK_FLAG"
+  check "lock-first: notify-send failing -> still exits 0" "$LIBEXEC_DESKTOP/desktop-lock-first"
+  check "lock-first: notify-send failing -> no lock" not_called "swaylock"
+}
+
 # --- runner ---
 for t in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do
   setup

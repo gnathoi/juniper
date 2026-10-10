@@ -6,8 +6,9 @@ set -euo pipefail
 flag=${JUNIPER_LOCK_FLAG:-/run/juniper/desktop-lock}
 
 if [[ $(cat "$flag" 2>/dev/null || echo 1) == 0 ]]; then
+  # Best-effort: a missing notification daemon must not abort the script.
   notify-send -u critical "Set a password" \
-    "This desktop has no password, so it can't lock. Open a terminal (Super+Return) and run: sudo passwd $USER"
+    "This desktop has no password, so it can't lock. Open a terminal (Super+Return) and run: sudo passwd $USER" || true
   exit 0
 fi
 exec swaylock -f
