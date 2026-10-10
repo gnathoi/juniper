@@ -1,0 +1,58 @@
+name: Hardware test report
+description: Tried a Juniper image on a board or boot medium? Tell us how it went.
+title: "Hardware report: <board> / <image>"
+labels: ["hardware-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing! Reports that "everything just worked" are just as useful as bugs.
+        Please don't paste Tailscale keys, Wi-Fi passwords or other secrets.
+  - type: input
+    id: board
+    attributes:
+      label: Board and RAM
+      description: e.g. Raspberry Pi 4 Model B, 8 GB (`cat /proc/device-tree/model` on the Pi)
+    validations:
+      required: true
+  - type: dropdown
+    id: image
+    attributes:
+      label: Image
+      options: [juniper-minimal, juniper]
+    validations:
+      required: true
+  - type: input
+    id: release
+    attributes:
+      label: Release
+      description: e.g. build-20261010 (`grep IMAGE_VERSION /usr/lib/os-release`)
+    validations:
+      required: true
+  - type: dropdown
+    id: media
+    attributes:
+      label: Boot medium
+      options: [microSD, USB drive, NVMe, other]
+    validations:
+      required: true
+  - type: dropdown
+    id: flash
+    attributes:
+      label: How you flashed it
+      options: [just flash, by hand (dd or another tool), other]
+  - type: checkboxes
+    id: results
+    attributes:
+      label: What worked
+      options:
+        - label: First boot completed (user and SSH keys work)
+        - label: Joined the tailnet with the flash-time key
+        - label: Wi-Fi from network-config came up
+        - label: Lockdown applied (LAN SSH blocked, Tailscale SSH works)
+        - label: An update applied (`ujust update`) and the Pi came back
+  - type: textarea
+    id: notes
+    attributes:
+      label: What didn't work, or anything else
+      description: Errors, odd behaviour, boot time. Logs help (`journalctl -b -p warning`), minus secrets.

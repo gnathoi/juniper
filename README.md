@@ -50,6 +50,23 @@ updates (required for everything under `ghcr.io/gnathoi`). Verify with:
 cosign verify --key system_files/usr/share/pki/containers/juniper.pub ghcr.io/gnathoi/juniper:latest
 ```
 
+## Tested hardware
+
+| Hardware | Boot media | `juniper-minimal` | `juniper` |
+|---|---|---|---|
+| Raspberry Pi 5, 4 GB | microSD | ✅ tested 2026-10-10 | ✅ tested 2026-10-10 |
+| Raspberry Pi 5, 8/16 GB | microSD | untested | untested |
+| Raspberry Pi 5 | USB or NVMe | untested | untested |
+| Raspberry Pi 4, 400 | microSD or USB | untested | untested |
+| Raspberry Pi 500, CM4, CM5 | any | untested | untested |
+
+"Tested" means the full hardware acceptance run in [docs/acceptance.md](docs/acceptance.md):
+first boot, the Tailscale join and lockdown, signed updates through tryboot, and falling back
+from a broken update. The other boards should work, since the AlmaLinux base supports them,
+but nobody has checked yet. **If you have one, please try an image and
+[report how it went](https://github.com/gnathoi/juniper/issues/new?template=hardware-report.yml)**,
+even if everything just worked.
+
 ## Install
 
 1. Create a **tagged**, one-off, pre-approved auth key at
