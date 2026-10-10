@@ -148,8 +148,6 @@ Juniper stands on other people's work:
 - [Zirconium](https://github.com/zirconium-dev/zirconium), whose niri setup informs the planned
   desktop image.
 
-To cite Juniper, use GitHub's "Cite this repository" (from [CITATION.cff](CITATION.cff)).
-
 ## License
 
 Apache-2.0. See [THIRD_PARTY.md](THIRD_PARTY.md) for bundled components and where to get
