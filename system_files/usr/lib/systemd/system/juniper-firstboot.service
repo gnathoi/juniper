@@ -9,4 +9,6 @@ ExecStart=/usr/libexec/juniper/firstboot
 RemainAfterExit=yes
 
 [Install]
-WantedBy=multi-user.target
+# Not multi-user.target: cloud-final runs after it, so that would be an ordering cycle
+# and systemd would drop this job. cloud-init.target is only active on first boot anyway.
+WantedBy=cloud-init.target

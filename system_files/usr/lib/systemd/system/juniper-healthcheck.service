@@ -1,6 +1,6 @@
 [Unit]
 Description=Juniper boot health check (confirms or falls back from a tryboot update)
-After=network-online.target tailscaled.service juniper-firstboot.service
+After=network-online.target tailscaled.service
 Wants=network-online.target
 
 [Service]

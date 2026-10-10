@@ -10,6 +10,18 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+### Fixed
+
+- First boot on hardware: the Tailscale join, the CIDATA secret scrub and the boot health
+  check never ran. They were ordered after cloud-init's final stage, which itself runs after
+  `multi-user.target`, so systemd dropped them to break the ordering cycle. CI now checks
+  the boot transaction for cycles.
+- Wi-Fi from `network-config` (by hand or Raspberry Pi Imager) is now applied. cloud-init
+  only renders `wifis:` through netplan, which AlmaLinux doesn't have, so Juniper imports
+  them into NetworkManager itself before it starts.
+- The hostname from `user-data` is used as given; cloud-init no longer swaps in a name the
+  router's DNS has for the Pi's DHCP address.
+
 ## build-20261009 (2026-10-09)
 
 ### Added

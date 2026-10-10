@@ -47,6 +47,16 @@ grep -qx 'OnCalendar=Tue \*-\*-\* 04:00:00' /usr/lib/systemd/system/juniper-rebo
   exit 1
 }
 systemd-analyze verify /usr/lib/systemd/system/juniper-*.service /usr/lib/systemd/system/juniper-*.timer
+# Ordering cycles only show up in a whole boot transaction (and verify still exits 0).
+# cloud-init's generator adds cloud-init.target on first boot; cloud-final runs after
+# multi-user.target, so nothing multi-user.target pulls in may order itself after it.
+cycles=$(systemd-analyze verify multi-user.target cloud-init.target 2>&1 | grep 'ordering cycle' || true)
+[[ -z $cycles ]] || {
+  echo "$cycles"
+  exit 1
+}
+need_enabled juniper-wifi-import.service
+grep -qx 'prefer_fqdn_over_hostname: false' /etc/cloud/cloud.cfg.d/10-juniper-hostname.cfg
 test -f /usr/share/juniper/cidata/user-data
 [[ $(systemctl is-enabled juniper-lockdown.timer) == enabled ]]
 firewall-offline-cmd --get-default-zone | grep -qx public
