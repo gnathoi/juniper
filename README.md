@@ -1,7 +1,7 @@
 # Juniper
 
 Headless [bootc](https://bootc-dev.github.io/bootc/) images for Raspberry Pi 4/5 (incl.
-400/500, CM4/CM5), layered on the AlmaLinux RPi bootc image in the spirit of Bluefin and
+400/500, CM4/CM5), layered on the [AlmaLinux RPi bootc image](https://github.com/AlmaLinux/bootc-images-rpi) in the spirit of Bluefin and
 Bazzite.
 
 | | `juniper-minimal` | `juniper` |
