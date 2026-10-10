@@ -678,9 +678,10 @@ test_render_cidata_refuses_plaintext_and_bad_hash() {
   check "cidata: plain-text password refused" stderr_has "password: prompt" \
     "$ROOT/disk/render-cidata" "$T/plain.yaml" "$T/out1"
   printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\n' >"$T/ok.yaml"
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\npassword: prompt\n' >"$T/okp.yaml"
   # shellcheck disable=SC2016  # a literal crypt hash
   check "cidata: non-SHA-512 hash refused" fails env JUNIPER_PASSWORD_HASH='$1$abc$def' \
-    "$ROOT/disk/render-cidata" "$T/ok.yaml" "$T/out2"
+    "$ROOT/disk/render-cidata" "$T/okp.yaml" "$T/out2"
   check "cidata: headless without password still fine" "$ROOT/disk/render-cidata" "$T/ok.yaml" "$T/out3"
 }
 
@@ -694,6 +695,7 @@ test_render_cidata_hash_only_when_asked_for() {
   JUNIPER_PASSWORD_HASH=$good "$ROOT/disk/render-cidata" "$T/prompt.yaml" "$T/o2" 2>/dev/null
   check "cidata: password: prompt uses the hash" test "$(yget "$T/o2/user-data" 'd["users"][0]["passwd"]')" = "$good"
   printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\nimage: juniper-desktop\n' >"$T/desk.yaml"
+  # shellcheck disable=SC2016  # a literal crypt hash
   check "cidata: short-body hash refused" fails env JUNIPER_PASSWORD_HASH='$6$salt$abc' "$ROOT/disk/render-cidata" "$T/desk.yaml" "$T/o3"
   check "cidata: empty hash refused for desktop" fails env JUNIPER_PASSWORD_HASH= "$ROOT/disk/render-cidata" "$T/desk.yaml" "$T/o4"
 }
