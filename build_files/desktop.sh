@@ -16,7 +16,8 @@ copr() { # copr OWNER/PROJECT PACKAGE...
 copr yalter/niri niri
 copr yselkowitz/wlroots-epel xwayland-satellite foot foot-terminfo waybar fuzzel swaylock \
   swayidle swaybg SwayNotificationCenter brightnessctl \
-  playerctl-libs nanosvg fcft gtk-layer-shell # their dependencies from the same COPR
+  playerctl-libs nanosvg fcft gtk-layer-shell \
+  gtk4-layer-shell libmpdclient granite jsoncpp libsfdo # their dependencies from the same COPR
 copr yselkowitz/cosmic-epel greetd greetd-selinux
 
 # --- packages ---
@@ -40,6 +41,7 @@ done
 
 # --- units ---
 systemctl enable greetd.service
+# The base already defaults to graphical.target (systemd's default); make it explicit.
 systemctl set-default graphical.target
 
 # --- layers ---

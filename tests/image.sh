@@ -191,7 +191,12 @@ else
     echo "desktop content in a headless image"
     exit 1
   fi
-  [[ $default_target != graphical.target ]]
+  # (The base already defaults to graphical.target; nothing in it starts without a display
+  # manager.)
+  if [[ -e /etc/systemd/system/display-manager.service ]]; then
+    echo "display manager enabled in a headless image"
+    exit 1
+  fi
 fi
 
 echo "image smoke test: OK ($IMAGE_ID)"
