@@ -138,9 +138,9 @@ OS Foundation. Juniper is an independent project, not affiliated with or endorse
 ## Citing
 
 ```bibtex
-@software{hey_juniper_2026,
+@software{juniper_pi_2026,
   author  = {Hey, Nathaniel},
-  title   = {Juniper: signed, self-updating bootc images for Raspberry Pi},
+  title   = {Juniper: opinionated bootc images for Raspberry Pi},
   year    = {2026},
   url     = {https://github.com/gnathoi/juniper},
   license = {Apache-2.0}

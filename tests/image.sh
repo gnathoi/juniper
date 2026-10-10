@@ -60,7 +60,8 @@ cycles=$(systemd-analyze verify multi-user.target cloud-init.target 2>&1 | grep 
   echo "$cycles"
   exit 1
 }
-need_cmds rpi-eeprom-update lspci
+# rpi-eeprom-update also needs strings (binutils), which rpi-eeprom does not require.
+need_cmds rpi-eeprom-update lspci strings
 # Trimmed initramfs (90-juniper.conf): ostree and crypt in, network root/VM/RAID/TPM out.
 for img in /usr/lib/modules/*/initramfs.img; do
   mods=$(lsinitrd "$img" | sed -n '/^dracut modules:/,/^=/p')
