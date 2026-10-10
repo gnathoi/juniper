@@ -1,0 +1,11 @@
+[Unit]
+Description=Import first-boot Wi-Fi from CIDATA network-config into NetworkManager
+Before=NetworkManager.service
+ConditionPathExists=!/var/lib/juniper/firstboot.done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/juniper/wifi-import
+
+[Install]
+WantedBy=multi-user.target

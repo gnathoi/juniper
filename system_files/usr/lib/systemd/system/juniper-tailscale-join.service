@@ -1,6 +1,7 @@
 [Unit]
 Description=Join the tailnet with the auth key provided at flash time
-After=network-online.target tailscaled.service cloud-final.service
+# cloud-init.service (not cloud-final, which runs after multi-user.target) writes the key.
+After=network-online.target tailscaled.service cloud-init.service
 Wants=network-online.target tailscaled.service
 ConditionPathExists=/etc/tailscale/authkey
 

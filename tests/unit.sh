@@ -349,6 +349,92 @@ test_render_os_list_rejects_unknown_image() {
   check "os-list: unknown image rejected" bash -c '! "$0" nope "$1" "$1" u v 2>/dev/null' "$ROOT/disk/render-os-list.sh" "$T/x.raw"
 }
 
+wifi_env() {
+  export JUNIPER_CIDATA_DIR=$T/cidata JUNIPER_NM_DIR=$T/nm JUNIPER_MODPROBE_DIR=$T/modprobe
+  mkdir -p "$JUNIPER_CIDATA_DIR"
+}
+nm_file() { echo "$JUNIPER_NM_DIR/juniper-wifi-$1.nmconnection"; }
+# NetworkManager keyfile value of KEY in [SECTION] of FILE
+kf() { awk -F= -v s="[$2]" -v k="$3" '/^\[/{in_s=($0==s)} in_s && $1==k {sub(/^[^=]*=/,""); print}' "$1"; }
+
+# Raspberry Pi Imager's shape: renderer key beside the interfaces, quoted SSID with spaces.
+test_wifi_import_imager_network_config() {
+  wifi_env
+  cat >"$JUNIPER_CIDATA_DIR/network-config" <<'EOF'
+network:
+  version: 2
+  wifis:
+    renderer: networkd
+    wlan0:
+      dhcp4: true
+      optional: true
+      regulatory-domain: "GB"
+      access-points:
+        "Silence Of The Lans":
+          password: "hunter2hunter2"
+EOF
+  "$LIBEXEC/wifi-import"
+  f=$(nm_file 1)
+  check "wifi: keyfile written" test -f "$f"
+  check "wifi: keyfile mode 600" test "$(stat -c %a "$f" 2>/dev/null)" = 600
+  check "wifi: type wifi" test "$(kf "$f" connection type)" = wifi
+  check "wifi: interface wlan0" test "$(kf "$f" connection interface-name)" = wlan0
+  check "wifi: id is the SSID" test "$(kf "$f" connection id)" = "Silence Of The Lans"
+  check "wifi: ssid as bytes" test "$(kf "$f" wifi ssid)" = \
+    "83;105;108;101;110;99;101;32;79;102;32;84;104;101;32;76;97;110;115;"
+  check "wifi: wpa-psk" test "$(kf "$f" wifi-security key-mgmt)" = wpa-psk
+  check "wifi: psk" test "$(kf "$f" wifi-security psk)" = hunter2hunter2
+  check "wifi: dhcp" test "$(kf "$f" ipv4 method)" = auto
+  check "wifi: regulatory domain" grep -qx 'options cfg80211 ieee80211_regdom=GB' \
+    "$JUNIPER_MODPROBE_DIR/juniper-wifi-regdom.conf"
+}
+
+test_wifi_import_open_hidden_network() {
+  wifi_env
+  printf 'version: 2\nwifis:\n  wlan0:\n    access-points:\n      cafe:\n        hidden: true\n' \
+    >"$JUNIPER_CIDATA_DIR/network-config"
+  "$LIBEXEC/wifi-import"
+  f=$(nm_file 1)
+  check "wifi open: hidden" test "$(kf "$f" wifi hidden)" = true
+  check "wifi open: no security section" not_grep_dir 'wifi-security' "$JUNIPER_NM_DIR"
+  check "wifi open: no regdom file" test ! -e "$JUNIPER_MODPROBE_DIR/juniper-wifi-regdom.conf"
+}
+
+test_wifi_import_escapes_psk() {
+  wifi_env
+  # shellcheck disable=SC2016 # literal YAML
+  printf 'network:\n  version: 2\n  wifis:\n    wlan0:\n      access-points:\n        x:\n          password: " a\\\\b\\\\nc "\n' \
+    >"$JUNIPER_CIDATA_DIR/network-config"
+  "$LIBEXEC/wifi-import"
+  # GKeyFile escaping: edge spaces \s, backslash \\.
+  check "wifi: psk escaped" test "$(kf "$(nm_file 1)" wifi-security psk)" = '\sa\\b\\nc\s'
+}
+
+test_wifi_import_nothing_to_do() {
+  wifi_env
+  "$LIBEXEC/wifi-import"
+  check "wifi: no network-config, no keyfile" test ! -e "$JUNIPER_NM_DIR"
+  printf 'network:\n  version: 2\n  ethernets:\n    end0:\n      dhcp4: true\n' \
+    >"$JUNIPER_CIDATA_DIR/network-config"
+  "$LIBEXEC/wifi-import"
+  check "wifi: ethernet-only, no keyfile" test ! -e "$JUNIPER_NM_DIR"
+}
+
+test_wifi_import_no_cidata() {
+  wifi_env
+  rmdir "$JUNIPER_CIDATA_DIR"
+  check "wifi: missing CIDATA is not an error" "$LIBEXEC/wifi-import"
+}
+
+test_wifi_import_rerun_replaces() {
+  wifi_env
+  printf 'version: 2\nwifis:\n  wlan0:\n    access-points:\n      a:\n        password: "12345678"\n' \
+    >"$JUNIPER_CIDATA_DIR/network-config"
+  "$LIBEXEC/wifi-import"
+  "$LIBEXEC/wifi-import"
+  check "wifi rerun: one keyfile" test "$(find "$JUNIPER_NM_DIR" -type f | wc -l)" = 1
+}
+
 # --- runner ---
 for t in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do
   setup

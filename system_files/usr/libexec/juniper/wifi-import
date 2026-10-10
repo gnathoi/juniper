@@ -1,0 +1,134 @@
+#!/usr/bin/python3
+"""First boot, before NetworkManager (juniper-wifi-import.service): turn the Wi-Fi networks in
+CIDATA's network-config (netplan v2, as Raspberry Pi Imager writes it) into NetworkManager
+keyfiles. cloud-init only renders `wifis:` through netplan, which AlmaLinux doesn't have.
+juniper-firstboot shreds network-config afterwards. Safe to re-run.
+"""
+
+import os
+import subprocess
+import sys
+import tempfile
+import time
+
+import yaml
+
+CIDATA_DIR = os.environ.get("JUNIPER_CIDATA_DIR")
+NM_DIR = os.environ.get("JUNIPER_NM_DIR", "/etc/NetworkManager/system-connections")
+MODPROBE_DIR = os.environ.get("JUNIPER_MODPROBE_DIR", "/etc/modprobe.d")
+CIDATA_DEV = "/dev/disk/by-label/CIDATA"
+
+
+def kf_escape(value):
+    """GKeyFile string escaping; edge spaces as \\s so readers never trim them."""
+    out = (
+        value.replace("\\", "\\\\")
+        .replace("\n", "\\n")
+        .replace("\t", "\\t")
+        .replace("\r", "\\r")
+    )
+    if out.startswith(" "):
+        out = "\\s" + out[1:]
+    if out.endswith(" "):
+        out = out[:-1] + "\\s"
+    return out
+
+
+def keyfile(iface, ssid, ap):
+    # SSID as a byte list: a plain string that looks like "1;2;" would be misread.
+    ssid_bytes = "".join(f"{b};" for b in ssid.encode())
+    lines = [
+        "[connection]",
+        f"id={kf_escape(ssid)}",
+        "type=wifi",
+        f"interface-name={iface}",
+        "autoconnect=true",
+        "",
+        "[wifi]",
+        "mode=infrastructure",
+        f"ssid={ssid_bytes}",
+    ]
+    if ap.get("hidden"):
+        lines.append("hidden=true")
+    password = ap.get("password")
+    if password is not None:
+        # A 64-hex-digit password is a raw PSK (Imager hashes the passphrase); NM takes both.
+        lines += ["", "[wifi-security]", "key-mgmt=wpa-psk", f"psk={kf_escape(str(password))}"]
+    lines += ["", "[ipv4]", "method=auto", "", "[ipv6]", "method=auto", ""]
+    return "\n".join(lines)
+
+
+def write_private(path, text):
+    # NetworkManager ignores keyfiles readable by anyone but root.
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def import_from(cidata_dir):
+    path = os.path.join(cidata_dir, "network-config")
+    if not os.path.exists(path):
+        return
+    with open(path) as f:
+        cfg = yaml.safe_load(f) or {}
+    cfg = cfg.get("network", cfg)
+    if cfg.get("version") != 2:
+        return
+    wifis = cfg.get("wifis") or {}
+    n = 0
+    regdom = None
+    for iface, conf in wifis.items():
+        if not isinstance(conf, dict):  # e.g. Imager's `renderer: networkd`
+            continue
+        regdom = conf.get("regulatory-domain", regdom)
+        for ssid, ap in (conf.get("access-points") or {}).items():
+            n += 1
+            os.makedirs(NM_DIR, exist_ok=True)
+            write_private(
+                os.path.join(NM_DIR, f"juniper-wifi-{n}.nmconnection"),
+                keyfile(iface, str(ssid), ap or {}),
+            )
+    if regdom:
+        os.makedirs(MODPROBE_DIR, exist_ok=True)
+        with open(os.path.join(MODPROBE_DIR, "juniper-wifi-regdom.conf"), "w") as f:
+            f.write(f"options cfg80211 ieee80211_regdom={regdom}\n")
+    if n:
+        print(f"Imported {n} Wi-Fi network(s) from network-config.")
+
+
+def main():
+    if CIDATA_DIR is not None:
+        if os.path.isdir(CIDATA_DIR):
+            import_from(CIDATA_DIR)
+        return 0
+    # Early boot: udev may not have created the label link yet.
+    for _ in range(30):
+        if os.path.exists(CIDATA_DEV):
+            break
+        time.sleep(1)
+    else:
+        print("No CIDATA partition; nothing to import.")
+        return 0
+    # Usually already mounted (read-write, as /boot/efi); a second read-only mount is refused.
+    mounted = subprocess.run(
+        ["findmnt", "-n", "-o", "TARGET", "--source", CIDATA_DEV],
+        capture_output=True,
+        text=True,
+    ).stdout.split("\n")[0]
+    if mounted:
+        import_from(mounted)
+        return 0
+    with tempfile.TemporaryDirectory(dir="/run") as mnt:
+        subprocess.run(["mount", CIDATA_DEV, mnt], check=True)
+        try:
+            import_from(mnt)
+        finally:
+            subprocess.run(["umount", mnt], check=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
