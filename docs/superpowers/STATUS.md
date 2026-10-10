@@ -6,15 +6,15 @@ Start here when picking the project up on another machine.
 
 | | What | Spec | Plan | State |
 |---|---|---|---|---|
-| A | Images (`juniper-minimal`, `juniper`), CI, releases | `specs/2026-10-09-juniper-image-design.md` | `plans/2026-10-09-juniper-image-core.md` | Done and hardened. Task 11 (Pi 5 hardware acceptance) passed except Step 7b (`juniper-minimal`); results in `docs/acceptance.md` |
+| A | Images (`juniper-minimal`, `juniper`), CI, releases | `specs/2026-10-09-juniper-image-design.md` | `plans/2026-10-09-juniper-image-core.md` | Done and hardened. Task 11 (Pi 5 hardware acceptance) passed, including 7b; one unexplained first-boot hang to reproduce (see Next); results in `docs/acceptance.md` |
 | B | Tailscale field in Raspberry Pi Imager (own-use fork) | `specs/2026-10-09-imager-tailscale-design.md` | `plans/2026-10-09-imager-tailscale.md` | **Parked** (2026-10-10): `just flash` covers it. Read the plan's "Parked" note before resuming |
 | C | Encryption at rest (OTP-bound LUKS2 + recovery passphrase) | not written | not written | Needs a spike. Known: rpi-bootc-bootloader finds the FAT partition by rewriting the root device name, so set `MNTDEV` under LUKS; the initramfs keeps `crypt`; without Pi signed boot an OTP key protects a stolen card, not a stolen Pi |
 | D | **Experimental `juniper-desktop` (niri)** | not written | not written | **Next, once A's remaining items are done** (owner decision 2026-10-10). Research below |
 
 ## Next, in order
 
-1. **Task 11 Step 7b:** flash `juniper-minimal` with `just flash /dev/mmcblk0 ~/.config/juniper/flash-minimal.yaml` (reusable, 1-day tagged key), repeat Steps 2–3, check no `distrobox`/`brew`/`devbox`. This also exercises `just flash`'s root-only CIDATA mount and disk-identity check.
-2. Merge #35 (initramfs trim) after its CI; release; update the Pi; record in `docs/acceptance.md`.
+1. **Investigate the one unexplained first-boot hang** (`docs/acceptance.md`, 7b′): flash `juniper-minimal` again, add `console=ttyAMA10,115200` to the entry's `cmdline.txt` (the FTDI cable is on the Pi 5 debug UART; with two `console=` the kernel only enabled ttyAMA0), boot **with Ethernet**, capture with `stty -F /dev/ttyUSB0 115200 raw -echo; cat /dev/ttyUSB0`. If it reproduces, the log shows the stuck unit.
+2. Update the Pi to the release with #35 (initramfs) + #37 (binutils, flash fixes); check `ujust pi-eeprom` and the initramfs size; `ujust devbox`/`install-podlet` on a `juniper` install.
 3. Delete the repo-level `SIGNING_SECRET` and `RELEASE_DEPLOY_KEY` (the `release` environment has its own since 2026-10-10 and the first release under it succeeded): `gh secret delete SIGNING_SECRET --repo gnathoi/juniper` and the same for `RELEASE_DEPLOY_KEY`.
 4. Housekeeping: `gh auth refresh -h github.com -r write:packages,delete:packages` if not done; remove the `claude-probe` machine from the tailnet; `podman rm -f ts-probe`.
 5. Sub-project D (below).
