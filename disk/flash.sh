@@ -2,7 +2,7 @@
 # Flash a signed Juniper release onto an SD card or USB disk, with first-boot settings
 # (user, SSH keys, Tailscale key, Wi-Fi) from a config file (examples/flash.yaml):
 #   flash.sh DEVICE CONFIG [latest | RELEASE-TAG | PATH.raw.xz]
-# Downloads and cosign-verifies as you; only the write runs under sudo.
+# Downloads and cosign-verifies as you; only the write runs as root (run0, else sudo).
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -91,5 +91,15 @@ echo
 read -rp "Everything on $dev will be erased. Type $dev to continue: " answer
 [[ $answer == "$dev" ]] || die "not confirmed; nothing written"
 
-sudo "$here/flash.sh" --write "$dev" "$xz" "$work/cidata"
+# run0 (systemd/polkit) works for admins without sudo rights; JUNIPER_AS_ROOT overrides.
+if [[ $(id -u) == 0 ]]; then
+  as_root=()
+elif [[ -n ${JUNIPER_AS_ROOT:-} ]]; then
+  read -ra as_root <<<"$JUNIPER_AS_ROOT"
+elif command -v run0 >/dev/null; then
+  as_root=(run0)
+else
+  as_root=(sudo)
+fi
+"${as_root[@]}" "$here/flash.sh" --write "$dev" "$xz" "$work/cidata"
 echo "Done. Put the card in the Pi and power it on."

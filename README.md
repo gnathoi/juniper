@@ -59,7 +59,7 @@ block (Image, Tailscale, Update, Tip), without the logo and system summary.
 ### Flash with `just flash` (Linux only, for now)
 
 From a clone of this repo. Needs `just`, `cosign`, `curl`, `jq`, `xz`, Python 3 with PyYAML,
-and `sudo` for the write.
+and `run0` or `sudo` for the write.
 
     install -Dm600 examples/flash.yaml ~/.config/juniper/flash.yaml   # fill it in
     just flash /dev/sdX ~/.config/juniper/flash.yaml
