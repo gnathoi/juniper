@@ -17,7 +17,8 @@ die() {
 if [[ ${1:-} == --write ]]; then
   # Root phase: flash.sh --write DEVICE IMAGE.raw.xz CIDATA-DIR
   dev=$2 xz=$3 cidata_src=$4
-  "$here/check-target" "$dev"
+  # Via bash: under run0, SELinux won't let the service execute files in a home directory.
+  bash "$here/check-target" "$dev"
   for p in $(lsblk -nrpo PATH "$dev" | tail -n +2); do umount "$p" 2>/dev/null || true; done
   wipefs -a "$dev" >/dev/null
   xzcat "$xz" | dd of="$dev" bs=4M conv=fsync status=progress
@@ -101,5 +102,6 @@ elif command -v run0 >/dev/null; then
 else
   as_root=(sudo)
 fi
-"${as_root[@]}" "$here/flash.sh" --write "$dev" "$xz" "$work/cidata"
+# Through bash, not exec: run0's service may not execute files labelled user_home_t.
+"${as_root[@]}" /usr/bin/bash "$here/flash.sh" --write "$dev" "$xz" "$work/cidata"
 echo "Done. Put the card in the Pi and power it on."
