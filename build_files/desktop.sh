@@ -24,7 +24,7 @@ dnf -y install --exclude=fzf \
   niri xwayland-satellite xorg-x11-server-Xwayland \
   greetd greetd-selinux \
   foot waybar fuzzel swaylock swayidle swaybg SwayNotificationCenter brightnessctl wl-clipboard \
-  libnotify flatpak
+  libnotify flatpak \
   xdg-desktop-portal-gnome xdg-desktop-portal-gtk gnome-keyring \
   pipewire wireplumber pipewire-pulseaudio \
   mesa-dri-drivers mesa-vulkan-drivers \
