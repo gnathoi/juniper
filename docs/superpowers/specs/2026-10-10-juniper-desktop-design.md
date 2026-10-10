@@ -177,6 +177,11 @@ default unless hardware testing shows otherwise.
   homebrew layer for it too.
 - `build.yml`: matrix entries; README table column.
 - Later, if chosen: a `health.d/` directory in the health check.
+- README "Tested hardware" table (PR #42): a `juniper-desktop` column next to
+  `juniper-minimal` | `juniper`, filled for the Pi 5 first (as soon as the hardware test
+  plan below passes), other boards as reports come in.
+- `.github/ISSUE_TEMPLATE/hardware-report.yml`: `juniper-desktop` added to the image
+  dropdown.
 
 ## Hardware test plan (Pi 5 8 GB, then Pi 4)
 

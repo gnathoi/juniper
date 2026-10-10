@@ -15,7 +15,8 @@ copr() { # copr OWNER/PROJECT PACKAGE...
 }
 copr yalter/niri niri
 copr yselkowitz/wlroots-epel xwayland-satellite foot foot-terminfo waybar fuzzel swaylock \
-  swayidle swaybg SwayNotificationCenter brightnessctl
+  swayidle swaybg SwayNotificationCenter brightnessctl \
+  playerctl-libs nanosvg fcft gtk-layer-shell # their dependencies from the same COPR
 copr yselkowitz/cosmic-epel greetd greetd-selinux
 
 # --- packages ---

@@ -153,12 +153,15 @@ else
   fi
 fi
 
+# `systemctl get-default` needs a running systemd; read the symlink instead.
+default_target=$(basename "$(readlink -e /etc/systemd/system/default.target 2>/dev/null ||
+  readlink -e /usr/lib/systemd/system/default.target)")
 if [[ $IMAGE_ID == juniper-desktop ]]; then
   # --- desktop only (experimental) ---
   need_cmds niri niri-session xwayland-satellite Xwayland greetd agreety foot waybar fuzzel \
     swaylock swaync pipewire wireplumber
   need_enabled greetd.service
-  [[ $(systemctl get-default) == graphical.target ]]
+  [[ $default_target == graphical.target ]]
   ls /usr/lib64/dri/v3d_dri.so /usr/lib64/dri/vc4_dri.so >/dev/null
   ls /usr/lib/modules/*/kernel/drivers/gpu/drm/v3d/v3d.ko* >/dev/null
   # The COPRs are build-time only: devices never pull from them.
@@ -188,7 +191,7 @@ else
     echo "desktop content in a headless image"
     exit 1
   fi
-  [[ $(systemctl get-default) != graphical.target ]]
+  [[ $default_target != graphical.target ]]
 fi
 
 echo "image smoke test: OK ($IMAGE_ID)"
