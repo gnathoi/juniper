@@ -40,7 +40,8 @@ if [[ ${1:-} == --write ]]; then
   done
   [[ -n $part ]] || die "no CIDATA partition on $dev after writing"
   mnt=$(mktemp -d)
-  trap 'umount "$mnt" 2>/dev/null; rmdir "$mnt"' EXIT
+  # Cleanup must never fail the run: the final loop below has usually unmounted it already.
+  trap 'umount "$mnt" 2>/dev/null || true; rmdir "$mnt" 2>/dev/null || true' EXIT
   # Root-only: FAT has no permissions of its own, and these files hold the secrets. The
   # desktop auto-mounts the new partitions right after the write: release them and retry.
   mounted=false
