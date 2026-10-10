@@ -15,19 +15,21 @@ Bazzite.
 
 A Pi 5 running `juniper`. `juniper-minimal` shows just the status block.
 
-| | `juniper-minimal` | `juniper` |
-|---|---|---|
-| Purpose | appliance base | dev box |
-| Tailscale, flash-time join, firewall lockdown, `ujust lan-ssh` | yes | yes |
-| Podman + quadlets, nightly `podman auto-update`, firewalld | yes | yes |
-| cloud-init first boot, secrets scrubbed from the boot partition | yes | yes |
-| Signed weekly updates, reboot window, firmware tryboot fallback | yes | yes |
-| zram, journald cap, hardware watchdog, `noatime` | yes | yes |
-| `ujust` core: update, update-schedule, lan-ssh, tailscale-*, pi-status, enable-metrics | yes | yes |
-| Login status (Tailscale, update state) | yes | yes |
-| Juniper logo + system summary at login | no | yes |
-| Homebrew, distrobox, git; zellij, neovim, btop, ripgrep, fzf via a Brewfile | no | yes |
-| `ujust devbox`, `ujust install-podlet` | no | yes |
+| | `juniper-minimal` | `juniper` | `juniper-desktop` (experimental) |
+|---|---|---|---|
+| Interface | headless | headless | niri desktop |
+| Purpose | appliance base | dev box | dev box with a screen |
+| Tailscale, flash-time join, firewall lockdown, `ujust lan-ssh` | yes | yes | yes |
+| Podman + quadlets, nightly `podman auto-update`, firewalld | yes | yes | yes |
+| cloud-init first boot, secrets scrubbed from the boot partition | yes | yes | yes |
+| Signed weekly updates, reboot window, firmware tryboot fallback | yes | yes | yes |
+| zram, journald cap, hardware watchdog, `noatime` | yes | yes | yes |
+| `ujust` core: update, update-schedule, lan-ssh, tailscale-*, pi-status, enable-metrics | yes | yes | yes |
+| Login status (Tailscale, update state) | yes | yes | yes |
+| Juniper logo + system summary at login | no | yes | yes |
+| Homebrew, distrobox, git; zellij, neovim, btop, ripgrep, fzf via a Brewfile | no | yes | yes |
+| `ujust devbox`, `ujust install-podlet` | no | yes | yes |
+| niri, greetd auto-login, waybar, fuzzel, foot, PipeWire, KMS graphics | no | no | yes |
 
 ## Images
 
