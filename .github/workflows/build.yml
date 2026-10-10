@@ -40,6 +40,7 @@ jobs:
           python-version: "3.12"
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
       - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
+
   build:
     needs: lint
     runs-on: ubuntu-24.04-arm
@@ -51,6 +52,7 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Free disk space
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/hostedtoolcache /opt/ghc /usr/local/.ghcup
@@ -58,6 +60,7 @@ jobs:
 
       # After the cleanup: setup-just installs into /opt/hostedtoolcache, which it deletes.
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+
       - name: Image metadata
         id: meta
         env:
