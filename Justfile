@@ -64,6 +64,8 @@ bump-tools:
 bump-desktop:
     #!/usr/bin/bash
     set -euo pipefail
+    tmp=$(mktemp)
+    trap 'rm -f "$tmp"' EXIT
     podman run --rm -v ./build_files:/b:ro,z quay.io/almalinuxorg/almalinux:10 bash -c '
       set -euo pipefail
       pkgs=()
@@ -77,7 +79,19 @@ bump-desktop:
       done </b/desktop-copr.txt
       dnf -q --forcearch=aarch64 --disablerepo="*" --enablerepo="yalter-niri,yselkowitz-*" \
         repoquery --latest-limit 1 --qf "%{name}-%{evr}\n" "${pkgs[@]}"
-    ' | sed -e '/^$/d' -e 's/-0:/-/' | sort -u >build_files/desktop.lock
+    ' | sed -e '/^$/d' -e 's/-0:/-/' | LC_ALL=C sort -u >"$tmp"
+    # repoquery silently omits packages a COPR no longer has: fail rather than ship an image without them
+    missing=()
+    while read -r proj list; do
+      [[ -z $proj || $proj == "#"* ]] && continue
+      for p in $list; do grep -q "^$p-[0-9]" "$tmp" || missing+=("$p"); done
+    done <build_files/desktop-copr.txt
+    if ((${#missing[@]})); then
+      echo "bump-desktop: not found in the COPRs: ${missing[*]}" >&2
+      exit 1
+    fi
+    chmod 644 "$tmp"
+    mv "$tmp" build_files/desktop.lock
     git diff --stat build_files/desktop.lock
 
 # Rechunk :build into :latest and :{{ version }} (rootful podman storage)
