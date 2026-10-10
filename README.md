@@ -50,8 +50,19 @@ block (Image, Tailscale, Update, Tip), without the logo and system summary.
 
 1. Create a **tagged**, one-off, pre-approved auth key at
    <https://login.tailscale.com/admin/settings/keys>. Tagged devices never expire, so the
-   lockdown can't lock you out later.
-2. Flash with Raspberry Pi Imager (Juniper build) using our OS list:
+   lockdown can't lock you out later. The key turns on Tailscale SSH, so add an `ssh` rule to
+   your tailnet policy that lets you in to that tag, e.g.
+   `{"action": "accept", "src": ["autogroup:member"], "dst": ["tag:server"], "users": ["autogroup:nonroot", "root"]}`.
+2. From a clone of this repo, fill in a copy of [`examples/flash.yaml`](examples/flash.yaml)
+   (user, SSH keys, Tailscale key, Wi-Fi) and flash the latest signed release:
+
+       install -Dm600 examples/flash.yaml ~/.config/juniper/flash.yaml   # then edit it
+       just flash /dev/sdX ~/.config/juniper/flash.yaml
+
+   It refuses anything but a removable, USB or SD card disk, verifies the release's cosign
+   signature, shows what it will write and asks you to type the device name first.
+
+   Or flash with Raspberry Pi Imager (Juniper build) using our OS list:
    `rpi-imager --repo https://github.com/gnathoi/juniper/releases/latest/download/os-list.json`
    and fill in user, SSH key, Wi-Fi, timezone and the Tailscale key.
    Or download `juniper-*.raw.xz` / `juniper-minimal-*.raw.xz` (+ its `.bundle`) from

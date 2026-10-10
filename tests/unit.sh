@@ -435,6 +435,126 @@ test_wifi_import_rerun_replaces() {
   check "wifi rerun: one keyfile" test "$(find "$JUNIPER_NM_DIR" -type f | wc -l)" = 1
 }
 
+# fails CMD...: CMD exits non-zero (stderr hidden). stderr_has PATTERN CMD...: CMD's stderr matches.
+fails() { ! "$@" 2>/dev/null; }
+stderr_has() { { "${@:2}" 2>&1 >/dev/null || true; } | grep -q -- "$1"; }
+
+# yq-free YAML lookups for the flash tests: yget FILE PYTHON-EXPR (d is the parsed document)
+yget() { python3 -c 'import sys, yaml; d = yaml.safe_load(open(sys.argv[1])); print(eval(sys.argv[2]))' "$1" "$2"; }
+
+flash_config() {
+  cat >"$T/flash.yaml" <<'EOF'
+hostname: pi-one
+user: nat
+timezone: Europe/London
+ssh_keys:
+  - ssh-ed25519 AAAAC3one laptop
+  - ssh-ed25519 AAAAC3two yubikey
+tailscale_authkey: tskey-auth-abc123
+wifi:
+  ssid: 'Silence Of "The" Lans: 5G'
+  password: 'p#ss: word'
+  country: GB
+EOF
+  chmod 600 "$T/flash.yaml"
+}
+
+test_render_cidata_user_data() {
+  flash_config
+  "$ROOT/disk/render-cidata" "$T/flash.yaml" "$T/out"
+  local u=$T/out/user-data
+  check "cidata: cloud-config header" test "$(head -1 "$u")" = "#cloud-config"
+  check "cidata: user-data mode 600" test "$(stat -c %a "$u" 2>/dev/null)" = 600
+  check "cidata: hostname" test "$(yget "$u" 'd["hostname"]')" = pi-one
+  check "cidata: user" test "$(yget "$u" 'd["users"][0]["name"]')" = nat
+  check "cidata: wheel" test "$(yget "$u" 'd["users"][0]["groups"]')" = "['wheel']"
+  check "cidata: passwordless sudo" test "$(yget "$u" 'd["users"][0]["sudo"]')" = "['ALL=(ALL) NOPASSWD:ALL']"
+  check "cidata: both ssh keys" test "$(yget "$u" 'len(d["users"][0]["ssh_authorized_keys"])')" = 2
+  check "cidata: timezone" test "$(yget "$u" 'd["timezone"]')" = Europe/London
+  check "cidata: tailscale key file" test "$(yget "$u" '[(f["path"], f["permissions"], f["content"]) for f in d["write_files"]]')" = \
+    "[('/etc/tailscale/authkey', '0600', 'tskey-auth-abc123')]"
+}
+
+test_render_cidata_network_config() {
+  flash_config
+  "$ROOT/disk/render-cidata" "$T/flash.yaml" "$T/out"
+  local n=$T/out/network-config
+  check "cidata: network-config mode 600" test "$(stat -c %a "$n" 2>/dev/null)" = 600
+  check "cidata: wifi ssid + password" test "$(yget "$n" 'd["network"]["wifis"]["wlan0"]["access-points"]')" = \
+    "{'Silence Of \"The\" Lans: 5G': {'password': 'p#ss: word'}}"
+  check "cidata: regulatory domain" test "$(yget "$n" 'd["network"]["wifis"]["wlan0"]["regulatory-domain"]')" = GB
+  # The same importer path the image uses must accept it.
+  JUNIPER_CIDATA_DIR=$T/out JUNIPER_NM_DIR=$T/nm JUNIPER_MODPROBE_DIR=$T/mp "$LIBEXEC/wifi-import" >/dev/null
+  check "cidata: image imports it" grep -q '^id=Silence Of "The" Lans: 5G$' "$T/nm/juniper-wifi-1.nmconnection"
+}
+
+test_render_cidata_minimal_config() {
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\n' >"$T/flash.yaml"
+  "$ROOT/disk/render-cidata" "$T/flash.yaml" "$T/out" 2>/dev/null
+  check "cidata minimal: no network-config" test ! -e "$T/out/network-config"
+  check "cidata minimal: hostname defaults to juniper" test "$(yget "$T/out/user-data" 'd["hostname"]')" = juniper
+  check "cidata minimal: no write_files" test "$(yget "$T/out/user-data" '"write_files" in d')" = False
+}
+
+test_render_cidata_authkey_file() {
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\ntailscale_authkey_file: key.txt\n' >"$T/flash.yaml"
+  printf 'tskey-auth-fromfile\n' >"$T/key.txt"
+  "$ROOT/disk/render-cidata" "$T/flash.yaml" "$T/out"
+  check "cidata: key from file (relative to config, stripped)" test \
+    "$(yget "$T/out/user-data" 'd["write_files"][0]["content"]')" = tskey-auth-fromfile
+}
+
+test_render_cidata_rejects_bad_config() {
+  printf 'ssh_keys: [ssh-ed25519 AAAAC3x me]\n' >"$T/nouser.yaml"
+  printf 'user: me\n' >"$T/nokeys.yaml"
+  printf 'user: me\nssh_keys: [not-a-key]\n' >"$T/badkey.yaml"
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\ntailscale_authkey: hunter2\n' >"$T/badts.yaml"
+  for c in nouser nokeys badkey badts; do
+    check "cidata: rejects $c" fails "$ROOT/disk/render-cidata" "$T/$c.yaml" "$T/out-$c"
+  done
+}
+
+# lsblk_json JSON: stub lsblk to print JSON (the -J output check-target asks for)
+lsblk_json() { stub lsblk "cat <<'EOF'
+$1
+EOF"; }
+
+test_check_target_automounted_sd_card_ok() {
+  lsblk_json '{"blockdevices":[{"path":"/dev/mmcblk0","type":"disk","rm":false,"tran":"mmc","mountpoints":[null],
+    "children":[{"path":"/dev/mmcblk0p1","type":"part","mountpoints":["/run/media/nat/bootfs"]},
+                {"path":"/dev/mmcblk0p2","type":"part","mountpoints":["/run/media/nat/rootfs"]}]}]}'
+  check "target: auto-mounted SD card accepted" "$ROOT/disk/check-target" /dev/mmcblk0
+}
+
+test_check_target_usb_reader_ok() {
+  lsblk_json '{"blockdevices":[{"path":"/dev/sdb","type":"disk","rm":true,"tran":"usb","mountpoints":[null]}]}'
+  check "target: blank USB disk accepted" "$ROOT/disk/check-target" /dev/sdb
+}
+
+test_check_target_refuses_system_disks() {
+  lsblk_json '{"blockdevices":[{"path":"/dev/nvme0n1","type":"disk","rm":false,"tran":"nvme","mountpoints":[null],
+    "children":[{"path":"/dev/nvme0n1p1","type":"part","mountpoints":["/boot/efi"]}]}]}'
+  check "target: nvme refused" fails "$ROOT/disk/check-target" /dev/nvme0n1
+  # util-linux 2.41 lists mapped devices on the disk before the disk itself.
+  lsblk_json '{"blockdevices":[{"path":"/dev/mapper/luks-x","type":"crypt","rm":false,"tran":null,"mountpoints":["/var/home"]},
+    {"path":"/dev/sde","type":"disk","rm":true,"tran":"usb","mountpoints":[null],
+     "children":[{"path":"/dev/sde1","type":"part","mountpoints":[null],
+       "children":[{"path":"/dev/mapper/luks-x","type":"crypt","mountpoints":["/var/home"]}]}]}]}'
+  check "target: mapped-first listing still refused for the right reason" \
+    stderr_has "in use by /dev/mapper/luks-x" "$ROOT/disk/check-target" /dev/sde
+  lsblk_json '{"blockdevices":[{"path":"/dev/sdc","type":"disk","rm":true,"tran":"usb","mountpoints":[null],
+    "children":[{"path":"/dev/sdc1","type":"part","mountpoints":["/var/home"]}]}]}'
+  check "target: USB disk in system use refused" fails "$ROOT/disk/check-target" /dev/sdc
+  lsblk_json '{"blockdevices":[{"path":"/dev/sdd","type":"disk","rm":true,"tran":"usb","mountpoints":[null],
+    "children":[{"path":"/dev/sdd1","type":"part","mountpoints":[null],
+      "children":[{"path":"/dev/mapper/x","type":"crypt","mountpoints":[null]}]}]}]}'
+  check "target: disk holding a mapped device refused" fails "$ROOT/disk/check-target" /dev/sdd
+  lsblk_json '{"blockdevices":[{"path":"/dev/sda","type":"disk","rm":false,"tran":"sata","mountpoints":[null]}]}'
+  check "target: internal SATA refused" fails "$ROOT/disk/check-target" /dev/sda
+  lsblk_json '{"blockdevices":[{"path":"/dev/mmcblk0p1","type":"part","rm":false,"tran":null,"mountpoints":[null]}]}'
+  check "target: partition refused" fails "$ROOT/disk/check-target" /dev/mmcblk0p1
+}
+
 # --- runner ---
 for t in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do
   setup

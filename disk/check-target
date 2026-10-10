@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Refuses (exit 1, with the reason) any flash target that isn't a whole removable/SD/USB disk,
+# or that holds anything this machine uses. Auto-mounted removable media (/run/media, /media)
+# is fine: flash.sh unmounts it.
+#   check-target /dev/mmcblk0
+set -euo pipefail
+
+dev=$(readlink -f "${1:?usage: check-target DEVICE}")
+json=$(lsblk -J -o PATH,TYPE,RM,TRAN,MOUNTPOINTS "$dev")
+
+refuse() {
+  echo "Refusing $dev: $*" >&2
+  exit 1
+}
+
+# By path: util-linux 2.41 can list mapped devices on the disk before the disk itself.
+top=$(jq -c --arg d "$dev" '.blockdevices[] | select(.path == $d)' <<<"$json")
+[[ $(jq -r .type <<<"$top") == disk ]] || refuse "not a whole disk"
+[[ $(jq -r '.rm == true or .tran == "usb" or .tran == "mmc"' <<<"$top") == true ]] ||
+  refuse "not a removable, USB or SD card disk"
+
+# Every device on it, recursively (partitions, and anything mapped on top of them).
+all=$(jq -c '[recurse(.children[]?)]' <<<"$top")
+mapped=$(jq -r '[.[] | select(.type != "disk" and .type != "part") | .path] | join(" ")' <<<"$all")
+[[ -z $mapped ]] || refuse "in use by $mapped"
+busy=$(jq -r '[.[] | .mountpoints[]? | select(. != null)
+  | select(test("^/(run/)?media/") | not)] | join(" ")' <<<"$all")
+[[ -z $busy ]] || refuse "mounted at $busy"
