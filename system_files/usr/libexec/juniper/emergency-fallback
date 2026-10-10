@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Real-root emergency mode (juniper-emergency-fallback.service, wanted by emergency.target):
+# under tryboot, a bad update that fails to mount or start would sit in emergency mode with
+# PID 1 feeding the watchdog, so never fall back. Reboot after a short grace period instead;
+# the firmware then boots the previous deployment. On a normal boot, stay for the console.
+set -euo pipefail
+
+tryboot_flag=${JUNIPER_TRYBOOT_FLAG:-/proc/device-tree/chosen/bootloader/tryboot}
+delay=${JUNIPER_EMERGENCY_DELAY:-60}
+
+# Same fail-closed test as healthcheck: only an exact big-endian 1 counts.
+if [[ -r $tryboot_flag ]] && [[ $(od -An -tu4 --endian=big -N4 "$tryboot_flag" | tr -d ' ') == 1 ]]; then
+  echo "Emergency mode under tryboot: rebooting into the previous deployment in ${delay}s." >&2
+  sleep "$delay"
+  systemctl reboot
+fi

@@ -10,6 +10,16 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+### Fixed
+
+- An update that drops into emergency mode (e.g. a mount that fails) now reboots after 60 s
+  when it was booted via tryboot, so the Pi falls back to the previous image instead of
+  waiting there.
+- The boot health check accepts an IPv6-only network, and once the Pi is locked down it
+  also requires SSH over the tailnet (Tailscale SSH, or sshd) to be up.
+- First boot and the Wi-Fi import read the `CIDATA` partition of the disk the Pi booted
+  from, never one on another attached disk.
+
 ## build-20261010 (2026-10-10)
 
 ### Added

@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Prints the CIDATA (FAT firmware) partition of the disk the running system booted from:
+# the disk under /sysroot, through any partition/LUKS/LVM layers. Never another disk's
+# CIDATA (a second card or USB stick). Fails if that disk has none, or more than one.
+set -euo pipefail
+
+src=$(findmnt -n -o SOURCE /sysroot)
+src=${src%%[[]*} # btrfs-style "dev[/subvol]"
+disk=$(lsblk -n -s -r -p -o PATH,TYPE "$src" | awk '$2 == "disk" {print $1; exit}')
+[[ -n $disk ]] || {
+  echo "cidata-device: no disk under $src" >&2
+  exit 1
+}
+mapfile -t parts < <(lsblk -n -r -p -o PATH,LABEL "$disk" | awk '$2 == "CIDATA" {print $1}')
+((${#parts[@]} == 1)) || {
+  echo "cidata-device: expected one CIDATA partition on $disk, found ${#parts[@]}" >&2
+  exit 1
+}
+echo "${parts[0]}"

@@ -95,13 +95,15 @@ test_firstboot_rerun_after_power_loss() {
   check "firstboot rerun: marked done" test -e "$JUNIPER_STATE_DIR/firstboot.done"
 }
 
-test_firstboot_mounts_cidata_by_label() {
+test_firstboot_mounts_cidata_of_boot_disk() {
   firstboot_env
   unset JUNIPER_CIDATA_DIR
-  stub blkid 'echo /dev/mmcblk0p1'
+  stub cidata-device 'echo /dev/mmcblk0p1'
+  export JUNIPER_CIDATA_DEVICE=cidata-device
   # mount is stubbed, so the trap's rmdir fails on the non-empty dir; keep it under $T
   TMPDIR=$T "$LIBEXEC/firstboot" || true
-  check "firstboot: looks up CIDATA label" called "blkid -L CIDATA"
+  check "firstboot: finds CIDATA on the boot disk" called "cidata-device"
+  check "firstboot: no global label lookup" not_called "blkid -L CIDATA"
   check "firstboot: mounts it" called "mount /dev/mmcblk0p1"
   check "firstboot: unmounts it" called "umount"
 }
@@ -339,6 +341,111 @@ test_healthcheck_healthy_tryboot_confirms() {
   "$LIBEXEC/healthcheck"
   check "health: healthy tryboot -> sync" called "rpi-bootc-bootloader sync"
   check "health: healthy tryboot -> no reboot" not_called "systemctl reboot"
+}
+
+test_healthcheck_ipv6_only_route_is_healthy() {
+  health_env
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub ip 'if [[ $* == *-6* ]]; then echo "default via fe80::1 dev end0 proto ra"; fi'
+  "$LIBEXEC/healthcheck"
+  check "health: IPv6-only default route -> healthy" called "rpi-bootc-bootloader sync"
+}
+
+# Once locked, SSH over the tailnet is the only way in: Tailscale Running isn't enough.
+test_healthcheck_locked_requires_ssh_over_tailnet() {
+  health_env
+  touch "$JUNIPER_STATE_DIR/locked"
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub tailscale 'case $1 in status) echo "{\"BackendState\":\"Running\"}" ;; debug) echo "{\"RunSSH\":false}" ;; esac'
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub systemctl 'if [[ $1 == is-active ]]; then echo inactive; exit 3; fi'
+  "$LIBEXEC/healthcheck" || true
+  check "health: locked, no Tailscale SSH, no sshd -> fall back" called "systemctl reboot"
+}
+
+test_healthcheck_locked_tailscale_ssh_is_healthy() {
+  health_env
+  touch "$JUNIPER_STATE_DIR/locked"
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub tailscale 'case $1 in status) echo "{\"BackendState\":\"Running\"}" ;; debug) echo "{\"RunSSH\":true}" ;; esac'
+  "$LIBEXEC/healthcheck"
+  check "health: locked + Tailscale SSH -> healthy" called "rpi-bootc-bootloader sync"
+  check "health: locked + Tailscale SSH -> no reboot" not_called "systemctl reboot"
+}
+
+test_healthcheck_locked_sshd_is_healthy() {
+  health_env
+  touch "$JUNIPER_STATE_DIR/locked"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub tailscale 'case $1 in status) echo "{\"BackendState\":\"Running\"}" ;; debug) echo "{\"RunSSH\":false}" ;; esac'
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub systemctl 'if [[ $1 == is-active ]]; then echo active; fi'
+  "$LIBEXEC/healthcheck"
+  check "health: locked + sshd (ujust tailscale-ssh off) -> healthy" called "rpi-bootc-bootloader sync"
+}
+
+# Real-root emergency mode under tryboot: PID 1 keeps the watchdog fed, so nothing would
+# reboot into the previous deployment without this.
+test_emergency_fallback_reboots_under_tryboot() {
+  export JUNIPER_TRYBOOT_FLAG=$T/tryboot JUNIPER_EMERGENCY_DELAY=0
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  "$LIBEXEC/emergency-fallback" >/dev/null 2>&1
+  check "emergency: tryboot -> reboot" called "systemctl reboot"
+}
+
+test_emergency_fallback_stays_on_normal_boot() {
+  export JUNIPER_TRYBOOT_FLAG=$T/tryboot JUNIPER_EMERGENCY_DELAY=0
+  printf '\x00\x00\x00\x00' >"$JUNIPER_TRYBOOT_FLAG"
+  "$LIBEXEC/emergency-fallback" >/dev/null 2>&1
+  check "emergency: normal boot -> stay for the console" not_called "systemctl reboot"
+  rm -f "$JUNIPER_TRYBOOT_FLAG"
+  "$LIBEXEC/emergency-fallback" >/dev/null 2>&1
+  check "emergency: no flag -> stay" not_called "systemctl reboot"
+}
+
+# lsblk_tree: stub findmnt (the /sysroot source) and lsblk (inverse tree, disk partitions).
+cidata_tree() {
+  stub findmnt "echo $1"
+  stub lsblk "$2"
+}
+
+test_cidata_device_on_boot_disk() {
+  # shellcheck disable=SC2016 # expands inside the stub
+  cidata_tree /dev/mmcblk0p3 'case "$*" in
+    *-s*) printf "/dev/mmcblk0p3 part\n/dev/mmcblk0 disk\n" ;;
+    *mmcblk0*) printf "/dev/mmcblk0 \n/dev/mmcblk0p1 CIDATA\n/dev/mmcblk0p2 boot\n/dev/mmcblk0p3 root\n" ;;
+    *) printf "/dev/sda1 CIDATA\n" ;;
+  esac'
+  check "cidata: partition on the boot disk" test "$("$LIBEXEC/cidata-device")" = /dev/mmcblk0p1
+}
+
+test_cidata_device_through_luks() {
+  # shellcheck disable=SC2016 # expands inside the stub
+  cidata_tree /dev/mapper/root 'case "$*" in
+    *-s*) printf "/dev/mapper/root crypt\n/dev/mmcblk0p3 part\n/dev/mmcblk0 disk\n" ;;
+    *mmcblk0*) printf "/dev/mmcblk0 \n/dev/mmcblk0p1 CIDATA\n/dev/mmcblk0p3 \n" ;;
+  esac'
+  check "cidata: found through a LUKS root" test "$("$LIBEXEC/cidata-device")" = /dev/mmcblk0p1
+}
+
+test_cidata_device_ambiguous_or_missing() {
+  # shellcheck disable=SC2016 # expands inside the stub
+  cidata_tree /dev/mmcblk0p3 'case "$*" in
+    *-s*) printf "/dev/mmcblk0p3 part\n/dev/mmcblk0 disk\n" ;;
+    *) printf "/dev/mmcblk0p1 CIDATA\n/dev/mmcblk0p4 CIDATA\n" ;;
+  esac'
+  check "cidata: two on the boot disk -> refuse" fails "$LIBEXEC/cidata-device"
+  # shellcheck disable=SC2016 # expands inside the stub
+  cidata_tree /dev/mmcblk0p3 'case "$*" in
+    *-s*) printf "/dev/mmcblk0p3 part\n/dev/mmcblk0 disk\n" ;;
+    *) printf "/dev/mmcblk0p1 boot\n" ;;
+  esac'
+  check "cidata: none on the boot disk -> refuse" fails "$LIBEXEC/cidata-device"
 }
 
 test_render_os_list() {

@@ -12,10 +12,13 @@ interval=${JUNIPER_HEALTH_INTERVAL:-15}
 tryboot_flag=${JUNIPER_TRYBOOT_FLAG:-/proc/device-tree/chosen/bootloader/tryboot}
 
 healthy() {
-  [[ -n $(ip route show default) ]] || return 1
-  # Tailscale is only required once the Pi has joined (and is firewalled to it).
+  [[ -n $(ip route show default) || -n $(ip -6 route show default) ]] || return 1
+  # Once locked, SSH over the tailnet is the only way in: Tailscale must be up, and either
+  # Tailscale SSH on or sshd running (`ujust tailscale-ssh off` falls back to sshd).
   if [[ -e $state_dir/locked ]]; then
     [[ $(tailscale status --json 2>/dev/null | jq -r '.BackendState // empty') == Running ]] || return 1
+    [[ $(tailscale debug prefs 2>/dev/null | jq -r '.RunSSH // false') == true ]] ||
+      [[ $(systemctl is-active sshd.service 2>/dev/null) == active ]] || return 1
   fi
 }
 
@@ -33,7 +36,7 @@ for ((i = 0; i < tries; i++)); do
   sleep "$interval"
 done
 
-echo "Health check failed: no default route or Tailscale not running." >&2
+echo "Health check failed: no default route, or (locked) Tailscale or SSH over it down." >&2
 if in_tryboot; then
   echo "Unhealthy update under tryboot; rebooting into the previous deployment." >&2
   systemctl reboot

@@ -17,8 +17,15 @@ the maintainer reviews and merges them.
   dedicated write deploy key (`RELEASE_DEPLOY_KEY`). No person and no other workflow can
   bypass the rules.
 
-Dependabot PRs for minor, patch and digest bumps merge themselves once CI is green (through
-the same PR rules); major bumps wait for review. See [Release train](README.md#release-train).
+## Releases
+
+- Dependabot opens dependency PRs on Saturdays. Minor, patch and digest bumps merge
+  themselves once CI is green (through the same rules); major bumps wait for review.
+- Pushes to `main` build and test but don't publish. The Monday 02:00 UTC run publishes both
+  signed images, the disk images and a release, whose notes come from **Unreleased** in
+  [CHANGELOG.md](CHANGELOG.md); the release job then moves those entries under its tag.
+- To publish something urgent: `gh workflow run build --ref main -f build_raw=true`, then
+  `ujust update` on the devices (otherwise they take it at their next reboot window).
 
 ## Pull requests
 

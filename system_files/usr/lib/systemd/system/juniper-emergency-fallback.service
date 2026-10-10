@@ -1,0 +1,11 @@
+[Unit]
+Description=Reboot out of emergency mode when an update was booted via tryboot
+# Runs inside emergency.target, alongside the emergency shell: nothing else is up.
+DefaultDependencies=no
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/juniper/emergency-fallback
+
+[Install]
+WantedBy=emergency.target
