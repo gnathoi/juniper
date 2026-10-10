@@ -39,4 +39,5 @@ jobs:
             gh pr comment "$pr" --body "Major update, not auto-merged: review and merge manually."
             exit 0
           fi
-          gh pr merge "$pr" --squash --delete-branch
+          # Only the commit this build tested: a newer head waits for its own green build.
+          gh pr merge "$pr" --squash --delete-branch --match-head-commit "$SHA"

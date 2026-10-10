@@ -24,4 +24,4 @@ find /ctx/system_files_dev -type f -printf '/%P\0' | tag juniper
 find /brew -type f -printf '/%P\0' | tag homebrew
 
 # --- cleanup: package scriptlets leave runtime-only content that bootc lint rejects ---
-rm -rf /tmp/nvim.*
+/ctx/build_files/clean-runtime-dirs.sh

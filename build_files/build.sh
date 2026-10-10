@@ -9,6 +9,13 @@ dnf -y install dnf-plugins-core https://dl.fedoraproject.org/pub/epel/epel-relea
 dnf config-manager --set-enabled crb
 curl -fsSLo /etc/yum.repos.d/tailscale.repo https://pkgs.tailscale.com/stable/rhel/10/tailscale.repo
 
+# --- security updates ---
+# AlmaLinux rebuilds the base image only every 1-4 weeks; errata land in the repos in
+# between (a 2026-10-02 base had 14 Important security advisories pending 8 days later), so
+# each weekly build applies them. The Pi kernel and firmware stay as the base built them:
+# its initramfs and boot files are generated with them there.
+dnf -y upgrade --exclude='raspberrypi2-kernel*' --exclude='raspberrypi2-firmware*'
+
 # --- packages ---
 dnf -y install \
   podman firewalld cloud-init cloud-utils-growpart zram-generator \
@@ -60,7 +67,8 @@ EOT
 systemctl enable tailscaled.service firewalld.service avahi-daemon.service \
   cloud-init-local.service cloud-init.service cloud-config.service cloud-final.service \
   podman-auto-update.timer juniper-firstboot.service juniper-tailscale-join.service \
-  juniper-lockdown.timer juniper-update.timer juniper-reboot.timer juniper-healthcheck.service juniper-wifi-import.service
+  juniper-lockdown.timer juniper-update.timer juniper-reboot.timer juniper-healthcheck.service juniper-wifi-import.service \
+  juniper-firstboot-retry.service
 systemctl --global enable podman-auto-update.timer
 systemctl mask bootc-fetch-apply-updates.timer
 
@@ -78,4 +86,4 @@ printf '%s\0' /usr/lib/os-release /etc/containers/policy.json /etc/containers/re
   /etc/yum.repos.d/tailscale.repo | tag juniper
 
 # --- cleanup: package scriptlets leave runtime-only content that bootc lint rejects ---
-rm -rf /run/cloud-init
+/ctx/build_files/clean-runtime-dirs.sh

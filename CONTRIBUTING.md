@@ -9,8 +9,9 @@ the maintainer reviews and merges them.
 
 - **Pull requests only.** Nobody pushes to `main` directly, the maintainer included.
 - **Squash merges only.** The PR title becomes the commit subject on `main`.
-- **The `lint` check must pass** before a PR can merge. Image builds run on every PR that
-  touches more than docs; a red build is treated as blocking too.
+- **The `lint` check must pass** before a PR can merge. For PRs from forks, lint is all that
+  runs (read-only, no secrets); the maintainer builds the images on a branch here before
+  merging anything that changes them. A red build is treated as blocking too.
 - **No force-pushes or deletion** of `main`.
 - **One bypass:** the release job pushes its `docs: changelog for build-…` commit with a
   dedicated write deploy key (`RELEASE_DEPLOY_KEY`). No person and no other workflow can

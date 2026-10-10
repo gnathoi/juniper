@@ -38,7 +38,9 @@ purge_cloud_cache() {
 }
 
 scrub_cidata
-touch "$cloud_disabled"
 purge_cloud_cache
+# Last: disabling cloud-init stops cloud-init.target, which is what starts this service on the
+# first boot, so anything left undone after it is only retried by juniper-firstboot-retry.
+touch "$cloud_disabled"
 mkdir -p "$state_dir"
 touch "$state_dir/firstboot.done"

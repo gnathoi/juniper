@@ -20,7 +20,8 @@ setup() {
     stub "$cmd" ''
   done
   # shellcheck disable=SC2016 # expands inside the stub
-  stub shred 'if [[ $1 == -u ]]; then rm -f "$2"; fi'
+  stub shred 'for a; do [[ $a == -* || $a == "$T"/* ]] || { echo "shred outside test dir: $a" >&2; exit 1; }; done
+if [[ $1 == -u ]]; then rm -f "$2"; fi'
   export PATH=$T/bin:$ORIG_PATH
 }
 
@@ -51,7 +52,7 @@ test_harness_works() {
 
 firstboot_env() {
   export JUNIPER_SHARE=$T/share JUNIPER_CIDATA_DIR=$T/cidata \
-    JUNIPER_CLOUD_DISABLED=$T/cloud-init.disabled
+    JUNIPER_CLOUD_DISABLED=$T/cloud-init.disabled JUNIPER_CLOUD_DIR=$T/cloud
   mkdir -p "$JUNIPER_SHARE/cidata" "$JUNIPER_CIDATA_DIR"
   echo "#cloud-config template" >"$JUNIPER_SHARE/cidata/user-data"
   echo "secret wifi" >"$JUNIPER_CIDATA_DIR/network-config"
@@ -66,6 +67,24 @@ test_firstboot_scrubs_cidata() {
   check "firstboot: no secrets left on CIDATA" not_grep_dir secret "$JUNIPER_CIDATA_DIR"
   check "firstboot: cloud-init disabled" test -e "$JUNIPER_CLOUD_DISABLED"
   check "firstboot: marked done" test -e "$JUNIPER_STATE_DIR/firstboot.done"
+}
+
+test_firstboot_env_never_touches_host_cloud_dir() {
+  firstboot_env
+  check "firstboot env: cloud dir is under the test dir" test "${JUNIPER_CLOUD_DIR#"$T"/}" != "$JUNIPER_CLOUD_DIR"
+}
+
+# Disabling cloud-init stops cloud-init.target, which is what starts firstboot: it must come
+# last, or a failure/power cut in between leaves cached secrets with no automatic retry.
+test_firstboot_keeps_cloud_init_until_cache_purged() {
+  firstboot_env
+  mkdir -p "$JUNIPER_CLOUD_DIR/instances/iid-1"
+  echo "secret tskey" >"$JUNIPER_CLOUD_DIR/instances/iid-1/user-data.txt"
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub shred 'if [[ $2 == */instances/* ]]; then exit 1; fi; if [[ $1 == -u ]]; then rm -f "$2"; fi'
+  "$LIBEXEC/firstboot" 2>/dev/null || true
+  check "firstboot: cloud-init still enabled after a failed purge" test ! -e "$JUNIPER_CLOUD_DISABLED"
+  check "firstboot: not marked done after a failed purge" test ! -e "$JUNIPER_STATE_DIR/firstboot.done"
 }
 
 test_firstboot_rerun_after_power_loss() {

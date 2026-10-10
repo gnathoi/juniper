@@ -42,7 +42,7 @@ bump-brew:
     just verify-brew
     git diff --stat Containerfile
 
-# Move the pinned CI tool images (bootc-image-builder :latest, centos-bootc :stream10) to today's digests
+# Move pinned tool images (bootc-image-builder, centos-bootc, node-exporter) to today's digests
 bump-tools:
     #!/usr/bin/bash
     set -euo pipefail
@@ -51,7 +51,14 @@ bump-tools:
       digest=sha256:$(skopeo inspect --raw "docker://quay.io/centos-bootc/$img" | sha256sum | cut -d' ' -f1)
       sed -i -E "s|(quay\.io/centos-bootc/${img%%:*}@)sha256:[0-9a-f]{64}|\1$digest|" "$file"
     done
-    git diff --stat disk/build-raw.sh Justfile
+    # node-exporter: newest release tag (ujust enable-metrics)
+    ne=quay.io/prometheus/node-exporter
+    f=system_files/usr/share/juniper/just/services.just
+    v=$(skopeo list-tags "docker://$ne" | jq -r '.Tags[]' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+    digest=sha256:$(skopeo inspect --raw "docker://$ne:$v" | sha256sum | cut -d' ' -f1)
+    sed -i -E -e "s|(prometheus/node-exporter@)sha256:[0-9a-f]{64}|\1$digest|" \
+      -e "s|# v[0-9.]+, pinned: no auto-updates|# $v, pinned: no auto-updates|" "$f"
+    git diff --stat disk/build-raw.sh Justfile "$f"
 
 # Rechunk :build into :latest and :{{ version }} (rootful podman storage)
 rechunk:

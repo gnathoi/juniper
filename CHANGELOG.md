@@ -16,6 +16,21 @@ Unreleased as its release notes, then moves those entries under the release's ta
   first-boot settings (user, SSH keys, Tailscale key, Wi-Fi) from a YAML file
   (`examples/flash.yaml`).
 
+### Changed
+
+- Each build applies pending AlmaLinux package updates (security errata), so the weekly
+  release carries them instead of waiting for the next base image. The Pi kernel and
+  firmware still come with the base image.
+- `ujust enable-metrics` runs node_exporter pinned to a released digest, without
+  auto-updates, as an unprivileged user with no capabilities.
+
+### Fixed
+
+- An interrupted first boot (power cut mid-scrub) now finishes the secret scrub on the next
+  boot; cloud-init is disabled last.
+- `just flash` mounts the card's CIDATA partition root-only, always unmounts it, and checks
+  the card is still the one you confirmed before writing.
+
 ## build-20261010 (2026-10-10)
 
 ### Fixed

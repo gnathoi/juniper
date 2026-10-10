@@ -14,11 +14,15 @@ die() {
   exit 1
 }
 
+disk_identity() { lsblk -dbno SIZE,SERIAL,MODEL,WWN "$1" | tr -s ' '; }
+
 if [[ ${1:-} == --write ]]; then
-  # Root phase: flash.sh --write DEVICE IMAGE.raw.xz CIDATA-DIR
-  dev=$2 xz=$3 cidata_src=$4
+  # Root phase: flash.sh --write DEVICE IMAGE.raw.xz CIDATA-DIR IDENTITY
+  dev=$2 xz=$3 cidata_src=$4 identity=$5
   # Via bash: under run0, SELinux won't let the service execute files in a home directory.
   bash "$here/check-target" "$dev"
+  # The disk you confirmed, not whatever took its device name since (a swapped card).
+  [[ $(disk_identity "$dev") == "$identity" ]] || die "$dev is no longer the disk you confirmed"
   for p in $(lsblk -nrpo PATH "$dev" | tail -n +2); do umount "$p" 2>/dev/null || true; done
   wipefs -a "$dev" >/dev/null
   xzcat "$xz" | dd of="$dev" bs=4M conv=fsync status=progress
@@ -28,12 +32,12 @@ if [[ ${1:-} == --write ]]; then
   part=$(lsblk -nrpo PATH,LABEL "$dev" | awk '$2 == "CIDATA" {print $1; exit}')
   [[ -n $part ]] || die "no CIDATA partition on $dev after writing"
   mnt=$(mktemp -d)
-  mount "$part" "$mnt"
+  trap 'umount "$mnt" 2>/dev/null; rmdir "$mnt"' EXIT
+  # Root-only: FAT has no permissions of its own, and these files hold the secrets.
+  mount -o umask=077,nosuid,nodev,noexec "$part" "$mnt"
   cp "$cidata_src/user-data" "$mnt/user-data"
   if [[ -e $cidata_src/network-config ]]; then cp "$cidata_src/network-config" "$mnt/"; fi
   sync
-  umount "$mnt"
-  rmdir "$mnt"
   # The desktop may have auto-mounted the new partitions; leave the card safe to pull.
   for p in $(lsblk -nrpo PATH "$dev" | tail -n +2); do umount "$p" 2>/dev/null || true; done
   exit 0
@@ -89,6 +93,7 @@ echo "Image:     $(basename "$xz")"
 echo
 lsblk -o NAME,SIZE,TYPE,TRAN,MODEL,LABEL,MOUNTPOINTS "$dev"
 echo
+identity=$(disk_identity "$dev")
 read -rp "Erase everything on $dev and flash it? [y/N] " answer
 [[ $answer == [yY] || $answer == [yY][eE][sS] ]] || die "not confirmed; nothing written"
 
@@ -103,5 +108,5 @@ else
   as_root=(sudo)
 fi
 # Through bash, not exec: run0's service may not execute files labelled user_home_t.
-"${as_root[@]}" /usr/bin/bash "$here/flash.sh" --write "$dev" "$xz" "$work/cidata"
+"${as_root[@]}" /usr/bin/bash "$here/flash.sh" --write "$dev" "$xz" "$work/cidata" "$identity"
 echo "Done. Put the card in the Pi and power it on."

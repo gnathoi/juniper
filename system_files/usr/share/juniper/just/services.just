@@ -6,12 +6,17 @@ enable-metrics:
     [Unit]
     Description=Prometheus node exporter
     [Container]
-    Image=quay.io/prometheus/node-exporter:latest
+    # v1.12.1, pinned: no auto-updates of unsigned code with host access (just bump-tools)
+    Image=quay.io/prometheus/node-exporter@sha256:1b4e4438faca4dd7e001dd445d161a4a2091b0fededa84093b3a8dfeae1f1be0
     Network=host
     PodmanArgs=--pid=host
     Volume=/:/host:ro,rslave
     Exec=--path.rootfs=/host
-    AutoUpdate=registry
+    User=65534
+    Group=65534
+    DropCapability=ALL
+    NoNewPrivileges=true
+    ReadOnly=true
     [Install]
     WantedBy=multi-user.target
     EOF
