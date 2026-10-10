@@ -10,6 +10,8 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+## build-20261010 (2026-10-10)
+
 ### Added
 
 - `just flash DEVICE CONFIG`: flash a signed release to an SD card or USB disk with
@@ -30,8 +32,6 @@ Unreleased as its release notes, then moves those entries under the release's ta
   boot; cloud-init is disabled last.
 - `just flash` mounts the card's CIDATA partition root-only, always unmounts it, and checks
   the card is still the one you confirmed before writing.
-
-## build-20261010 (2026-10-10)
 
 ### Fixed
 
