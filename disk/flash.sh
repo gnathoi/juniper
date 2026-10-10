@@ -33,8 +33,20 @@ if [[ ${1:-} == --write ]]; then
   [[ -n $part ]] || die "no CIDATA partition on $dev after writing"
   mnt=$(mktemp -d)
   trap 'umount "$mnt" 2>/dev/null; rmdir "$mnt"' EXIT
-  # Root-only: FAT has no permissions of its own, and these files hold the secrets.
-  mount -o umask=077,nosuid,nodev,noexec "$part" "$mnt"
+  # Root-only: FAT has no permissions of its own, and these files hold the secrets. The
+  # desktop auto-mounts the new partitions right after the write: release them and retry.
+  mounted=false
+  for i in 1 2 3; do
+    udevadm settle
+    for p in $(lsblk -nrpo PATH "$dev" | tail -n +2); do umount "$p" 2>/dev/null || true; done
+    if mount -o umask=077,nosuid,nodev,noexec "$part" "$mnt"; then
+      mounted=true
+      break
+    fi
+    echo "flash: mounting $part failed (attempt $i of 3); retrying" >&2
+    sleep $((2 * i))
+  done
+  $mounted || die "could not mount $part to write the first-boot files"
   cp "$cidata_src/user-data" "$mnt/user-data"
   if [[ -e $cidata_src/network-config ]]; then cp "$cidata_src/network-config" "$mnt/"; fi
   sync
