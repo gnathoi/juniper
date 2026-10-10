@@ -53,25 +53,34 @@ block (Image, Tailscale, Update, Tip), without the logo and system summary.
    lockdown can't lock you out later. The key turns on Tailscale SSH, so add an `ssh` rule to
    your tailnet policy that lets you in to that tag, e.g.
    `{"action": "accept", "src": ["autogroup:member"], "dst": ["tag:server"], "users": ["autogroup:nonroot", "root"]}`.
-2. From a clone of this repo, fill in a copy of [`examples/flash.yaml`](examples/flash.yaml)
-   (user, SSH keys, Tailscale key, Wi-Fi) and flash the latest signed release:
-
-       install -Dm600 examples/flash.yaml ~/.config/juniper/flash.yaml   # then edit it
-       just flash /dev/sdX ~/.config/juniper/flash.yaml
-
-   It refuses anything but a removable, USB or SD card disk, verifies the release's cosign
-   signature, shows what it will write and asks you to type the device name first.
-
-   Or flash with Raspberry Pi Imager (Juniper build) using our OS list:
-   `rpi-imager --repo https://github.com/gnathoi/juniper/releases/latest/download/os-list.json`
-   and fill in user, SSH key, Wi-Fi, timezone and the Tailscale key.
-   Or download `juniper-*.raw.xz` / `juniper-minimal-*.raw.xz` (+ its `.bundle`) from
-   Releases, verify it, flash it with any tool, and edit `user-data` on the small FAT
-   partition (see `README.txt` there):
-
-       cosign verify-blob --key system_files/usr/share/pki/containers/juniper.pub \
-         --bundle juniper-YYYYMMDD.raw.xz.bundle juniper-YYYYMMDD.raw.xz
+2. Flash an SD card or USB disk: with `just flash` on Linux (below), or by hand on any OS.
 3. Boot. The Pi joins your tailnet; `ssh <user>@<hostname>` over Tailscale.
+
+### Flash with `just flash` (Linux only, for now)
+
+From a clone of this repo. Needs `just`, `cosign`, `curl`, `jq`, `xz`, Python 3 with PyYAML,
+and `sudo` for the write.
+
+    install -Dm600 examples/flash.yaml ~/.config/juniper/flash.yaml   # fill it in
+    just flash /dev/sdX ~/.config/juniper/flash.yaml
+
+The config ([`examples/flash.yaml`](examples/flash.yaml)) holds the image (`juniper` or
+`juniper-minimal`), hostname, user, SSH keys, timezone, Tailscale key and Wi-Fi. `just flash`
+downloads the latest release (or pass a tag or a local `.raw.xz` as a third argument),
+checks its cosign signature, refuses anything but a removable, USB or SD card disk, shows
+what it will write and asks you to type the device name before erasing it.
+
+### Flash by hand (any OS)
+
+Download `juniper-*.raw.xz` or `juniper-minimal-*.raw.xz` and its `.bundle` from
+[Releases](https://github.com/gnathoi/juniper/releases), verify it, and flash it with any
+tool:
+
+    cosign verify-blob --key system_files/usr/share/pki/containers/juniper.pub \
+      --bundle juniper-YYYYMMDD.raw.xz.bundle juniper-YYYYMMDD.raw.xz
+
+Then edit `user-data` on the small FAT partition and, for Wi-Fi, add `network-config` (see
+`README.txt` there).
 
 ## Everyday commands
 

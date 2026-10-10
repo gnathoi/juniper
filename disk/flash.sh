@@ -51,15 +51,21 @@ image=$(python3 -c 'import sys, yaml; print((yaml.safe_load(open(sys.argv[1])) o
 if [[ -f $source ]]; then
   xz=$source
 else
-  tag=$source
-  if [[ $tag == latest ]]; then tag=$(gh release view --repo "$repo" --json tagName -q .tagName); fi
+  api=https://api.github.com/repos/$repo/releases
+  if [[ $source == latest ]]; then rel=$(curl -fsSL "$api/latest"); else rel=$(curl -fsSL "$api/tags/$source"); fi
+  tag=$(jq -r .tag_name <<<"$rel")
+  # juniper-YYYYMMDD.raw.xz, never juniper-minimal-*
+  name=$(jq -r --arg i "$image" '.assets[].name | select(test("^" + $i + "-[0-9]+\\.raw\\.xz$"))' <<<"$rel" | head -1)
+  [[ -n $name ]] || die "no $image disk image in release $tag"
   cache=${XDG_CACHE_HOME:-$HOME/.cache}/juniper/$tag
   mkdir -p "$cache"
-  # Dates start with 2: juniper-2* never matches juniper-minimal-*.
-  gh release download "$tag" --repo "$repo" -D "$cache" --skip-existing \
-    -p "$image-2*.raw.xz" -p "$image-2*.raw.xz.bundle"
-  xz=$(find "$cache" -maxdepth 1 -name "$image-2*.raw.xz" | sort | tail -1)
-  [[ -n $xz ]] || die "no $image disk image in release $tag"
+  for f in "$name" "$name.bundle"; do
+    [[ -f $cache/$f ]] && continue
+    echo "Downloading $f ($tag)"
+    curl -fL --progress-bar -o "$cache/$f.part" "https://github.com/$repo/releases/download/$tag/$f"
+    mv "$cache/$f.part" "$cache/$f"
+  done
+  xz=$cache/$name
 fi
 [[ -f $xz.bundle ]] || die "no signature bundle next to $xz"
 # Every time, not just after download: the cache is only as trusted as this check.

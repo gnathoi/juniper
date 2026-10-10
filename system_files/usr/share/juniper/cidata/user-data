@@ -1,6 +1,6 @@
 #cloud-config
 # Juniper first-boot configuration, applied once by cloud-init and then wiped from this
-# partition. Raspberry Pi Imager (Juniper build) writes this for you; edit it by hand only
+# partition. `just flash` (in the Juniper repo) writes this for you; edit it by hand only
 # if you flash with dd or similar. Uncomment and fill in what you need.
 #
 # hostname: juniper
