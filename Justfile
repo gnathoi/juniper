@@ -44,9 +44,18 @@ bump-brew:
 
 # Rechunk :build into :latest and :{{ version }} (rootful podman storage)
 rechunk:
+    #!/usr/bin/bash
+    set -euo pipefail
+    tool=quay.io/centos-bootc/centos-bootc:stream10
+    # Pull with retries first: a registry 502 mid-blob failed a main build (run 37999745485).
+    for i in 1 2 3; do
+      podman pull "$tool" && break
+      [[ $i == 3 ]] && { echo "failed to pull $tool" >&2; exit 1; }
+      sleep $((10 * i))
+    done
     podman run --rm --privileged --security-opt label=disable \
       -v /var/lib/containers:/var/lib/containers \
-      quay.io/centos-bootc/centos-bootc:stream10 \
+      "$tool" \
       /usr/libexec/bootc-base-imagectl rechunk {{ image_ref }}:build {{ image_ref }}:latest
     podman tag {{ image_ref }}:latest {{ image_ref }}:{{ version }}
 
