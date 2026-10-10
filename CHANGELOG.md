@@ -10,6 +10,8 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+## build-20261010 (2026-10-10)
+
 ### Fixed
 
 - First boot on hardware: the Tailscale join, the CIDATA secret scrub and the boot health
