@@ -34,7 +34,9 @@ def load(path):
     if "password" in cfg and cfg["password"] != "prompt":
         fail("password: plain-text passwords aren't allowed here; use `password: prompt` "
              "(just flash asks for it and stores only a hash)")
-    pw_hash = os.environ.get("JUNIPER_PASSWORD_HASH")
+    # Only when asked for: a stray exported variable must not add a password to a headless card.
+    wants_pw = cfg.get("image") == "juniper-desktop" or cfg.get("password") == "prompt"
+    pw_hash = os.environ.get("JUNIPER_PASSWORD_HASH") if wants_pw else None
     if pw_hash is not None and not re.fullmatch(r"\$6\$[./A-Za-z0-9]{1,16}\$[./A-Za-z0-9]{86}", pw_hash):
         fail("JUNIPER_PASSWORD_HASH must be a SHA-512 crypt hash ($6$...)")
     if cfg.get("image") == "juniper-desktop" and not pw_hash:

@@ -684,6 +684,20 @@ test_render_cidata_refuses_plaintext_and_bad_hash() {
   check "cidata: headless without password still fine" "$ROOT/disk/render-cidata" "$T/ok.yaml" "$T/out3"
 }
 
+test_render_cidata_hash_only_when_asked_for() {
+  local good
+  good=$(printf '%s' 'fake pass' | openssl passwd -6 -stdin)
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\n' >"$T/headless.yaml"
+  JUNIPER_PASSWORD_HASH=$good "$ROOT/disk/render-cidata" "$T/headless.yaml" "$T/o1" 2>/dev/null
+  check "cidata: stray hash ignored on a headless config" test "$(yget "$T/o1/user-data" '"passwd" in d["users"][0] or "lock_passwd" in d["users"][0]')" = False
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\npassword: prompt\n' >"$T/prompt.yaml"
+  JUNIPER_PASSWORD_HASH=$good "$ROOT/disk/render-cidata" "$T/prompt.yaml" "$T/o2" 2>/dev/null
+  check "cidata: password: prompt uses the hash" test "$(yget "$T/o2/user-data" 'd["users"][0]["passwd"]')" = "$good"
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\nimage: juniper-desktop\n' >"$T/desk.yaml"
+  check "cidata: short-body hash refused" fails env JUNIPER_PASSWORD_HASH='$6$salt$abc' "$ROOT/disk/render-cidata" "$T/desk.yaml" "$T/o3"
+  check "cidata: empty hash refused for desktop" fails env JUNIPER_PASSWORD_HASH= "$ROOT/disk/render-cidata" "$T/desk.yaml" "$T/o4"
+}
+
 test_render_cidata_rejects_bad_config() {
   printf 'ssh_keys: [ssh-ed25519 AAAAC3x me]\n' >"$T/nouser.yaml"
   printf 'user: me\n' >"$T/nokeys.yaml"

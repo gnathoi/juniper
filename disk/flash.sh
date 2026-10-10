@@ -113,9 +113,14 @@ work=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/juniper-flash.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 image=$(python3 -c 'import sys, yaml; print((yaml.safe_load(open(sys.argv[1])) or {}).get("image", "juniper"))' "$config")
 want_pw=$(python3 -c 'import sys, yaml; c = yaml.safe_load(open(sys.argv[1])) or {}; print("yes" if c.get("image") == "juniper-desktop" or c.get("password") == "prompt" else "no")' "$config")
+pw_key=$(python3 -c 'import sys, yaml; c = yaml.safe_load(open(sys.argv[1])) or {}; print(c.get("password", "prompt"))' "$config")
+[[ $pw_key == prompt ]] || die "password: only 'prompt' is allowed; nothing is stored in the config"
 if [[ $want_pw == yes ]]; then
-  read -rsp "Password for the Pi's user (for the lock screen and sudo): " pw1 && echo
-  read -rsp "Again: " pw2 && echo
+  # IFS= keeps leading/trailing spaces; a failed read (EOF, no terminal) must not fall through.
+  IFS= read -rsp "Password for the Pi's user (for the lock screen and sudo): " pw1 || die "a terminal is needed to ask for the password"
+  echo
+  IFS= read -rsp "Again: " pw2 || die "a terminal is needed to ask for the password"
+  echo
   [[ $pw1 == "$pw2" ]] || die "passwords don't match; nothing written"
   ((${#pw1} >= 8)) || die "use at least 8 characters"
   # From stdin, so the shell never splits or expands it; only the hash goes any further.
