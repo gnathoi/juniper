@@ -2,7 +2,7 @@
 # Flash a signed Juniper release onto an SD card or USB disk, with first-boot settings
 # (user, SSH keys, Tailscale key, Wi-Fi) from a config file (examples/flash.yaml):
 #   flash.sh DEVICE CONFIG [latest | RELEASE-TAG | PATH.raw.xz]
-# Downloads and cosign-verifies as you; only the write runs under sudo.
+# Downloads and cosign-verifies as you; only the write runs as root (run0, else sudo).
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -17,7 +17,8 @@ die() {
 if [[ ${1:-} == --write ]]; then
   # Root phase: flash.sh --write DEVICE IMAGE.raw.xz CIDATA-DIR
   dev=$2 xz=$3 cidata_src=$4
-  "$here/check-target" "$dev"
+  # Via bash: under run0, SELinux won't let the service execute files in a home directory.
+  bash "$here/check-target" "$dev"
   for p in $(lsblk -nrpo PATH "$dev" | tail -n +2); do umount "$p" 2>/dev/null || true; done
   wipefs -a "$dev" >/dev/null
   xzcat "$xz" | dd of="$dev" bs=4M conv=fsync status=progress
@@ -88,8 +89,19 @@ echo "Image:     $(basename "$xz")"
 echo
 lsblk -o NAME,SIZE,TYPE,TRAN,MODEL,LABEL,MOUNTPOINTS "$dev"
 echo
-read -rp "Everything on $dev will be erased. Type $dev to continue: " answer
-[[ $answer == "$dev" ]] || die "not confirmed; nothing written"
+read -rp "Erase everything on $dev and flash it? [y/N] " answer
+[[ $answer == [yY] || $answer == [yY][eE][sS] ]] || die "not confirmed; nothing written"
 
-sudo "$here/flash.sh" --write "$dev" "$xz" "$work/cidata"
+# run0 (systemd/polkit) works for admins without sudo rights; JUNIPER_AS_ROOT overrides.
+if [[ $(id -u) == 0 ]]; then
+  as_root=()
+elif [[ -n ${JUNIPER_AS_ROOT:-} ]]; then
+  read -ra as_root <<<"$JUNIPER_AS_ROOT"
+elif command -v run0 >/dev/null; then
+  as_root=(run0)
+else
+  as_root=(sudo)
+fi
+# Through bash, not exec: run0's service may not execute files labelled user_home_t.
+"${as_root[@]}" /usr/bin/bash "$here/flash.sh" --write "$dev" "$xz" "$work/cidata"
 echo "Done. Put the card in the Pi and power it on."
