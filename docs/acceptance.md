@@ -54,10 +54,21 @@ Flashed with `just flash /dev/mmcblk0 ~/.config/juniper/flash.yaml` (run0 for th
 | 7 | Login banner (Tailscale, Update, Tip); `ujust` recipes; `pi-status` | pass |
 | 7 | `brew --version` in an interactive login shell; `distrobox`, `fastfetch` | pass |
 | 7 | Hardened `enable-metrics` quadlet (from #30): runs as nobody, `CapEff` 0, `NoNewPrivs`; `:9100/metrics` over the tailnet | pass (installed by hand; recheck via `ujust` after #30 ships) |
-| 4 | Update + tryboot | pending: needs a newer release |
-| 5 | Deliberately broken update falls back | pending |
-| 7 | `ujust devbox`, `ujust install-podlet` | pending |
-| 7b | `juniper-minimal` | pending (also exercises `just flash`'s new root-phase checks) |
+| 4 | Update + tryboot | pass: `juniper-update.service` staged `build-20261010` (33 layers, 534 MB: the first build with `dnf upgrade`); `ujust update` booted it with `tryboot=1`; health check made `ostree-2` the default; a plain reboot stayed on it |
+| 5 | Deliberately broken update falls back | pass: image built on the Pi with `tailscaled` masked, staged from containers-storage, booted via tryboot; health check failed after 20 tries (~5 m 40 s) and rebooted; firmware booted the previous image (`tryboot=0`, Tailscale up) 20 s later |
+| 7 | `ujust devbox`, `ujust install-podlet` | pass (after switching minimal → juniper): podlet 0.3.2; Fedora 44 toolbox `devbox` created and entered in 2 m 45 s |
+| 7b | `juniper-minimal` | pass on the second attempt (Wi-Fi only, serial console on the debug UART): first boot 52.6 s, `NAME="Juniper"`, key/`network-config` scrubbed, CIDATA == template, cloud-init disabled, `tag:edge-server`, no distrobox/brew/fastfetch/zellij, no `devbox`/`brew-tools` recipes, status-only login banner; lockdown to `drop` at 19:34, LAN SSH and ping blocked. `ujust pi-eeprom` needed binutils (fixed in #37) |
+| 7b′ | First `juniper-minimal` attempt | **unexplained hang**: Ethernet + Wi-Fi configured; no network at all; root partition never grown, CIDATA untouched, root XFS log dirty (so root was mounted), no persistent journal (stopped before `systemd-journal-flush`). The same image booted fine on the next attempt (Wi-Fi only, fresh flash). Open: retry with Ethernet and `console=ttyAMA10,115200` to capture it |
+| — | Final release (`3a67395`: #35 initramfs + #37) via tryboot on `juniper-minimal` | pass: CI-built initrd 28.7 MB, initrd stage 2.97 s, `ujust pi-eeprom` works (update available, not applied), no failed units |
+| — | `ujust switch ghcr.io/gnathoi/juniper:latest` from `juniper-minimal` | pass: tryboot, health check, `brew-setup` unpacked Homebrew, `juniper-brew-tools` installed the Brewfile at first login (zellij, nvim, btop, rg; `fzf` also comes from an image package and wins on PATH) |
+| — | `just flash` on real cards (#37) | three bugs found and fixed: EXIT trap's `umount` turned success into exit 32 (`set -e` applies in traps); stale same-tag cache; races with the desktop automounter. `run0` needs `/usr/bin/bash` (SELinux denies exec of `user_home_t`) |
+| 5b | Update that drops into real-root emergency mode falls back (#32) | pass: required mount of a missing device → 90 s device timeout → `local-fs.target` failed → emergency → `juniper-emergency-fallback` "rebooting … in 60s" → back on the previous image (17:43 → 17:46) |
+| — | Health check (#32): locked + Tailscale SSH → healthy; IPv6 route accepted | pass (Pi run of the new script; unit tests for the rest) |
+| — | `cidata-device` on the Pi | pass: `/dev/mmcblk0p1` |
+| — | `ujust pi-eeprom` (#34), check only | pass: "update available", CURRENT 2025-11-05, LATEST 2026-05-11 (not applied) |
+| — | Brewfile tools (#34) via `brew bundle` | pass: zellij 0.45.1, neovim 0.12.6, btop, ripgrep, fzf in 25 s |
+| — | Trimmed initramfs (#35) via tryboot | pass: entry initrd 28.8 MB (was 45.8 MB); initrd stage 3.00 s (was 4.28 s); no failed units |
+| — | Release pipeline (#33) | pass: `sign` jobs in the `release` environment; `:latest` == `:sha-531a840` digest; disks from their run's digest; changelog pushed with the environment deploy key through the `main` ruleset |
 
 Notes:
 
