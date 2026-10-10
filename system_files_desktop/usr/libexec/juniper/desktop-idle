@@ -31,9 +31,11 @@ $in_use || allow ""
 if [[ -e $since_f ]]; then
   since=$(head -c 32 "$since_f" 2>/dev/null || true)
   # A garbled or future marker means we can't trust the cap math: reboot.
-  [[ $since =~ ^[0-9]+$ ]] && ((since <= now)) || allow "Deferral marker unreadable: rebooting."
+  [[ $since =~ ^[0-9]+$ ]] || allow "Deferral marker unreadable: rebooting."
+  ((since <= now)) || allow "Deferral marker unreadable: rebooting."
 else
-  mkdir -p "$state" && echo "$now" >"$since_f" || allow "Cannot record the deferral: rebooting."
+  mkdir -p "$state" || allow "Cannot record the deferral: rebooting."
+  echo "$now" >"$since_f" || allow "Cannot record the deferral: rebooting."
   since=$now
 fi
 if ((now - since >= cap)); then
