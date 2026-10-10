@@ -16,7 +16,10 @@ on:
         default: false
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Publishing runs (weekly train, v* tags, manual runs on main) share one group, so two of
+  # them never interleave tag updates; other runs are grouped per ref.
+  # yamllint disable-line rule:line-length
+  group: ${{ github.workflow }}-${{ (github.event_name == 'schedule' || startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) && 'publish' || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
 
 permissions:
@@ -98,6 +101,23 @@ jobs:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
         run: sudo "$(command -v just)" image="${{ matrix.image }}" image_ref="$IMAGE_REF" test-image "$IMAGE_REF:latest"
 
+      # The Pi kernel only arrives with base rebuilds (build.sh can't upgrade it safely).
+      - name: Check for a newer Pi kernel than the base ships
+        if: matrix.image == 'juniper-minimal'
+        continue-on-error: true
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+        run: |
+          # shellcheck disable=SC2016 # expands inside the image
+          read -r have want < <(sudo podman run --rm --pull=never "$IMAGE_REF:latest" bash -c '
+            echo "$(rpm -q --qf "%{evr}" raspberrypi2-kernel4)" \
+              "$(dnf -q repoquery --disablerepo=tailscale-stable --latest-limit 1 --qf "%{evr}" \
+                raspberrypi2-kernel4 2>/dev/null | tail -1)"')
+          echo "Pi kernel in the image: $have; newest in the repo: ${want:-unknown}"
+          if [ -n "$want" ] && [ "$have" != "$want" ]; then
+            echo "::warning::AlmaLinux's Pi repo has kernel $want; the base image ships $have"
+          fi
+
       - name: Log in to registry
         if: env.PUBLISH == 'true'
         env:
@@ -105,13 +125,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: echo "$GITHUB_TOKEN" | sudo podman login -u "$GITHUB_ACTOR" --password-stdin "$REGISTRY"
 
-      - name: Push
+      - name: Push (sha- tag only; the sign job adds latest once signed)
         id: push
         if: env.PUBLISH == 'true'
         env:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
           IMAGE_NAME: ${{ matrix.image }}
-          VERSION: ${{ steps.meta.outputs.version }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           creds="$GITHUB_ACTOR:$GITHUB_TOKEN"
@@ -120,23 +139,23 @@ jobs:
             | jq -c '[.LayersData[].Digest]' || echo '[]')
           prev=${prev:-[]}
 
-          for tag in latest "$VERSION" "sha-${GITHUB_SHA::7}"; do
-            pushed=false
-            for i in 1 2 3; do
-              if sudo podman push --digestfile /tmp/digest "$IMAGE_REF:latest" "docker://$IMAGE_REF:$tag"; then
-                pushed=true
-                break
-              fi
-              sleep $((10 * i))
-            done
-            if [ "$pushed" != true ]; then
-              echo "::error::failed to push tag $tag after 3 attempts"
-              exit 1
+          # Devices only pull :latest, which never points at an unsigned digest.
+          pushed=false
+          for i in 1 2 3; do
+            if sudo podman push --digestfile /tmp/digest "$IMAGE_REF:latest" \
+              "docker://$IMAGE_REF:sha-${GITHUB_SHA::7}"; then
+              pushed=true
+              break
             fi
+            sleep $((10 * i))
           done
-          echo "digest=$(cat /tmp/digest)" >>"$GITHUB_OUTPUT"
+          if [ "$pushed" != true ]; then
+            echo "::error::failed to push $IMAGE_REF after 3 attempts"
+            exit 1
+          fi
+          mkdir -p digest && cp /tmp/digest "digest/$IMAGE_NAME"
 
-          # Best-effort: a failed report must not fail the step (signing runs after it).
+          # Best-effort: a failed report must not fail the step.
           (
             set -o pipefail
             skopeo inspect --creds "$creds" "docker://$IMAGE_REF@$(cat /tmp/digest)" \
@@ -148,34 +167,69 @@ jobs:
               >>"$GITHUB_STEP_SUMMARY"
           ) || echo "::warning::update-size report failed for $IMAGE_NAME"
 
-      - name: Sign
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: env.PUBLISH == 'true'
+        with:
+          name: digest-${{ matrix.image }}
+          path: digest/${{ matrix.image }}
+          retention-days: 3
+
+  # The only job besides release that holds SIGNING_SECRET (environment "release": main and
+  # v* tags only). It runs no image or build code: cosign, skopeo and the public key.
+  sign:
+    needs: build
+    # yamllint disable-line rule:line-length
+    if: github.event_name == 'schedule' || startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [juniper-minimal, juniper]
+    env:
+      REGISTRY: ${{ vars.IMAGE_REGISTRY || 'ghcr.io' }}
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: digest-${{ matrix.image }}
+          path: digest
+      - name: Image ref and digest
+        id: meta
+        env:
+          NAMESPACE: ${{ github.repository_owner }}
+        run: |
+          ref="${REGISTRY}/${NAMESPACE}/${{ matrix.image }}"
+          echo "image_ref=${ref,,}" >>"$GITHUB_OUTPUT"
+          echo "digest=$(cat "digest/${{ matrix.image }}")" >>"$GITHUB_OUTPUT"
+      # cosign v2 on purpose: v3's bundle/referrers format isn't read by containers/image's
+      # sigstore-attachments lookup, so devices would reject updates.
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
+        with:
+          cosign-release: v2.5.2
+
+      - name: Sign
         env:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
-          DIGEST: ${{ steps.push.outputs.digest }}
-          REGISTRY: ${{ vars.IMAGE_REGISTRY || 'ghcr.io' }}
+          DIGEST: ${{ steps.meta.outputs.digest }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
           COSIGN_PASSWORD: ""
         run: |
           echo "$GITHUB_TOKEN" | cosign login "$REGISTRY" -u "$GITHUB_ACTOR" --password-stdin
           cosign sign --yes --key env://COSIGN_PRIVATE_KEY "$IMAGE_REF@$DIGEST"
-
-      - name: Verify signature with the on-device key
-        if: env.PUBLISH == 'true'
-        env:
-          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
-          DIGEST: ${{ steps.push.outputs.digest }}
-        run: |
           cosign verify --key system_files/usr/share/pki/containers/juniper.pub "$IMAGE_REF@$DIGEST" >/dev/null
-          # Devices pull :latest, so check the tag too.
-          cosign verify --key system_files/usr/share/pki/containers/juniper.pub "$IMAGE_REF:latest" >/dev/null
 
       - name: SBOM
-        if: env.PUBLISH == 'true'
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          image: ${{ steps.meta.outputs.image_ref }}@${{ steps.push.outputs.digest }}
+          image: ${{ steps.meta.outputs.image_ref }}@${{ steps.meta.outputs.digest }}
           format: spdx-json
           output-file: sbom.spdx.json
           upload-artifact: false
@@ -183,29 +237,42 @@ jobs:
           registry-password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Attest SBOM
-        if: env.PUBLISH == 'true'
         env:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
-          DIGEST: ${{ steps.push.outputs.digest }}
+          DIGEST: ${{ steps.meta.outputs.digest }}
           COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
           COSIGN_PASSWORD: ""
         run: |
           # The full-OS SBOM is too large for the public Rekor log; trust is key-based anyway.
           cosign attest --yes --tlog-upload=false --key env://COSIGN_PRIVATE_KEY --type spdxjson \
             --predicate sbom.spdx.json "$IMAGE_REF@$DIGEST"
-
-      - name: Verify SBOM attestation
-        if: env.PUBLISH == 'true'
-        env:
-          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
-          DIGEST: ${{ steps.push.outputs.digest }}
-        run: |
-          # No tlog entry exists for the attestation (see Attest SBOM).
+          # No tlog entry exists for the attestation.
           cosign verify-attestation --insecure-ignore-tlog=true \
             --key system_files/usr/share/pki/containers/juniper.pub --type spdxjson "$IMAGE_REF@$DIGEST" >/dev/null
 
+      - name: Tag the signed digest latest and VERSION
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+          DIGEST: ${{ steps.meta.outputs.digest }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          command -v skopeo >/dev/null || sudo apt-get install -y skopeo
+          for tag in latest "$VERSION"; do
+            for i in 1 2 3; do
+              # Same registry, blobs already there: only the manifest is written.
+              skopeo copy --preserve-digests --dest-creds "$GITHUB_ACTOR:$GITHUB_TOKEN" \
+                "docker://$IMAGE_REF@$DIGEST" "docker://$IMAGE_REF:$tag" && continue 2
+              sleep $((10 * i))
+            done
+            echo "::error::failed to tag $tag"
+            exit 1
+          done
+          # Devices pull :latest, so check the tag resolves to the signed digest.
+          cosign verify --key system_files/usr/share/pki/containers/juniper.pub "$IMAGE_REF:latest" \
+            | jq -e --arg d "$DIGEST" '.[0].critical.image."docker-manifest-digest" == $d' >/dev/null
+
   disk:
-    needs: build
+    needs: [build, sign]
     # yamllint disable-line rule:line-length
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.build_raw)
     runs-on: ubuntu-24.04-arm
@@ -235,14 +302,18 @@ jobs:
       - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
         with:
           cosign-release: v2.5.2
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: digest-${{ matrix.image }}
+          path: digest
       - name: Build raw disk
         env:
           REF: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
         run: |
-          # Build from the digest cosign verified, not whatever :latest points to a moment later.
-          digest=$(cosign verify --key system_files/usr/share/pki/containers/juniper.pub "${REF,,}:latest" \
-            | jq -r '.[0].critical.image."docker-manifest-digest"')
-          [[ $digest == sha256:* ]] || { echo "no verified digest" >&2; exit 1; }
+          # This run's own image (not whatever :latest points to now), signature checked first.
+          digest=$(cat "digest/$IMAGE")
+          [[ $digest == sha256:* ]] || { echo "no digest from the build job" >&2; exit 1; }
+          cosign verify --key system_files/usr/share/pki/containers/juniper.pub "${REF,,}@$digest" >/dev/null
           sudo "$(command -v just)" build-raw "${REF,,}:latest" "$IMAGE-$VERSION.raw" "$digest"
       - name: Compress and render OS list entry
         run: |
@@ -263,6 +334,7 @@ jobs:
   release:
     needs: [build, disk]
     runs-on: ubuntu-24.04
+    environment: release
     permissions:
       contents: write
     env:
