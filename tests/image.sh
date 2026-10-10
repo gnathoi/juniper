@@ -55,7 +55,7 @@ cycles=$(systemd-analyze verify multi-user.target cloud-init.target 2>&1 | grep 
   echo "$cycles"
   exit 1
 }
-need_enabled juniper-wifi-import.service juniper-firstboot-retry.service
+need_enabled juniper-wifi-import.service juniper-firstboot-retry.service juniper-emergency-fallback.service
 grep -qx 'prefer_fqdn_over_hostname: false' /etc/cloud/cloud.cfg.d/10-juniper-hostname.cfg
 test -f /usr/share/juniper/cidata/user-data
 [[ $(systemctl is-enabled juniper-lockdown.timer) == enabled ]]

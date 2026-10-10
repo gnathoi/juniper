@@ -4,9 +4,13 @@ Headless [bootc](https://bootc-dev.github.io/bootc/) images for Raspberry Pi 4/5
 400/500, CM4/CM5), layered on the [AlmaLinux RPi bootc image](https://github.com/AlmaLinux/bootc-images-rpi) in the spirit of Bluefin and
 Bazzite.
 
+![Juniper login on a Raspberry Pi 5: berry logo, system summary, Tailscale and update status](docs/images/login.svg)
+
+A Pi 5 running `juniper`. `juniper-minimal` shows just the status block.
+
 | | `juniper-minimal` | `juniper` |
 |---|---|---|
-| Purpose | appliance base — build `FROM` it | dev box |
+| Purpose | appliance base | dev box |
 | Tailscale, flash-time join, firewall lockdown, `ujust lan-ssh` | yes | yes |
 | Podman + quadlets, nightly `podman auto-update`, firewalld | yes | yes |
 | cloud-init first boot, secrets scrubbed from the boot partition | yes | yes |
@@ -14,9 +18,9 @@ Bazzite.
 | zram, journald cap, hardware watchdog, `noatime` | yes | yes |
 | `ujust` core: update, update-schedule, lan-ssh, tailscale-*, pi-status, enable-metrics | yes | yes |
 | Login status (Tailscale, update state) | yes | yes |
-| Juniper logo + system summary at login |  | yes |
-| Homebrew, distrobox, git, tmux, neovim, btop, ripgrep, fzf |  | yes |
-| `ujust devbox`, `ujust install-podlet` |  | yes |
+| Juniper logo + system summary at login | no | yes |
+| Homebrew, distrobox, git, tmux, neovim, btop, ripgrep, fzf | no | yes |
+| `ujust devbox`, `ujust install-podlet` | no | yes |
 
 ## Images
 
@@ -38,13 +42,6 @@ updates (required for everything under `ghcr.io/gnathoi`). Verify with:
 ```
 cosign verify --key system_files/usr/share/pki/containers/juniper.pub ghcr.io/gnathoi/juniper:latest
 ```
-
-## On login
-
-![Juniper login on a Raspberry Pi 5: berry logo, system summary, Tailscale and update status](docs/images/login.svg)
-
-A Pi 5 4GB running the `juniper` image. `juniper-minimal` shows just the status
-block (Image, Tailscale, Update, Tip), without the logo and system summary.
 
 ## Install
 
@@ -82,20 +79,10 @@ tool:
 Then edit `user-data` on the small FAT partition and, for Wi-Fi, add `network-config` (see
 `README.txt` there).
 
-## Everyday commands
+## On the Pi
 
-| Command | What it does |
-|---|---|
-| `ujust` | list everything |
-| `ujust update` | update and reboot now |
-| `ujust switch IMAGE` | switch to another image and reboot into it now |
-| `ujust update-schedule` | show the update and reboot timers |
-| `ujust update-schedule tue 04:00` / `daily 03:30` / `05:00` / `off` | set day and time, change time only, or disable the weekly reboot window |
-| `ujust lan-ssh on` / `off` | re-open SSH on the local network (escape hatch) |
-| `ujust tailscale-up` | log in to Tailscale interactively |
-| `ujust enable-metrics` | node_exporter on :9100 over Tailscale |
-| `ujust pi-status` | temperature and throttling |
-| `ujust devbox` (juniper) | mutable Fedora dev container |
+Run `ujust` to list Juniper's commands (updates, reboot window, LAN SSH escape hatch,
+Tailscale, metrics, Pi status, and on `juniper` the dev box).
 
 The `juniper` image's Homebrew comes from Bluefin's `ublue-os/brew` and updates and
 upgrades your brew packages automatically (`brew-update.timer`, `brew-upgrade.timer`).
@@ -133,23 +120,12 @@ keeps the current image; use `ujust switch`/`ujust update`.
     just bump-brew                               # move the Homebrew pin (verifies signature)
     sudo just build-raw ghcr.io/gnathoi/juniper:latest
 
-## Release train
+## Release schedule
 
-Dependabot PRs (checked Saturdays) merge themselves once CI is green, except major version
-bumps, which wait for manual review. Merges are not rebuilt on `main`, so Monday's run is the
-first full test of them (GitHub emails you if a scheduled run fails). Your pushes to `main`
-build and test but do not publish. One weekly run (Monday 02:00 UTC) publishes both signed
-images, the disk images and a release. Pis then reboot into it on Tuesday 04:00 local time,
-plus up to 90 minutes of random delay; change that with `ujust update-schedule`. For
-something urgent, run `gh workflow run build` on `main` to publish the images now (add
-`-f build_raw=true` for disk images and a release), then `ujust update` on devices;
-otherwise they apply it at the next Tuesday window. Each publish reports how many layers
-and MiB a device downloads.
-
-Note user-facing changes under Unreleased in [CHANGELOG.md](CHANGELOG.md) in the same PR
-(see [CONTRIBUTING.md](CONTRIBUTING.md) for how PRs land).
-Each release uses that section as its notes (plus the list of merged PRs), then moves it
-under the release's tag on `main`.
+A new release (both signed images, disk images and release notes) is published every
+Monday at 02:00 UTC with that week's dependency and security updates. Pis download it daily
+and reboot into it on Tuesday at 04:00 local time, within a 90-minute window; change that
+with `ujust update-schedule`, or apply it now with `ujust update`.
 
 ## License
 

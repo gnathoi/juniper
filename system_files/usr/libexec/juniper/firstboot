@@ -16,7 +16,8 @@ scrub_cidata() {
   # already applied them, so put the secret-free template back.
   if [[ -z $cidata_dir ]]; then
     local dev
-    dev=$(blkid -L CIDATA)
+    # The boot disk's CIDATA, never another attached disk's (cidata-device).
+    dev=$("${JUNIPER_CIDATA_DEVICE:-/usr/libexec/juniper/cidata-device}")
     cidata_dir=$(mktemp -d)
     mount "$dev" "$cidata_dir"
     trap 'umount "$cidata_dir"; rmdir "$cidata_dir"' EXIT
