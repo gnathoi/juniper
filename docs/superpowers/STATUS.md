@@ -28,6 +28,8 @@ Start here when picking the project up on another machine.
 - #34: `rpi-eeprom` + `rpi-eeprom-firmware`, `ujust pi-eeprom [status|apply]` (the Pi 5 reports 2025-11-05 → 2026-05-11 available; not applied), headless `rpi-config.txt` per boot entry, CLI tools via Brewfile (zellij, neovim, btop, ripgrep, fzf; tmux dropped), license texts + THIRD_PARTY.md source section, `NAME="Juniper"`.
 - On the Pi 5: unsigned image rejected (`podman pull` and `bootc switch`), update via tryboot kept, broken update fell back, emergency-mode update fell back, LAN lockdown and `lan-ssh` work. See `docs/acceptance.md`.
 
+Upstream candidates (AlmaLinux, rpi-bootc-bootloader) are tracked in `docs/upstream.md`; not filed yet.
+
 ## Sub-project D research (2026-10-10, subagent)
 
 niri 26.04 and xwayland-satellite exist for epel-10-aarch64 in COPR (`yalter/niri`; `yselkowitz/wlroots-epel` also has sway, labwc, foot, waybar, fuzzel, swaylock, swaync; greetd in `yselkowitz/cosmic-epel`). AlmaLinux AppStream has the portals, PipeWire, Xwayland, Firefox ESR and a Mesa with vc4/v3d. The GPU needs `dtoverlay=vc4-kms-v3d` (in the per-entry `rpi-config.txt`, so tryboot covers it). Reference: github.com/zirconium-dev/zirconium (mkosi on Fedora, no Pi support; reuse its greetd/keyring/`local.kdl` patterns). Proposal: `FROM juniper`, niri + waybar/fuzzel/swaync, greetd auto-login, Pi 5 8 GB first. Estimate 2–4 days; ~+1 GB image; COPR dependency to pin or mirror.
