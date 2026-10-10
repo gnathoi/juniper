@@ -107,14 +107,23 @@ packages and quadlets, push, `bootc switch` the device to it.
 
 ## Switch an existing AlmaLinux RPi bootc system
 
-    cosign verify --key <juniper.pub> ghcr.io/gnathoi/juniper:latest
-    sudo bootc switch ghcr.io/gnathoi/juniper:latest
-    sudo /usr/libexec/juniper/apply-update   # only on a Juniper device: `ujust switch IMAGE` does both
+The first switch is trust-on-first-use: the starting system doesn't check Juniper's signature
+yet. So verify the image with [`juniper.pub`](system_files/usr/share/pki/containers/juniper.pub)
+(this repo) and switch to exactly the digest that was verified, not the tag, which could
+move in between:
 
-The first switch is trust-on-first-use, so verify the image first with
-[`juniper.pub`](system_files/usr/share/pki/containers/juniper.pub) (this repo). After the
-switch, Juniper's policy enforces the signature on every later update. A plain reboot keeps
-the current image; use `ujust switch`/`ujust update`.
+    digest=$(cosign verify --key juniper.pub ghcr.io/gnathoi/juniper:latest \
+      | jq -r '.[0].critical.image."docker-manifest-digest"')
+    sudo bootc switch "ghcr.io/gnathoi/juniper@$digest"
+    sudo reboot
+
+That boot is pinned to the digest and would never update. Once it runs Juniper, whose policy
+checks the signature on every pull, point it back at the tag:
+
+    ujust switch ghcr.io/gnathoi/juniper:latest
+
+On a Juniper device, `ujust switch IMAGE` switches and reboots in one step. A plain reboot
+keeps the current image; use `ujust switch`/`ujust update`.
 
 ## Build
 

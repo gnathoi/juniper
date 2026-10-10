@@ -1,0 +1,15 @@
+[Unit]
+Description=Juniper first-boot setup, retried after an interrupted first boot
+# juniper-firstboot runs from cloud-init.target, which stops once cloud-init is disabled. If
+# the first boot was cut short after that, finish the scrub here. No ordering on cloud-init:
+# when this condition holds, cloud-init is disabled and won't run (no cycle).
+ConditionPathExists=/etc/cloud/cloud-init.disabled
+ConditionPathExists=!/var/lib/juniper/firstboot.done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/juniper/firstboot
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
