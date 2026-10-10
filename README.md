@@ -1,5 +1,12 @@
 # Juniper
 
+[![build](https://github.com/gnathoi/juniper/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/gnathoi/juniper/actions/workflows/build.yml)
+[![release](https://img.shields.io/github/v/release/gnathoi/juniper?label=release)](https://github.com/gnathoi/juniper/releases/latest)
+[![license](https://img.shields.io/github/license/gnathoi/juniper)](LICENSE)
+[![signed with cosign](https://img.shields.io/badge/signed-cosign-2a6db0?logo=sigstore)](system_files/usr/share/pki/containers/juniper.pub)
+![Raspberry Pi 4 | 5](https://img.shields.io/badge/Raspberry%20Pi-4%20%7C%205-c51a4a?logo=raspberrypi&logoColor=white)
+[![bootc on AlmaLinux 10](https://img.shields.io/badge/bootc-AlmaLinux%2010-0f4266)](https://github.com/AlmaLinux/bootc-images-rpi)
+
 Headless [bootc](https://bootc-dev.github.io/bootc/) images for Raspberry Pi 4/5 (incl.
 400/500, CM4/CM5), layered on the [AlmaLinux RPi bootc image](https://github.com/AlmaLinux/bootc-images-rpi) in the spirit of Bluefin and
 Bazzite.
