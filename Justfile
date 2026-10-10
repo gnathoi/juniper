@@ -42,11 +42,23 @@ bump-brew:
     just verify-brew
     git diff --stat Containerfile
 
+# Move the pinned CI tool images (bootc-image-builder :latest, centos-bootc :stream10) to today's digests
+bump-tools:
+    #!/usr/bin/bash
+    set -euo pipefail
+    for pair in "bootc-image-builder:latest disk/build-raw.sh" "centos-bootc:stream10 Justfile"; do
+      read -r img file <<<"$pair"
+      digest=sha256:$(skopeo inspect --raw "docker://quay.io/centos-bootc/$img" | sha256sum | cut -d' ' -f1)
+      sed -i -E "s|(quay\.io/centos-bootc/${img%%:*}@)sha256:[0-9a-f]{64}|\1$digest|" "$file"
+    done
+    git diff --stat disk/build-raw.sh Justfile
+
 # Rechunk :build into :latest and :{{ version }} (rootful podman storage)
 rechunk:
     #!/usr/bin/bash
     set -euo pipefail
-    tool=quay.io/centos-bootc/centos-bootc:stream10
+    # :stream10, pinned (just bump-tools)
+    tool=quay.io/centos-bootc/centos-bootc@sha256:461475970a848fa4c819e458d6780e1f525be2a21b274436edfbb10440d5c850
     # Pull with retries first: a registry 502 mid-blob failed a main build (run 37999745485).
     for i in 1 2 3; do
       podman pull "$tool" && break
@@ -71,9 +83,9 @@ flash device config source="latest":
     cd {{ quote(invocation_directory()) }}
     {{ quote(justfile_directory()) }}/disk/flash.sh {{ quote(device) }} {{ quote(config) }} {{ quote(source) }}
 
-# Build a flashable GPT .raw from a pushed image ref (root: loop devices)
-build-raw ref out="juniper.raw":
-    disk/build-raw.sh {{ ref }} {{ out }}
+# Build a flashable GPT .raw from a pushed image ref, optionally pinned to a verified digest (root: loop devices)
+build-raw ref out="juniper.raw" digest="":
+    disk/build-raw.sh {{ ref }} {{ out }} {{ digest }}
 
 # Assert the rechunked image has its own juniper (and, for juniper, homebrew) layers; print sizes
 check-layers:

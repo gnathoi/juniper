@@ -38,6 +38,12 @@ repos:
         entry: bash -c 'for f in Justfile system_files*/usr/share/juniper/just/*.just; do [ -e "$f" ] || continue; just --unstable --fmt --check --justfile "$f"; done'
         files: (Justfile|\.just)$
         pass_filenames: false
+      - id: actions-pinned
+        name: actions pinned to full commit SHAs
+        # Jobs hold SIGNING_SECRET: a moved tag must not change the code they run.
+        language: pygrep
+        entry: 'uses:\s+(?!\./|docker://)[^@\s]+@(?![0-9a-f]{40}(\s|$))'
+        files: ^\.github/workflows/.*\.ya?ml$
       - id: unit-tests
         name: tests/unit.sh
         language: system
