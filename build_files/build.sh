@@ -17,7 +17,9 @@ curl -fsSLo /etc/yum.repos.d/tailscale.repo https://pkgs.tailscale.com/stable/rh
 dnf -y upgrade --exclude='raspberrypi2-kernel*' --exclude='raspberrypi2-firmware*'
 
 # --- packages ---
-dnf -y install \
+# fzf is only a weak dependency of just (`just --choose`); juniper gets a current one from
+# Homebrew, and an appliance doesn't need it.
+dnf -y install --exclude=fzf \
   podman firewalld cloud-init cloud-utils-growpart zram-generator \
   jq rsync NetworkManager-wifi avahi just \
   tailscale rpi-eeprom rpi-eeprom-firmware binutils
