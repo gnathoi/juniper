@@ -77,7 +77,7 @@ bump-desktop:
       done </b/desktop-copr.txt
       dnf -q --forcearch=aarch64 --disablerepo="*" --enablerepo="yalter-niri,yselkowitz-*" \
         repoquery --latest-limit 1 --qf "%{name}-%{evr}\n" "${pkgs[@]}"
-    ' | sed 's/-0:/-/' | sort -u >build_files/desktop.lock
+    ' | sed -e '/^$/d' -e 's/-0:/-/' | sort -u >build_files/desktop.lock
     git diff --stat build_files/desktop.lock
 
 # Rechunk :build into :latest and :{{ version }} (rootful podman storage)
