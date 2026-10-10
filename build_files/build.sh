@@ -20,7 +20,7 @@ dnf -y upgrade --exclude='raspberrypi2-kernel*' --exclude='raspberrypi2-firmware
 dnf -y install \
   podman firewalld cloud-init cloud-utils-growpart zram-generator \
   jq rsync NetworkManager-wifi avahi just \
-  tailscale rpi-eeprom rpi-eeprom-firmware
+  tailscale rpi-eeprom rpi-eeprom-firmware binutils
 dnf clean all
 
 # cloud-init: /usr is read-only on bootc, so grow the filesystem holding /var instead.

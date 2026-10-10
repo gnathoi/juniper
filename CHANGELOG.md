@@ -17,6 +17,14 @@ Unreleased as its release notes, then moves those entries under the release's ta
   drops network root, VM, RAID/LVM, TPM/FIDO unlock, FIPS and btrfs support; LUKS (`crypt`)
   stays.
 
+### Fixed
+
+- `ujust pi-eeprom` works: the image now has `strings` (binutils), which `rpi-eeprom-update`
+  needs but its package doesn't require.
+- `just flash` checks a cached disk image against the release's signed `SHA256SUMS` on every
+  run and downloads it again if it changed, so a same-day re-release never flashes the
+  older image. `disk/flash.sh --fetch-only [TAG] [IMAGE]` downloads and verifies only.
+
 ## build-20261010 (2026-10-10)
 
 ### Added

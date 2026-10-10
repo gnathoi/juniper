@@ -43,6 +43,46 @@ if [[ ${1:-} == --write ]]; then
   exit 0
 fi
 
+# fetch_release SOURCE IMAGE: prints the path of the verified .raw.xz for IMAGE in release
+# SOURCE (latest or a tag). A tag can be re-released the same day, so the cache is checked
+# against the release's signed SHA256SUMS every time and stale files are fetched again.
+fetch_release() {
+  local source=$1 image=$2 api rel tag name cache want f
+  api=https://api.github.com/repos/$repo/releases
+  if [[ $source == latest ]]; then rel=$(curl -fsSL "$api/latest"); else rel=$(curl -fsSL "$api/tags/$source"); fi
+  tag=$(jq -r .tag_name <<<"$rel")
+  # juniper-YYYYMMDD.raw.xz, never juniper-minimal-*
+  name=$(jq -r --arg i "$image" '.assets[].name | select(test("^" + $i + "-[0-9]+\\.raw\\.xz$"))' <<<"$rel" | head -1)
+  [[ -n $name ]] || die "no $image disk image in release $tag"
+  cache=${XDG_CACHE_HOME:-$HOME/.cache}/juniper/$tag
+  mkdir -p "$cache"
+  get() {
+    echo "Downloading $1 ($tag)" >&2
+    curl -fL --progress-bar -o "$cache/$1.part" "https://github.com/$repo/releases/download/$tag/$1"
+    mv "$cache/$1.part" "$cache/$1"
+  }
+  get SHA256SUMS
+  get SHA256SUMS.bundle
+  cosign verify-blob --key "$pubkey" --bundle "$cache/SHA256SUMS.bundle" "$cache/SHA256SUMS" >&2
+  want=$(awk -v n="$name" '{f = $2; sub(/^\.\//, "", f)} f == n {print $1}' "$cache/SHA256SUMS")
+  [[ -n $want ]] || die "$name is not in the release's SHA256SUMS"
+  if [[ ! -f $cache/$name ]] || [[ $(sha256sum "$cache/$name" | cut -d' ' -f1) != "$want" ]]; then
+    for f in "$name" "$name.bundle"; do get "$f"; done
+  elif [[ ! -f $cache/$name.bundle ]]; then
+    get "$name.bundle"
+  fi
+  [[ $(sha256sum "$cache/$name" | cut -d' ' -f1) == "$want" ]] || die "$name doesn't match SHA256SUMS"
+  echo "$cache/$name"
+}
+
+if [[ ${1:-} == --fetch-only ]]; then
+  # flash.sh --fetch-only [latest|TAG] [juniper|juniper-minimal]: download and verify only.
+  xz=$(fetch_release "${2:-latest}" "${3:-juniper}")
+  cosign verify-blob --key "$pubkey" --bundle "$xz.bundle" "$xz"
+  echo "$xz"
+  exit 0
+fi
+
 dev=$(readlink -f "${1:?usage: flash.sh DEVICE CONFIG [latest|TAG|PATH.raw.xz]}")
 config=${2:?usage: flash.sh DEVICE CONFIG [latest|TAG|PATH.raw.xz]}
 source=${3:-latest}
@@ -56,22 +96,9 @@ image=$(python3 -c 'import sys, yaml; print((yaml.safe_load(open(sys.argv[1])) o
 if [[ -f $source ]]; then
   xz=$source
 else
-  api=https://api.github.com/repos/$repo/releases
-  if [[ $source == latest ]]; then rel=$(curl -fsSL "$api/latest"); else rel=$(curl -fsSL "$api/tags/$source"); fi
-  tag=$(jq -r .tag_name <<<"$rel")
-  # juniper-YYYYMMDD.raw.xz, never juniper-minimal-*
-  name=$(jq -r --arg i "$image" '.assets[].name | select(test("^" + $i + "-[0-9]+\\.raw\\.xz$"))' <<<"$rel" | head -1)
-  [[ -n $name ]] || die "no $image disk image in release $tag"
-  cache=${XDG_CACHE_HOME:-$HOME/.cache}/juniper/$tag
-  mkdir -p "$cache"
-  for f in "$name" "$name.bundle"; do
-    [[ -f $cache/$f ]] && continue
-    echo "Downloading $f ($tag)"
-    curl -fL --progress-bar -o "$cache/$f.part" "https://github.com/$repo/releases/download/$tag/$f"
-    mv "$cache/$f.part" "$cache/$f"
-  done
-  xz=$cache/$name
+  xz=$(fetch_release "$source" "$image")
 fi
+
 [[ -f $xz.bundle ]] || die "no signature bundle next to $xz"
 # Every time, not just after download: the cache is only as trusted as this check.
 cosign verify-blob --key "$pubkey" --bundle "$xz.bundle" "$xz"
