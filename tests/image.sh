@@ -35,6 +35,11 @@ need_enabled() {
 
 # --- shared (both images) ---
 need_cmds tailscale tailscaled podman just jq rsync firewall-cmd cloud-init
+# fzf comes from Homebrew on juniper (Brewfile), not the image (it's just's weak dependency).
+if rpm -q fzf >/dev/null; then
+  echo "fzf is in the image"
+  exit 1
+fi
 need_enabled tailscaled.service firewalld.service avahi-daemon.service cloud-init.service \
   cloud-final.service podman-auto-update.timer
 [[ $(systemctl is-enabled bootc-fetch-apply-updates.timer) == masked ]]

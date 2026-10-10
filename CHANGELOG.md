@@ -10,6 +10,11 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+### Removed
+
+- `fzf` from both images (it came in as a weak dependency of `just`). On `juniper` it comes
+  from the Brewfile, so the newer Homebrew build is the one on PATH.
+
 ## build-20261010 (2026-10-10)
 
 ### Changed
