@@ -10,6 +10,13 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+### Changed
+
+- Smaller, Pi-specific initramfs (46 → 29 MB; the initrd stage of boot is about 30% faster
+  on a Pi 5), regenerated each build from the image's own, updated systemd and ostree. It
+  drops network root, VM, RAID/LVM, TPM/FIDO unlock, FIPS and btrfs support; LUKS (`crypt`)
+  stays.
+
 ## build-20261010 (2026-10-10)
 
 ### Added
