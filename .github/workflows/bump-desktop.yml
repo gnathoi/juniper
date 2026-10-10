@@ -44,7 +44,8 @@ jobs:
             git diff HEAD~1 -- build_files/desktop.lock
             printf '%s\n' "$fence"
           } >"$RUNNER_TEMP/body.md"
-          if gh pr view "$branch" >/dev/null 2>&1; then
+          # gh pr view would also find an old merged PR on this branch
+          if [[ $(gh pr list --head "$branch" --state open --json number --jq length) -gt 0 ]]; then
             gh pr edit "$branch" --body-file "$RUNNER_TEMP/body.md"
           else
             gh pr create --head "$branch" --title "build(deps): bump desktop COPR packages" \
