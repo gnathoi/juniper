@@ -153,9 +153,12 @@ default unless hardware testing shows otherwise.
 
 ## Size, updates and CI
 
-- Image: see the spike's "Image size" summary (PR #40). Expect roughly +0.6–1 GB
-  uncompressed over `juniper` (941 MiB compressed on GHCR today); Mesa, PipeWire, Xwayland
-  and the GTK stack the portals pull in dominate.
+- Image: the spike's desktop layer installs 244 packages, 172 MB download, 733 MB
+  installed, on top of `juniper` (941 MiB compressed on GHCR today); exact image sizes are
+  in the spike's "Image size" job summary (PR #40). Mesa, PipeWire, Xwayland and the GTK
+  stack the GNOME portal pulls in (gvfs, tracker, adwaita themes) dominate. Weak
+  dependencies include Pi-irrelevant items (intel-vsc-firmware, libcamera IPA, tracker
+  miners); `install_weak_deps=False` plus an explicit list should trim it.
 - Updates: rechunking gives the new RPMs their own layers, so the weekly delta is still
   "what changed"; the desktop adds AppStream errata for Mesa/GTK/PipeWire, which change more
   often than the headless set. CI's update-size report covers it once it publishes.
@@ -177,11 +180,25 @@ default unless hardware testing shows otherwise.
   homebrew layer for it too.
 - `build.yml`: matrix entries; README table column.
 - Later, if chosen: a `health.d/` directory in the health check.
-- README "Tested hardware" table (PR #42): a `juniper-desktop` column next to
-  `juniper-minimal` | `juniper`, filled for the Pi 5 first (as soon as the hardware test
-  plan below passes), other boards as reports come in.
-- `.github/ISSUE_TEMPLATE/hardware-report.yml`: `juniper-desktop` added to the image
-  dropdown.
+
+## Deliverables and acceptance (the implementation PR, not the spike)
+
+The PR that ships `juniper-desktop` must, in that same PR:
+
+1. Add a `juniper-desktop` column to the README **Tested hardware** table (rows: Raspberry
+   Pi 5 / microSD; Raspberry Pi 5 / USB or NVMe; Raspberry Pi 4, 400; Raspberry Pi 500,
+   CM4, CM5), every cell starting as "untested". The Pi 5 / microSD cell switches to
+   "✅ tested <date>" once the hardware test plan below passes on a Pi 5, as soon as
+   possible after merge; other cells follow hardware reports.
+2. Add a `juniper-desktop` column and an **Interface** row (`headless` | `headless` |
+   `niri desktop`) to the README image comparison table (the spike branch already carries
+   this).
+3. Add `juniper-desktop` to the image dropdown of
+   `.github/ISSUE_TEMPLATE/hardware-report.yml`.
+4. Pass CI: `bootc container lint --fatal-warnings`, `tests/image.sh` for all three images
+   (including the headless images' new negative checks), `tests/unit.sh` with a test for
+   `greetd-config` and `desktop-idle`.
+5. CHANGELOG entry under Unreleased (Added: experimental `juniper-desktop`).
 
 ## Hardware test plan (Pi 5 8 GB, then Pi 4)
 
@@ -198,6 +215,20 @@ default unless hardware testing shows otherwise.
 8. Thermals and memory under a browser-like load (`pi-status`, no throttling with the
    active cooler).
 9. Switch back to `juniper`: overlay gone, multi-user target, no greetd.
+
+## Spike findings (PR #40)
+
+- `includepkgs` fencing works but must list each COPR's own dependencies: wlroots-epel also
+  supplies playerctl(-libs), nanosvg, fcft, gtk-layer-shell, gtk4-layer-shell, libmpdclient,
+  granite, jsoncpp, libsfdo. niri itself needs only base/AppStream libraries.
+- gvfs (via xdg-desktop-portal-gnome) hard-requires **wsdd**, whose scriptlet adds a user
+  without a sysusers.d entry; bootc lint fails until we ship one. The service stays disabled
+  (and the `drop` zone would block it anyway).
+- The base image already defaults to `graphical.target` (systemd's default), so the
+  headless images are "graphical" with nothing graphical in it; the smoke test checks for
+  an enabled display manager instead.
+- No tuigreet/regreet/gtkgreet in EL10 repos or these COPRs; the greeter is agreety (text)
+  unless we package one (cosmic-greeter exists in cosmic-epel but pulls COSMIC).
 
 ## Risks
 
