@@ -14,10 +14,9 @@ Start here when picking the project up on another machine.
 ## Next, in order
 
 1. **Investigate the one unexplained first-boot hang** (`docs/acceptance.md`, 7b′): flash `juniper-minimal` again, add `console=ttyAMA10,115200` to the entry's `cmdline.txt` (the FTDI cable is on the Pi 5 debug UART; with two `console=` the kernel only enabled ttyAMA0), boot **with Ethernet**, capture with `stty -F /dev/ttyUSB0 115200 raw -echo; cat /dev/ttyUSB0`. If it reproduces, the log shows the stuck unit.
-2. Update the Pi to the release with #35 (initramfs) + #37 (binutils, flash fixes); check `ujust pi-eeprom` and the initramfs size; `ujust devbox`/`install-podlet` on a `juniper` install.
-3. Delete the repo-level `SIGNING_SECRET` and `RELEASE_DEPLOY_KEY` (the `release` environment has its own since 2026-10-10 and the first release under it succeeded): `gh secret delete SIGNING_SECRET --repo gnathoi/juniper` and the same for `RELEASE_DEPLOY_KEY`.
-4. Housekeeping: `gh auth refresh -h github.com -r write:packages,delete:packages` if not done; remove the `claude-probe` machine from the tailnet; `podman rm -f ts-probe`.
-5. Sub-project D (below).
+2. Delete the repo-level `SIGNING_SECRET` and `RELEASE_DEPLOY_KEY` (the `release` environment has its own since 2026-10-10 and the first release under it succeeded): `gh secret delete SIGNING_SECRET --repo gnathoi/juniper` and the same for `RELEASE_DEPLOY_KEY`.
+3. Housekeeping: `gh auth refresh -h github.com -r write:packages,delete:packages` if not done; remove the `claude-probe` machine from the tailnet; `podman rm -f ts-probe`.
+4. Sub-project D (below). The Pi 5 is on `juniper` (switched from `juniper-minimal`, hostname `juniper-minimal`).
 
 ## What happened on 2026-10-10
 
