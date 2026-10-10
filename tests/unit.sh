@@ -7,6 +7,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 # shellcheck disable=SC2034 # used by the tests added in later tasks
 LIBEXEC=$ROOT/system_files/usr/libexec/juniper
+LIBEXEC_DESKTOP=$ROOT/system_files_desktop/usr/libexec/juniper
 ORIG_PATH=$PATH
 fails=0
 
@@ -707,6 +708,70 @@ test_check_target_refuses_system_disks() {
   check "target: internal SATA refused" fails "$ROOT/disk/check-target" /dev/sda
   lsblk_json '{"blockdevices":[{"path":"/dev/mmcblk0p1","type":"part","rm":false,"tran":null,"mountpoints":[null]}]}'
   check "target: partition refused" fails "$ROOT/disk/check-target" /dev/mmcblk0p1
+}
+
+greetd_env() {
+  export JUNIPER_GREETD_CONFIG=$T/greetd.toml JUNIPER_LOCK_FLAG=$T/desktop-lock
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub getent 'case "$1 $2" in
+    "passwd 1000") echo "nat:x:1000:1000::/var/home/nat:/bin/bash" ;;
+    "shadow nat") echo "nat:${SHADOW_HASH-\$6\$salt\$hash}:20000:0:99999:7:::" ;;
+    *) exit 2 ;;
+  esac'
+}
+
+test_greetd_config_autostarts_niri_for_uid_1000() {
+  greetd_env
+  "$LIBEXEC_DESKTOP/greetd-config"
+  check "greetd: initial_session is niri for nat" grep -q '^user = "nat"' "$JUNIPER_GREETD_CONFIG"
+  check "greetd: initial_session command" grep -q '^command = "niri-session"' "$JUNIPER_GREETD_CONFIG"
+  check "greetd: agreety after logout" grep -q 'agreety --cmd niri-session' "$JUNIPER_GREETD_CONFIG"
+  check "greetd: password flag 1" test "$(cat "$JUNIPER_LOCK_FLAG")" = 1
+}
+
+test_greetd_config_flags_missing_password() {
+  greetd_env
+  for h in '!!' '!' '*' ''; do
+    SHADOW_HASH=$h "$LIBEXEC_DESKTOP/greetd-config"
+    check "greetd: no usable password ('$h') -> flag 0" test "$(cat "$JUNIPER_LOCK_FLAG")" = 0
+  done
+}
+
+test_greetd_config_without_uid_1000() {
+  greetd_env
+  JUNIPER_AUTOLOGIN_UID=4242 "$LIBEXEC_DESKTOP/greetd-config"
+  check "greetd: no user -> no initial_session" fails grep -q initial_session "$JUNIPER_GREETD_CONFIG"
+  check "greetd: no user -> agreety only" grep -q 'agreety' "$JUNIPER_GREETD_CONFIG"
+}
+
+test_desktop_lock_first() {
+  export JUNIPER_LOCK_FLAG=$T/desktop-lock
+  stub swaylock ''
+  stub notify-send ''
+  echo 1 >"$JUNIPER_LOCK_FLAG"
+  "$LIBEXEC_DESKTOP/desktop-lock-first"
+  check "lock-first: password -> swaylock" called "swaylock -f"
+  : >"$CALLS"
+  echo 0 >"$JUNIPER_LOCK_FLAG"
+  "$LIBEXEC_DESKTOP/desktop-lock-first"
+  check "lock-first: no password -> no lock" not_called "swaylock"
+  check "lock-first: no password -> tells you" called "notify-send"
+  : >"$CALLS"
+  rm -f "$JUNIPER_LOCK_FLAG"
+  "$LIBEXEC_DESKTOP/desktop-lock-first"
+  check "lock-first: no flag -> locks (fail closed)" called "swaylock -f"
+}
+
+test_desktop_idle_lock() {
+  export HOME=$T/home XDG_CONFIG_HOME=$T/home/.config
+  stub swayidle ''
+  "$LIBEXEC_DESKTOP/desktop-idle-lock"
+  check "idle-lock: locks after 10 min" called "swayidle -w timeout 600 swaylock -f"
+  mkdir -p "$XDG_CONFIG_HOME/juniper" && touch "$XDG_CONFIG_HOME/juniper/no-idle-lock"
+  : >"$CALLS"
+  "$LIBEXEC_DESKTOP/desktop-idle-lock"
+  check "idle-lock: off -> idle hint only" called "swayidle -w idlehint 1800"
+  check "idle-lock: off -> no lock" not_called "swaylock"
 }
 
 # --- runner ---

@@ -159,6 +159,15 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
   need_cmds niri niri-session xwayland-satellite Xwayland greetd agreety foot waybar fuzzel \
     swaylock swayidle swaync pipewire wireplumber flatpak notify-send
   need_enabled greetd.service
+  systemd-analyze verify greetd.service
+  # niri accepts Juniper's defaults, the /etc config, and the stub desktop-config writes.
+  niri validate -c /usr/share/juniper/niri/juniper.kdl
+  niri validate -c /etc/niri/config.kdl
+  t=$(mktemp -d)
+  HOME=$t just --justfile /usr/share/juniper/just/desktop.just desktop-config
+  head -2 "$t/.config/niri/config.kdl" | grep -q '^include "/usr/share/juniper/niri/juniper.kdl"'
+  rm -rf "$t"
+  grep -qx 'desktop-config' <<<"$recipes"
   ls /usr/lib64/dri/v3d_dri.so /usr/lib64/dri/vc4_dri.so >/dev/null
   ls /usr/lib/modules/*/kernel/drivers/gpu/drm/v3d/v3d.ko* >/dev/null
   # The COPRs are build-time only: devices never pull from them.

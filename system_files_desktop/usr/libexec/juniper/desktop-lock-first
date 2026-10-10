@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# First thing niri starts (juniper.kdl): lock the screen, so every boot ends at the lock
+# screen. Without a usable password (greetd-config's flag says 0), locking would lock the
+# user out: say how to set one instead. No flag at all: lock (fail closed).
+set -euo pipefail
+flag=${JUNIPER_LOCK_FLAG:-/run/juniper/desktop-lock}
+
+if [[ $(cat "$flag" 2>/dev/null || echo 1) == 0 ]]; then
+  notify-send -u critical "Set a password" \
+    "This desktop has no password, so it can't lock. Open a terminal (Super+Return) and run: sudo passwd $USER"
+  exit 0
+fi
+exec swaylock -f
