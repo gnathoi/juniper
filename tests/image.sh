@@ -168,6 +168,8 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
   grep -q '^ExecCondition=/usr/libexec/juniper/desktop-idle$' \
     /usr/lib/systemd/system/juniper-reboot.service.d/10-desktop-idle.conf
   test -x /usr/libexec/juniper/desktop-idle
+  need_enabled juniper-reboot-retry.timer
+  systemd-analyze verify juniper-reboot-retry.service
   # niri accepts Juniper's defaults, the /etc config, and the stub desktop-config writes.
   niri validate -c /usr/share/juniper/niri/juniper.kdl
   niri validate -c /etc/niri/config.kdl
@@ -207,7 +209,9 @@ else
     exit 1
   fi
   if [[ -e /usr/lib/systemd/system/juniper-reboot.service.d/10-desktop-idle.conf ||
-    -e /usr/libexec/juniper/desktop-idle ]]; then
+    -e /usr/libexec/juniper/desktop-idle ||
+    -e /usr/lib/systemd/system/juniper-reboot-retry.timer ||
+    -e /usr/lib/systemd/system/juniper-reboot-retry.service ]]; then
     echo "desktop idle-reboot gate in a headless image"
     exit 1
   fi

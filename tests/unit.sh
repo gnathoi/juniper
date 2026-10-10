@@ -923,6 +923,49 @@ test_desktop_idle_notify_is_best_effort() {
   check "idle: notify trouble still exits 1 (skip, not error)" test $rc = 1
 }
 
+test_desktop_idle_any_active_nonidle_session_defers() {
+  idle_env
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub loginctl 'case "$1" in
+    list-sessions) printf "3 1000 nat seat0 tty1\n4 1000 nat seat0 tty2\n" ;;
+    show-session) case "$4" in Type) echo wayland ;; Active) echo yes ;; IdleHint) [[ $2 == 3 ]] && echo yes || echo no ;; esac ;;
+  esac'
+  check "idle: one idle + one busy session -> skip" fails "$LIBEXEC_DESKTOP/desktop-idle"
+}
+
+test_desktop_idle_ignores_non_graphical_sessions() {
+  idle_env
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub loginctl 'case "$1" in
+    list-sessions) echo "5 1000 nat seat0 pts/0" ;;
+    show-session) case "$4" in Type) echo tty ;; Active) echo yes ;; IdleHint) echo no ;; esac ;;
+  esac'
+  check "idle: ssh/tty-only session -> reboot" "$LIBEXEC_DESKTOP/desktop-idle"
+}
+
+test_desktop_idle_future_marker() {
+  idle_env
+  echo $((2000000000 + 86400)) >"$JUNIPER_STATE_DIR/reboot-deferred-since"
+  check "idle: future marker -> reboot" "$LIBEXEC_DESKTOP/desktop-idle"
+  check "idle: future marker cleared" test ! -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
+}
+
+test_desktop_idle_cap_boundaries() {
+  idle_env
+  echo $((2000000000 - 7 * 86400 - 1800)) >"$JUNIPER_STATE_DIR/reboot-deferred-since"
+  check "idle: 7d+30min (hourly retry) -> reboot" "$LIBEXEC_DESKTOP/desktop-idle"
+  echo $((2000000000 - 7 * 86400 + 1)) >"$JUNIPER_STATE_DIR/reboot-deferred-since"
+  check "idle: 1s short of 7d -> skip" fails "$LIBEXEC_DESKTOP/desktop-idle"
+}
+
+test_desktop_idle_leading_zero_marker() {
+  idle_env
+  echo "0$((2000000000 - 86400))" >"$JUNIPER_STATE_DIR/reboot-deferred-since"
+  rc=0
+  "$LIBEXEC_DESKTOP/desktop-idle" >/dev/null || rc=$?
+  check "idle: leading-zero marker read as decimal (skip, marker kept)" test "$rc" = 1 -a -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
+}
+
 # --- runner ---
 for t in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do
   setup

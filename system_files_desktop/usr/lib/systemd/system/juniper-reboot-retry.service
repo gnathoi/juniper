@@ -1,0 +1,9 @@
+[Unit]
+Description=Reboot into a staged Juniper update that the weekly window deferred
+# Only while a deferral is pending: normal weeks follow the owner's weekly window.
+ConditionPathExists=/var/lib/juniper/reboot-deferred-since
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/libexec/juniper/desktop-idle
+ExecStart=/usr/libexec/juniper/apply-update
