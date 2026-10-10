@@ -163,6 +163,11 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
   grep -q '^GPGKey=' /etc/flatpak/remotes.d/flathub.flatpakrepo
   need_enabled juniper-flatpak-setup.service juniper-flatpak-update.timer
   systemd-analyze verify juniper-flatpak-setup.service juniper-flatpak-update.service
+  # The reboot window waits for an idle desktop (checked by file: no running systemd in CI).
+  test -e /usr/lib/systemd/system/juniper-reboot.service.d/10-desktop-idle.conf
+  grep -q '^ExecCondition=/usr/libexec/juniper/desktop-idle$' \
+    /usr/lib/systemd/system/juniper-reboot.service.d/10-desktop-idle.conf
+  test -x /usr/libexec/juniper/desktop-idle
   # niri accepts Juniper's defaults, the /etc config, and the stub desktop-config writes.
   niri validate -c /usr/share/juniper/niri/juniper.kdl
   niri validate -c /etc/niri/config.kdl
@@ -199,6 +204,11 @@ else
   fi
   if ls /etc/flatpak/remotes.d/flathub.flatpakrepo /usr/lib/systemd/system/juniper-flatpak-* 2>/dev/null; then
     echo "flatpak units or remote in a headless image"
+    exit 1
+  fi
+  if [[ -e /usr/lib/systemd/system/juniper-reboot.service.d/10-desktop-idle.conf ||
+    -e /usr/libexec/juniper/desktop-idle ]]; then
+    echo "desktop idle-reboot gate in a headless image"
     exit 1
   fi
   # The base defaults to graphical.target; nothing graphical starts without a display manager.

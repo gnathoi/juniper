@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# ExecCondition of juniper-reboot.service on the desktop: exit 0 lets the weekly reboot
+# window reboot into a staged update; exit 1 skips this window while someone is using the
+# desktop (a wayland session that's active and not idle; swayidle sets the idle hint after
+# 30 min). Never longer than JUNIPER_DEFER_CAP_DAYS after the first deferral.
+# Every error path fails toward rebooting: updates must never be blocked indefinitely.
+state=${JUNIPER_STATE_DIR:-/var/lib/juniper}
+now=${JUNIPER_NOW:-$(date +%s)}
+days=${JUNIPER_DEFER_CAP_DAYS:-7}
+[[ $days =~ ^[0-9]+$ ]] || days=7
+cap=$((days * 86400))
+since_f=$state/reboot-deferred-since
+
+allow() {
+  rm -f "$since_f"
+  [[ -z ${1:-} ]] || echo "$1"
+  exit 0
+}
+
+[[ $(bootc status --json 2>/dev/null | jq '.status.staged != null' 2>/dev/null) == true ]] ||
+  allow ""
+
+in_use=false
+for s in $(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}'); do
+  [[ $(loginctl show-session "$s" -p Type --value 2>/dev/null) == wayland ]] || continue
+  [[ $(loginctl show-session "$s" -p Active --value 2>/dev/null) == yes ]] || continue
+  [[ $(loginctl show-session "$s" -p IdleHint --value 2>/dev/null) == no ]] && in_use=true
+done
+$in_use || allow ""
+
+if [[ -e $since_f ]]; then
+  since=$(head -c 32 "$since_f" 2>/dev/null || true)
+  # A garbled or future marker means we can't trust the cap math: reboot.
+  [[ $since =~ ^[0-9]+$ ]] && ((since <= now)) || allow "Deferral marker unreadable: rebooting."
+else
+  mkdir -p "$state" && echo "$now" >"$since_f" || allow "Cannot record the deferral: rebooting."
+  since=$now
+fi
+if ((now - since >= cap)); then
+  allow "Desktop in use, but the update has waited $days days: rebooting."
+fi
+
+echo "Desktop in use: not rebooting for the staged update this window."
+# Best-effort notification; never changes the exit status.
+if user=$(getent passwd 1000 2>/dev/null | cut -d: -f1) && [[ -n $user && -S /run/user/1000/bus ]]; then
+  runuser -u "$user" -- env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+    notify-send "Update ready" "Reboot when convenient (ujust update), or it happens within a week." || true
+fi
+exit 1

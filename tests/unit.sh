@@ -856,6 +856,73 @@ test_flatpak_setup_offline_retries() {
   check "flatpak: failure not marked done (retried next boot)" test ! -e "$JUNIPER_STATE_DIR/flatpak-setup.done"
 }
 
+idle_env() {
+  export JUNIPER_NOW=2000000000
+  stub bootc 'echo "{\"status\":{\"staged\":{}}}"'
+  stub runuser ''
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub loginctl 'case "$1" in
+    list-sessions) echo "3 1000 nat seat0 tty1" ;;
+    show-session) case "$4" in Type) echo wayland ;; Active) echo yes ;; IdleHint) echo "${IDLE:-no}" ;; esac ;;
+  esac'
+}
+
+test_desktop_idle_defers_active_session() {
+  idle_env
+  check "idle: active desktop -> skip" fails "$LIBEXEC_DESKTOP/desktop-idle"
+  check "idle: first deferral recorded" test "$(cat "$JUNIPER_STATE_DIR/reboot-deferred-since")" = 2000000000
+}
+
+test_desktop_idle_proceeds_when_idle_or_nothing_staged() {
+  idle_env
+  IDLE=yes "$LIBEXEC_DESKTOP/desktop-idle"
+  check "idle: idle session -> reboot" test $? = 0
+  stub bootc 'echo "{\"status\":{\"staged\":null}}"'
+  check "idle: nothing staged -> no deferral" "$LIBEXEC_DESKTOP/desktop-idle"
+  check "idle: nothing staged -> marker cleared" test ! -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
+}
+
+test_desktop_idle_cap() {
+  idle_env
+  mkdir -p "$JUNIPER_STATE_DIR"
+  echo $((2000000000 - 7 * 86400)) >"$JUNIPER_STATE_DIR/reboot-deferred-since"
+  check "idle: deferred 7 days -> reboot anyway" "$LIBEXEC_DESKTOP/desktop-idle"
+  check "idle: cap clears the marker" test ! -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
+}
+
+test_desktop_idle_under_cap_keeps_deferring() {
+  idle_env
+  echo $((2000000000 - 6 * 86400)) >"$JUNIPER_STATE_DIR/reboot-deferred-since"
+  check "idle: deferred 6 days -> still skip" fails "$LIBEXEC_DESKTOP/desktop-idle"
+  check "idle: marker kept" test -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
+}
+
+test_desktop_idle_idle_clears_marker() {
+  idle_env
+  echo $((2000000000 - 86400)) >"$JUNIPER_STATE_DIR/reboot-deferred-since"
+  check "idle: idle again -> reboot" env IDLE=yes "$LIBEXEC_DESKTOP/desktop-idle"
+  check "idle: idle -> marker cleared" test ! -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
+}
+
+test_desktop_idle_fails_toward_reboot() {
+  idle_env
+  echo garbage >"$JUNIPER_STATE_DIR/reboot-deferred-since"
+  check "idle: garbled marker -> reboot" "$LIBEXEC_DESKTOP/desktop-idle"
+  check "idle: garbled marker cleared" test ! -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
+  idle_env
+  stub loginctl 'exit 1'
+  check "idle: loginctl failing -> reboot" "$LIBEXEC_DESKTOP/desktop-idle"
+}
+
+test_desktop_idle_notify_is_best_effort() {
+  idle_env
+  stub runuser 'exit 1'
+  stub getent 'exit 2'
+  rc=0
+  "$LIBEXEC_DESKTOP/desktop-idle" >/dev/null || rc=$?
+  check "idle: notify trouble still exits 1 (skip, not error)" test $rc = 1
+}
+
 # --- runner ---
 for t in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do
   setup
