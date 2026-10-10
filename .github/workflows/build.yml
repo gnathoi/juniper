@@ -271,10 +271,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The changelog is stamped on the latest main, which may have moved on since the build.
+      # main only accepts pull requests (repository ruleset); RELEASE_DEPLOY_KEY is a write
+      # deploy key that is the ruleset's only bypass, for the changelog push below.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           path: main
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
       - name: Release notes from CHANGELOG.md
         run: |
           .github/scripts/changelog.sh unreleased CHANGELOG.md >unreleased.md
@@ -316,7 +319,7 @@ jobs:
             os-list.json
             SHA256SUMS
       # After the release, so the changelog never names a release that doesn't exist.
-      # GITHUB_TOKEN pushes don't trigger workflows, and this is docs-only anyway.
+      # Pushed with the deploy key, so it triggers lint-docs (docs-only: no image build).
       - name: Commit the stamped changelog to main
         working-directory: main
         run: |
