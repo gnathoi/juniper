@@ -33,6 +33,17 @@ rm -f "$(dirname "$resizefs")"/__pycache__/cc_resizefs.*.pyc
 cp -a /ctx/system_files/. /
 install -D -m 0644 -t /usr/share/licenses/juniper /ctx/LICENSE /ctx/THIRD_PARTY.md
 
+# Initramfs: regenerate with 90-juniper.conf (system_files), dropping what a Pi never boots
+# with (46 -> 29 MB, ~30% faster initrd stage on a Pi 5), and from this build's upgraded
+# systemd/ostree instead of the base's. /root links to /var/roothome, which a build's /var
+# lacks; dracut wants it to exist.
+mkdir -p /var/roothome
+for kdir in /usr/lib/modules/*/; do
+  kver=$(basename "$kdir")
+  dracut --no-hostonly --reproducible --kver "$kver" -f "$kdir/initramfs.img"
+  chmod 0644 "$kdir/initramfs.img"
+done
+
 # Headless boot settings, per kernel: rpi-bootc-bootloader copies rpi-config.txt into each
 # deployment's boot entry and includes it from the default and tryboot configs, so a bad
 # setting falls back with the rest of the update.
@@ -94,6 +105,8 @@ for p in sys.stdin.read().split("\0"):
 # regular files only: Linux rejects user.* xattrs on symlinks
 find /ctx/system_files -type f -printf '/%P\0' | tag juniper
 printf '%s\0' /usr/share/licenses/juniper/LICENSE /usr/share/licenses/juniper/THIRD_PARTY.md | tag juniper
+# Its own layer: changes only when its inputs do (dracut --reproducible).
+printf '%s\0' /usr/lib/modules/*/initramfs.img | tag initramfs
 printf '%s\0' /usr/lib/os-release /etc/containers/policy.json /etc/containers/registries.d/juniper.yaml \
   /etc/yum.repos.d/tailscale.repo | tag juniper
 

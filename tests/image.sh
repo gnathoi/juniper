@@ -61,6 +61,18 @@ cycles=$(systemd-analyze verify multi-user.target cloud-init.target 2>&1 | grep 
   exit 1
 }
 need_cmds rpi-eeprom-update lspci
+# Trimmed initramfs (90-juniper.conf): ostree and crypt in, network root/VM/RAID/TPM out.
+for img in /usr/lib/modules/*/initramfs.img; do
+  mods=$(lsinitrd "$img" | sed -n '/^dracut modules:/,/^=/p')
+  for m in ostree crypt systemd-initrd rootfs-block; do grep -qx "$m" <<<"$mods"; done
+  for m in nfs network-manager qemu lvm clevis fips btrfs; do
+    if grep -qx "$m" <<<"$mods"; then
+      echo "initramfs still has $m"
+      exit 1
+    fi
+  done
+  (($(stat -c %s "$img") < 35 * 1024 * 1024))
+done
 # rpi-eeprom ships only the tools; the bootloader images are in rpi-eeprom-firmware.
 ls /usr/lib/firmware/raspberrypi/bootloader-2712/default/pieeprom-*.bin >/dev/null
 ls /usr/lib/firmware/raspberrypi/bootloader-2711/default/pieeprom-*.bin >/dev/null
