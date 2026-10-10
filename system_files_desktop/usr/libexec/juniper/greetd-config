@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# greetd.service ExecStartPre: write greetd's config. Auto-login the first human user
+# (uid 1000) into niri unless `ujust desktop-autologin off` left the marker. After logout,
+# or with no such user, agreety asks for a password and then starts niri.
+set -euo pipefail
+
+out=${JUNIPER_GREETD_CONFIG:-/run/juniper/greetd.toml}
+marker=${JUNIPER_NO_AUTOLOGIN:-/etc/juniper/desktop-no-autologin}
+uid=${JUNIPER_AUTOLOGIN_UID:-1000}
+
+mkdir -p "$(dirname "$out")"
+{
+  printf '[terminal]\nvt = 1\n\n'
+  printf '[default_session]\ncommand = "agreety --cmd niri-session"\nuser = "greetd"\n'
+  if [[ ! -e $marker ]] && user=$(getent passwd "$uid" | cut -d: -f1) && [[ -n $user ]]; then
+    printf '\n[initial_session]\ncommand = "niri-session"\nuser = "%s"\n' "$user"
+  fi
+} >"$out.tmp"
+mv "$out.tmp" "$out"

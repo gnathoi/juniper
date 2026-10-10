@@ -50,7 +50,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [juniper-minimal, juniper]
+        # juniper-desktop: experimental (sub-project D), built and tested only; not in the
+        # sign/disk/release matrices, so it is never published.
+        image: [juniper-minimal, juniper, juniper-desktop]
     outputs:
       version: ${{ steps.meta.outputs.version }}
     steps:
@@ -81,7 +83,7 @@ jobs:
           cosign-release: v2.5.2
 
       - name: Verify pinned Homebrew image signature
-        if: matrix.image == 'juniper'
+        if: matrix.image != 'juniper-minimal'
         run: just verify-brew
 
       - name: Build and rechunk
@@ -100,6 +102,14 @@ jobs:
         env:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
         run: sudo "$(command -v just)" image="${{ matrix.image }}" image_ref="$IMAGE_REF" test-image "$IMAGE_REF:latest"
+
+      - name: Image size
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+        run: |
+          size=$(sudo podman image inspect --format '{{.Size}}' "$IMAGE_REF:latest")
+          echo "### Image size: ${{ matrix.image }}: $((size / 1048576)) MiB (uncompressed)" >>"$GITHUB_STEP_SUMMARY"
+          echo "${{ matrix.image }}: $((size / 1048576)) MiB"
 
       # The Pi kernel only arrives with base rebuilds (build.sh can't upgrade it safely).
       - name: Check for a newer Pi kernel than the base ships
@@ -127,7 +137,7 @@ jobs:
 
       - name: Push (sha- tag only; the sign job adds latest once signed)
         id: push
-        if: env.PUBLISH == 'true'
+        if: env.PUBLISH == 'true' && matrix.image != 'juniper-desktop'
         env:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
           IMAGE_NAME: ${{ matrix.image }}
@@ -168,7 +178,7 @@ jobs:
           ) || echo "::warning::update-size report failed for $IMAGE_NAME"
 
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        if: env.PUBLISH == 'true'
+        if: env.PUBLISH == 'true' && matrix.image != 'juniper-desktop'
         with:
           name: digest-${{ matrix.image }}
           path: digest/${{ matrix.image }}

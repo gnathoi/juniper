@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Smoke test executed inside a built image (no systemd running):
 #   just image=juniper test-image   /   just image=juniper-minimal test-image
+#   (juniper-desktop, experimental: juniper's checks plus the desktop's)
 set -euo pipefail
 
 # shellcheck source=/dev/null
 . /usr/lib/os-release
-[[ $IMAGE_ID == juniper || $IMAGE_ID == juniper-minimal ]] || {
+[[ $IMAGE_ID == juniper || $IMAGE_ID == juniper-minimal || $IMAGE_ID == juniper-desktop ]] || {
   echo "unexpected IMAGE_ID: $IMAGE_ID"
   exit 1
 }
@@ -83,7 +84,19 @@ done
 ls /usr/lib/firmware/raspberrypi/bootloader-2712/default/pieeprom-*.bin >/dev/null
 ls /usr/lib/firmware/raspberrypi/bootloader-2711/default/pieeprom-*.bin >/dev/null
 grep -qx 'BOOTFS=/boot/efi' /etc/default/rpi-eeprom-update
-for kdir in /usr/lib/modules/*/; do grep -qx 'disable_splash=1' "$kdir/rpi-config.txt"; done
+for kdir in /usr/lib/modules/*/; do
+  grep -qx 'disable_splash=1' "$kdir/rpi-config.txt"
+  # KMS graphics only on the desktop; the headless images keep displays off.
+  if [[ $IMAGE_ID == juniper-desktop ]]; then
+    grep -qx 'dtoverlay=vc4-kms-v3d' "$kdir/rpi-config.txt"
+  else
+    grep -qx 'display_auto_detect=0' "$kdir/rpi-config.txt"
+    if grep -q 'vc4-kms' "$kdir/rpi-config.txt"; then
+      echo "KMS overlay in a headless image"
+      exit 1
+    fi
+  fi
+done
 need_enabled juniper-wifi-import.service juniper-firstboot-retry.service juniper-emergency-fallback.service
 grep -qx 'prefer_fqdn_over_hostname: false' /etc/cloud/cloud.cfg.d/10-juniper-hostname.cfg
 test -f /usr/share/juniper/cidata/user-data
@@ -106,7 +119,7 @@ jq -e '[.transports.docker[][] | select(.type == "sigstoreSigned" and .keyPath =
 jq -e '[.transports.docker | to_entries[] | select(.value[0].keyPath == "/usr/share/pki/containers/juniper.pub") | .key | contains("juniper") | not] == [true]' /etc/containers/policy.json >/dev/null
 grep -q 'use-sigstore-attachments: true' /etc/containers/registries.d/juniper.yaml
 
-if [[ $IMAGE_ID == juniper ]]; then
+if [[ $IMAGE_ID == juniper || $IMAGE_ID == juniper-desktop ]]; then
   # --- full image only ---
   need_cmds distrobox fastfetch git zstd
   need_enabled brew-setup.service brew-update.timer brew-upgrade.timer
@@ -138,6 +151,44 @@ else
     echo "dev recipe in minimal: devbox"
     exit 1
   fi
+fi
+
+if [[ $IMAGE_ID == juniper-desktop ]]; then
+  # --- desktop only (experimental) ---
+  need_cmds niri niri-session xwayland-satellite Xwayland greetd agreety foot waybar fuzzel \
+    swaylock swaync pipewire wireplumber
+  need_enabled greetd.service
+  [[ $(systemctl get-default) == graphical.target ]]
+  ls /usr/lib64/dri/v3d_dri.so /usr/lib64/dri/vc4_dri.so >/dev/null
+  ls /usr/lib/modules/*/kernel/drivers/gpu/drm/v3d/v3d.ko* >/dev/null
+  # The COPRs are build-time only: devices never pull from them.
+  if ls /etc/yum.repos.d/*copr* 2>/dev/null; then
+    echo "COPR repo left in the image"
+    exit 1
+  fi
+  grep -qx desktop-autologin <<<"$recipes"
+  systemd-analyze verify greetd.service
+  cycles=$(systemd-analyze verify graphical.target cloud-init.target 2>&1 | grep 'ordering cycle' || true)
+  [[ -z $cycles ]] || {
+    echo "$cycles"
+    exit 1
+  }
+  # Auto-login config: uid 1000 when it exists, agreety otherwise.
+  t=$(mktemp -d)
+  JUNIPER_GREETD_CONFIG=$t/g.toml JUNIPER_AUTOLOGIN_UID=0 /usr/libexec/juniper/greetd-config
+  grep -q '^user = "root"' "$t/g.toml" && grep -q 'initial_session' "$t/g.toml"
+  JUNIPER_GREETD_CONFIG=$t/g.toml JUNIPER_AUTOLOGIN_UID=4242424 /usr/libexec/juniper/greetd-config
+  if grep -q 'initial_session' "$t/g.toml"; then
+    echo "auto-login without a user"
+    exit 1
+  fi
+  rm -rf "$t"
+else
+  if command -v niri >/dev/null || [[ -e /usr/share/juniper/just/desktop.just ]]; then
+    echo "desktop content in a headless image"
+    exit 1
+  fi
+  [[ $(systemctl get-default) != graphical.target ]]
 fi
 
 echo "image smoke test: OK ($IMAGE_ID)"
