@@ -10,6 +10,8 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+## build-20261010 (2026-10-10)
+
 ### Added
 
 - `ujust pi-eeprom` shows whether a newer Raspberry Pi bootloader EEPROM is available;
@@ -27,8 +29,6 @@ Unreleased as its release notes, then moves those entries under the release's ta
 - Headless boot settings (no splash, no camera/display auto-detect) in each boot entry's
   `rpi-config.txt`, so they're covered by tryboot.
 - `os-release` `NAME` is `Juniper` (`ID` stays `almalinux`).
-
-## build-20261010 (2026-10-10)
 
 ### Fixed
 
