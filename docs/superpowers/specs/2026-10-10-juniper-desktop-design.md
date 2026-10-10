@@ -154,8 +154,9 @@ default unless hardware testing shows otherwise.
 ## Size, updates and CI
 
 - Image: the spike's desktop layer installs 244 packages, 172 MB download, 733 MB
-  installed, on top of `juniper` (941 MiB compressed on GHCR today); exact image sizes are
-  in the spike's "Image size" job summary (PR #40). Mesa, PipeWire, Xwayland and the GTK
+  installed, on top of `juniper`. Uncompressed after rechunking (spike run 38081217217):
+  `juniper-minimal` 1544 MiB, `juniper` 1720 MiB, `juniper-desktop` 2483 MiB (+763 MiB,
+  +44 %). `juniper` is 941 MiB compressed on GHCR; expect the desktop around 1.3 GB. Mesa, PipeWire, Xwayland and the GTK
   stack the GNOME portal pulls in (gvfs, tracker, adwaita themes) dominate. Weak
   dependencies include Pi-irrelevant items (intel-vsc-firmware, libcamera IPA, tracker
   miners); `install_weak_deps=False` plus an explicit list should trim it.
