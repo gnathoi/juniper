@@ -659,6 +659,31 @@ test_render_cidata_authkey_file() {
     "$(yget "$T/out/user-data" 'd["write_files"][0]["content"]')" = tskey-auth-fromfile
 }
 
+test_render_cidata_password_hash() {
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\nimage: juniper-desktop\n' >"$T/flash.yaml"
+  hash=$(printf '%s' 'a pass "word" with $ and ü' | openssl passwd -6 -stdin)
+  JUNIPER_PASSWORD_HASH=$hash "$ROOT/disk/render-cidata" "$T/flash.yaml" "$T/out" 2>/dev/null
+  check "cidata: hashed password set" test "$(yget "$T/out/user-data" 'd["users"][0]["passwd"]')" = "$hash"
+  check "cidata: password not locked" test "$(yget "$T/out/user-data" 'd["users"][0]["lock_passwd"]')" = False
+}
+
+test_render_cidata_desktop_needs_password() {
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\nimage: juniper-desktop\n' >"$T/flash.yaml"
+  check "cidata: desktop without a password refused" stderr_has "needs a password" \
+    "$ROOT/disk/render-cidata" "$T/flash.yaml" "$T/out"
+}
+
+test_render_cidata_refuses_plaintext_and_bad_hash() {
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\npassword: hunter2\n' >"$T/plain.yaml"
+  check "cidata: plain-text password refused" stderr_has "password: prompt" \
+    "$ROOT/disk/render-cidata" "$T/plain.yaml" "$T/out1"
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\n' >"$T/ok.yaml"
+  # shellcheck disable=SC2016  # a literal crypt hash
+  check "cidata: non-SHA-512 hash refused" fails env JUNIPER_PASSWORD_HASH='$1$abc$def' \
+    "$ROOT/disk/render-cidata" "$T/ok.yaml" "$T/out2"
+  check "cidata: headless without password still fine" "$ROOT/disk/render-cidata" "$T/ok.yaml" "$T/out3"
+}
+
 test_render_cidata_rejects_bad_config() {
   printf 'ssh_keys: [ssh-ed25519 AAAAC3x me]\n' >"$T/nouser.yaml"
   printf 'user: me\n' >"$T/nokeys.yaml"

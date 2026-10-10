@@ -111,8 +111,19 @@ source=${3:-latest}
 "$here/check-target" "$dev"
 work=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/juniper-flash.XXXXXX")
 trap 'rm -rf "$work"' EXIT
-"$here/render-cidata" "$config" "$work/cidata"
 image=$(python3 -c 'import sys, yaml; print((yaml.safe_load(open(sys.argv[1])) or {}).get("image", "juniper"))' "$config")
+want_pw=$(python3 -c 'import sys, yaml; c = yaml.safe_load(open(sys.argv[1])) or {}; print("yes" if c.get("image") == "juniper-desktop" or c.get("password") == "prompt" else "no")' "$config")
+if [[ $want_pw == yes ]]; then
+  read -rsp "Password for the Pi's user (for the lock screen and sudo): " pw1 && echo
+  read -rsp "Again: " pw2 && echo
+  [[ $pw1 == "$pw2" ]] || die "passwords don't match; nothing written"
+  ((${#pw1} >= 8)) || die "use at least 8 characters"
+  # From stdin, so the shell never splits or expands it; only the hash goes any further.
+  JUNIPER_PASSWORD_HASH=$(printf '%s' "$pw1" | openssl passwd -6 -stdin)
+  export JUNIPER_PASSWORD_HASH
+  unset pw1 pw2
+fi
+"$here/render-cidata" "$config" "$work/cidata"
 
 if [[ -f $source ]]; then
   xz=$source
@@ -136,6 +147,7 @@ print(f"Tailscale: {'auth key set' if 'write_files' in ud else 'none (log in lat
 nc = os.path.join(d, "network-config")
 ssids = list(yaml.safe_load(open(nc))["network"]["wifis"]["wlan0"]["access-points"]) if os.path.exists(nc) else []
 print(f"Wi-Fi:     {ssids[0] if ssids else 'none (Ethernet)'}")
+print(f"Password:  {'set' if 'passwd' in u else 'none (SSH keys only)'}")
 PY
 echo "Image:     $(basename "$xz")"
 echo
