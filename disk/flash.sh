@@ -18,6 +18,7 @@ disk_identity() { lsblk -dbno SIZE,SERIAL,MODEL,WWN "$1" | tr -s ' '; }
 
 if [[ ${1:-} == --write ]]; then
   # Root phase: flash.sh --write DEVICE IMAGE.raw.xz CIDATA-DIR IDENTITY
+  trap 'echo "flash: failed (exit $?) at line $LINENO: $BASH_COMMAND" >&2' ERR
   dev=$2 xz=$3 cidata_src=$4 identity=$5
   # Via bash: under run0, SELinux won't let the service execute files in a home directory.
   bash "$here/check-target" "$dev"
@@ -27,9 +28,16 @@ if [[ ${1:-} == --write ]]; then
   wipefs -a "$dev" >/dev/null
   xzcat "$xz" | dd of="$dev" bs=4M conv=fsync status=progress
   sync
-  partprobe "$dev" 2>/dev/null || blockdev --rereadpt "$dev"
-  udevadm settle
-  part=$(lsblk -nrpo PATH,LABEL "$dev" | awk '$2 == "CIDATA" {print $1; exit}')
+  partprobe "$dev" 2>/dev/null || blockdev --rereadpt "$dev" || true
+  # The kernel re-reads the new partition table and the desktop probes it; lsblk can briefly
+  # fail (exit 32: device not found) while that happens.
+  part=
+  for _ in $(seq 1 10); do
+    udevadm settle
+    part=$(lsblk -nrpo PATH,LABEL "$dev" 2>/dev/null | awk '$2 == "CIDATA" {print $1; exit}') || true
+    [[ -n $part ]] && break
+    sleep 1
+  done
   [[ -n $part ]] || die "no CIDATA partition on $dev after writing"
   mnt=$(mktemp -d)
   trap 'umount "$mnt" 2>/dev/null; rmdir "$mnt"' EXIT
