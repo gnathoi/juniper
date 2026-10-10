@@ -425,6 +425,89 @@ git commit -m "build: pin the desktop's COPRs (keys, fences, lock file, just bum
 
 ---
 
+### Task 2b: Weekly COPR bump PR (Dependabot can't see COPRs)
+
+**Files:**
+- Create: `.github/workflows/bump-desktop.yml`
+- Modify: `CONTRIBUTING.md` (Releases section)
+
+**Interfaces:**
+- Consumes: `just bump-desktop` and `build_files/desktop-copr.txt` from Task 2.
+- Produces: a Saturday PR `build(deps): bump desktop COPR packages` from branch `bump/desktop-lock` when `desktop.lock` changes. Never auto-merged (`dependabot-automerge.yml` only handles Dependabot's own PRs).
+
+Why this shape: PRs opened with `GITHUB_TOKEN` don't trigger CI, and `main` requires `lint`. `workflow_dispatch` is the exception (it does run when started with `GITHUB_TOKEN`), so the workflow dispatches `build.yml` on its branch itself; that run's `lint`/`build` checks attach to the commit and satisfy the ruleset. Branch builds never publish. No deploy key: the `main` ruleset's bypass applies to every deploy key, so another one would be a way around PR review.
+
+- [ ] **Step 1: Write `.github/workflows/bump-desktop.yml`:**
+
+```yaml
+name: bump-desktop
+
+# Dependabot can't see the desktop's COPR packages (build_files/desktop.lock): bump them
+# weekly into a PR for a human to review. Third-party packages: never auto-merged.
+on:
+  schedule:
+    - cron: "0 6 * * 6"  # Saturdays, with Dependabot
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: bump-desktop
+
+jobs:
+  bump:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+      - name: Bump the lock file
+        run: just bump-desktop
+      - name: Open or update the PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet build_files/desktop.lock; then
+            echo "desktop.lock is current"
+            exit 0
+          fi
+          branch=bump/desktop-lock
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C "$branch"
+          git commit -qm "build(deps): bump desktop COPR packages" build_files/desktop.lock
+          git push -f origin "$branch"
+          body=$(printf 'Weekly `just bump-desktop`. Third-party COPR packages: review the diff, then merge.\n\n```diff\n%s\n```\n' "$(git diff HEAD~1 -- build_files/desktop.lock)")
+          if gh pr view "$branch" >/dev/null 2>&1; then
+            gh pr edit "$branch" --body "$body"
+          else
+            gh pr create --head "$branch" --title "build(deps): bump desktop COPR packages" --body "$body"
+          fi
+          # PRs from GITHUB_TOKEN don't trigger CI; a dispatch does. Branch builds never publish.
+          gh workflow run build.yml --ref "$branch"
+```
+
+- [ ] **Step 2: Document it** in `CONTRIBUTING.md` under "Releases", after the Dependabot bullet:
+
+```markdown
+- The desktop's COPR packages (`build_files/desktop.lock`) are outside Dependabot's reach:
+  `bump-desktop.yml` opens a PR every Saturday when they change. Review and merge by hand;
+  it's never auto-merged. Locally: `just bump-desktop`.
+```
+
+- [ ] **Step 3: Lint** (`pre-commit run --all-files`: actionlint and yamllint check the workflow), commit, push.
+
+```bash
+git add .github/workflows/bump-desktop.yml CONTRIBUTING.md
+git commit -m "ci: weekly PR bumping the desktop's COPR packages"
+```
+
+- [ ] **Step 4 (after the PR merges to main):** run it once: `gh workflow run bump-desktop.yml`; expect "desktop.lock is current" or a PR with a green build. Workflows only become dispatchable once they're on the default branch.
+
+---
+
 ### Task 3: Session — greetd auto-start, lock first, niri defaults
 
 **Files:**
@@ -1266,6 +1349,6 @@ Not code until the hardware run passes. Needs the micro-HDMI cable. Before publi
 
 ## Self-review notes
 
-- Spec coverage: layering (T1), COPR option 1 (T2), GPU/boot settings (T1), session + lock first + niri config + idle lock (T3), apps (T4), passwords via flash (T5) and switch (T7), reboot window (T6), health hook (T8), README/issue form/changelog deliverables (T9), publishing + disk image after hardware (T10), hardware test plan (T10).
+- Spec coverage: layering (T1), COPR option 1 (T2) and its weekly bump PR (T2b), GPU/boot settings (T1), session + lock first + niri config + idle lock (T3), apps (T4), passwords via flash (T5) and switch (T7), reboot window (T6), health hook (T8), README/issue form/changelog deliverables (T9), publishing + disk image after hardware (T10), hardware test plan (T10).
 - Spec items deliberately left for hardware: nothing visible before swaylock; greetd SELinux; niri include merging (validated syntactically in T3, behaviour on hardware); keyring unlock; waybar Juniper module (spec "Session" bullet) is **not** in this plan: add it after the first hardware run if wanted (YAGNI until the base desktop works).
 - Names used across tasks: `greetd-config`, `desktop-lock-first`, `desktop-idle-lock`, `flatpak-setup`, `desktop-idle`, `switch-image`; env `JUNIPER_GREETD_CONFIG`, `JUNIPER_LOCK_FLAG`, `JUNIPER_AUTOLOGIN_UID`, `JUNIPER_STATE_DIR`, `JUNIPER_NOW`, `JUNIPER_DEFER_CAP_DAYS`, `JUNIPER_HEALTH_D`, `JUNIPER_APPLY_UPDATE`, `JUNIPER_PASSWORD_HASH`.
