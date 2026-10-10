@@ -166,6 +166,14 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
     echo "COPR repo left in the image"
     exit 1
   fi
+  # Every COPR package is exactly the version in the lock file.
+  test -s /usr/share/juniper/desktop.lock
+  while read -r nvr; do
+    rpm -q "$nvr" >/dev/null || {
+      echo "not the locked version: $nvr"
+      exit 1
+    }
+  done </usr/share/juniper/desktop.lock
   cycles=$(systemd-analyze verify graphical.target cloud-init.target 2>&1 | grep 'ordering cycle' || true)
   [[ -z $cycles ]] || {
     echo "$cycles"

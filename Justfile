@@ -60,6 +60,26 @@ bump-tools:
       -e "s|# v[0-9.]+, pinned: no auto-updates|# $v, pinned: no auto-updates|" "$f"
     git diff --stat disk/build-raw.sh Justfile "$f"
 
+# Pin the desktop's COPR packages to their newest builds (build_files/desktop.lock)
+bump-desktop:
+    #!/usr/bin/bash
+    set -euo pipefail
+    podman run --rm -v ./build_files:/b:ro,z quay.io/almalinuxorg/almalinux:10 bash -c '
+      set -euo pipefail
+      pkgs=()
+      while read -r proj list; do
+        [[ -z $proj || $proj == "#"* ]] && continue
+        id=${proj/\//-}
+        printf "[%s]\nname=%s\nbaseurl=https://download.copr.fedorainfracloud.org/results/%s/epel-10-\$basearch/\ngpgcheck=1\ngpgkey=file:///b/copr-keys/%s.gpg\nenabled=1\n" \
+          "$id" "$proj" "$proj" "$id" >"/etc/yum.repos.d/$id.repo"
+        read -ra more <<<"$list"
+        pkgs+=("${more[@]}")
+      done </b/desktop-copr.txt
+      dnf -q --forcearch=aarch64 --disablerepo="*" --enablerepo="yalter-niri,yselkowitz-*" \
+        repoquery --latest-limit 1 --qf "%{name}-%{evr}\n" "${pkgs[@]}"
+    ' | sed 's/-0:/-/' | sort -u >build_files/desktop.lock
+    git diff --stat build_files/desktop.lock
+
 # Rechunk :build into :latest and :{{ version }} (rootful podman storage)
 rechunk:
     #!/usr/bin/bash

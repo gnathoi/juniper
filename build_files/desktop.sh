@@ -2,35 +2,35 @@
 # Desktop layer on top of juniper (Containerfile stage "desktop"): niri Wayland session.
 set -xeuo pipefail
 
-# --- repositories: COPRs for what EPEL 10 lacks. Fetched only for this build and removed
-# afterwards, so devices never pull from them. Each COPR may only supply the packages it is
-# here for (includepkgs), so a compromised or careless COPR cannot replace system packages.
-copr() { # copr OWNER/PROJECT PACKAGE...
-  local f=/etc/yum.repos.d/juniper-copr-${1/\//-}.repo
-  curl -fsSLo "$f" "https://copr.fedorainfracloud.org/coprs/$1/repo/epel-10/x.repo"
-  sed -i -e 's/^skip_if_unavailable=True/skip_if_unavailable=False/' "$f"
-  shift
-  echo "includepkgs=$*" >>"$f"
-}
-copr yalter/niri niri
-copr yselkowitz/wlroots-epel xwayland-satellite foot foot-terminfo waybar fuzzel swaylock \
-  swayidle swaybg SwayNotificationCenter brightnessctl \
-  playerctl playerctl-libs nanosvg fcft gtk-layer-shell \
-  gtk4-layer-shell libmpdclient granite jsoncpp libsfdo # their dependencies from the same COPR
-copr yselkowitz/cosmic-epel greetd greetd-selinux
+# --- repositories: COPRs for what EPEL 10 lacks, used for this build only and removed after.
+# Pinned: our copy of each project's key (build_files/copr-keys), includepkgs fences so a COPR
+# can't replace system packages (build_files/desktop-copr.txt), and exact versions from
+# build_files/desktop.lock (just bump-desktop).
+while read -r proj pkgs; do
+  [[ -z $proj || $proj == "#"* ]] && continue
+  id=${proj/\//-}
+  cat >"/etc/yum.repos.d/juniper-copr-$id.repo" <<EOF
+[juniper-copr-$id]
+name=COPR $proj (build-time only)
+baseurl=https://download.copr.fedorainfracloud.org/results/$proj/epel-10-\$basearch/
+gpgcheck=1
+gpgkey=file:///ctx/build_files/copr-keys/$id.gpg
+skip_if_unavailable=False
+includepkgs=$pkgs
+EOF
+done </ctx/build_files/desktop-copr.txt
 
 # --- packages ---
-dnf -y install --exclude=fzf \
-  niri xwayland-satellite xorg-x11-server-Xwayland \
-  greetd greetd-selinux \
-  foot waybar fuzzel swaylock swayidle swaybg SwayNotificationCenter brightnessctl wl-clipboard \
-  libnotify flatpak \
+mapfile -t locked </ctx/build_files/desktop.lock
+dnf -y install --exclude=fzf "${locked[@]}" \
+  xorg-x11-server-Xwayland wl-clipboard libnotify flatpak \
   xdg-desktop-portal-gnome xdg-desktop-portal-gtk gnome-keyring \
   pipewire wireplumber pipewire-pulseaudio \
   mesa-dri-drivers mesa-vulkan-drivers \
   google-noto-sans-fonts google-noto-sans-mono-fonts google-noto-emoji-fonts
 dnf clean all
 rm -f /etc/yum.repos.d/juniper-copr-*.repo
+install -D -m 0644 /ctx/build_files/desktop.lock /usr/share/juniper/desktop.lock
 
 cp -a /ctx/system_files_desktop/. /
 
