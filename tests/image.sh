@@ -10,6 +10,11 @@ set -euo pipefail
   exit 1
 }
 grep -q '^PRETTY_NAME="Juniper' /usr/lib/os-release
+grep -qx 'NAME="Juniper"' /usr/lib/os-release
+grep -qx 'ID="almalinux"' /usr/lib/os-release # dnf, cloud-init and bootc key off ID
+test -s /usr/share/licenses/juniper/LICENSE
+test -s /usr/share/licenses/juniper/THIRD_PARTY.md
+grep -q 'BSD 3-Clause' /usr/share/licenses/tailscale/LICENSE
 
 need_cmds() {
   for cmd; do
@@ -55,6 +60,12 @@ cycles=$(systemd-analyze verify multi-user.target cloud-init.target 2>&1 | grep 
   echo "$cycles"
   exit 1
 }
+need_cmds rpi-eeprom-update lspci
+# rpi-eeprom ships only the tools; the bootloader images are in rpi-eeprom-firmware.
+ls /usr/lib/firmware/raspberrypi/bootloader-2712/default/pieeprom-*.bin >/dev/null
+ls /usr/lib/firmware/raspberrypi/bootloader-2711/default/pieeprom-*.bin >/dev/null
+grep -qx 'BOOTFS=/boot/efi' /etc/default/rpi-eeprom-update
+for kdir in /usr/lib/modules/*/; do grep -qx 'disable_splash=1' "$kdir/rpi-config.txt"; done
 need_enabled juniper-wifi-import.service juniper-firstboot-retry.service juniper-emergency-fallback.service
 grep -qx 'prefer_fqdn_over_hostname: false' /etc/cloud/cloud.cfg.d/10-juniper-hostname.cfg
 test -f /usr/share/juniper/cidata/user-data
@@ -62,7 +73,7 @@ test -f /usr/share/juniper/cidata/user-data
 firewall-offline-cmd --get-default-zone | grep -qx public
 
 recipes=$(ujust --summary | tr ' ' '\n')
-for r in update switch update-schedule lan-ssh tailscale-up tailscale-ssh toggle-motd enable-metrics pi-status; do
+for r in update switch update-schedule lan-ssh tailscale-up tailscale-ssh toggle-motd enable-metrics pi-status pi-eeprom; do
   grep -qx "$r" <<<"$recipes" || {
     echo "missing recipe: $r"
     exit 1
@@ -79,12 +90,16 @@ grep -q 'use-sigstore-attachments: true' /etc/containers/registries.d/juniper.ya
 
 if [[ $IMAGE_ID == juniper ]]; then
   # --- full image only ---
-  need_cmds distrobox fastfetch btop rg fzf nvim tmux git zstd
+  need_cmds distrobox fastfetch git zstd
   need_enabled brew-setup.service brew-update.timer brew-upgrade.timer
+  # CLI tools come from Homebrew at first login, not the image.
+  grep -qx 'brew "zellij"' /usr/share/juniper/Brewfile
+  [[ $(systemctl --global is-enabled juniper-brew-tools.service) == enabled ]]
   test -s /usr/share/homebrew.tar.zst
   test -f /etc/profile.d/brew.sh
+  grep -q 'Apache License' /usr/share/licenses/ublue-os-brew/LICENSE
   just --justfile /usr/share/juniper/just/dev.just --summary | tr ' ' '\n' | grep -qx devbox
-  for r in devbox install-podlet; do
+  for r in devbox install-podlet brew-tools; do
     grep -qx "$r" <<<"$recipes" || {
       echo "missing recipe: $r"
       exit 1

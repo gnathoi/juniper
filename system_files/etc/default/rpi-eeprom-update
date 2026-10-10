@@ -1,0 +1,3 @@
+# rpi-eeprom-update (ujust pi-eeprom): Juniper's firmware partition is mounted at /boot/efi.
+BOOTFS=/boot/efi
+FIRMWARE_RELEASE_STATUS=default

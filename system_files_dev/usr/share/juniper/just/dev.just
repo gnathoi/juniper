@@ -16,3 +16,7 @@ install-podlet:
     mkdir -p ~/.local/bin
     tar -xJf "$tmp/p.tar.xz" -C ~/.local/bin --strip-components=1 "$asset/podlet"
     ~/.local/bin/podlet --version
+
+# Install (or re-install) Juniper's default CLI tools from /usr/share/juniper/Brewfile
+brew-tools:
+    /usr/libexec/juniper/brew-tools

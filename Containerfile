@@ -5,6 +5,7 @@ FROM scratch AS ctx
 COPY build_files /build_files
 COPY system_files /system_files
 COPY system_files_dev /system_files_dev
+COPY LICENSE THIRD_PARTY.md /
 
 # Homebrew tarball + setup/update units (Bluefin's), pinned by digest. CI checks ublue's
 # cosign signature (`just verify-brew`); Dependabot ignores it; bump with `just bump-brew`.

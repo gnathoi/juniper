@@ -3,12 +3,15 @@
 # Homebrew's tarball and units were already copied from the pinned ublue-os/brew image.
 set -xeuo pipefail
 
-dnf -y install distrobox fastfetch btop ripgrep fzf neovim tmux git-core zstd
+# CLI tools (zellij, neovim, btop, ripgrep, fzf) come from Homebrew instead: Brewfile in
+# /usr/share/juniper, installed at first login, upgraded by brew-upgrade.timer.
+dnf -y install distrobox fastfetch git-core zstd
 dnf clean all
 
 cp -a /ctx/system_files_dev/. /
 
 systemctl preset brew-setup.service brew-update.timer brew-upgrade.timer
+systemctl --global enable juniper-brew-tools.service
 
 # --- layers: rpm-ostree's chunker gives each user.component its own layer, so a change to
 # Juniper's files does not re-send the initramfs and the other unpackaged content.

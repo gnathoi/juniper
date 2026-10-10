@@ -448,6 +448,34 @@ test_cidata_device_ambiguous_or_missing() {
   check "cidata: none on the boot disk -> refuse" fails "$LIBEXEC/cidata-device"
 }
 
+brew_env() {
+  export JUNIPER_BREW_PREFIX=$T/linuxbrew JUNIPER_BREWFILE=$T/Brewfile JUNIPER_BREW_STATE=$T/brew-state
+  mkdir -p "$JUNIPER_BREW_PREFIX/bin"
+  echo 'brew "zellij"' >"$JUNIPER_BREWFILE"
+  # shellcheck disable=SC2016 # expands inside the stub
+  printf '#!/usr/bin/env bash\necho "brew $*" >>"$CALLS"\n' >"$JUNIPER_BREW_PREFIX/bin/brew"
+  chmod +x "$JUNIPER_BREW_PREFIX/bin/brew"
+}
+
+test_brew_tools_installs_brewfile_once() {
+  brew_env
+  "$ROOT/system_files_dev/usr/libexec/juniper/brew-tools" >/dev/null
+  check "brew-tools: brew bundle with the shipped Brewfile" called "brew bundle --file=$JUNIPER_BREWFILE"
+  check "brew-tools: marked done" test -e "$JUNIPER_BREW_STATE/brew-tools.done"
+  : >"$CALLS"
+  "$ROOT/system_files_dev/usr/libexec/juniper/brew-tools" --first-login >/dev/null
+  check "brew-tools: first-login run skipped once done" not_called "brew bundle"
+  "$ROOT/system_files_dev/usr/libexec/juniper/brew-tools" >/dev/null
+  check "brew-tools: explicit run (ujust brew-tools) always runs" called "brew bundle"
+}
+
+test_brew_tools_skips_without_writable_brew() {
+  brew_env
+  rm -rf "$JUNIPER_BREW_PREFIX"
+  check "brew-tools: no Homebrew -> skip, not fail" "$ROOT/system_files_dev/usr/libexec/juniper/brew-tools" --first-login
+  check "brew-tools: no Homebrew -> not marked done" test ! -e "$JUNIPER_BREW_STATE/brew-tools.done"
+}
+
 test_render_os_list() {
   printf 'rawbytes' >"$T/j.raw"
   printf 'xz' >"$T/j.raw.xz"

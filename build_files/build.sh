@@ -20,7 +20,7 @@ dnf -y upgrade --exclude='raspberrypi2-kernel*' --exclude='raspberrypi2-firmware
 dnf -y install \
   podman firewalld cloud-init cloud-utils-growpart zram-generator \
   jq rsync NetworkManager-wifi avahi just \
-  tailscale
+  tailscale rpi-eeprom rpi-eeprom-firmware
 dnf clean all
 
 # cloud-init: /usr is read-only on bootc, so grow the filesystem holding /var instead.
@@ -31,6 +31,14 @@ rm -f "$(dirname "$resizefs")"/__pycache__/cc_resizefs.*.pyc
 
 # --- files (after packages so RPM payloads cannot overwrite what Juniper ships) ---
 cp -a /ctx/system_files/. /
+install -D -m 0644 -t /usr/share/licenses/juniper /ctx/LICENSE /ctx/THIRD_PARTY.md
+
+# Headless boot settings, per kernel: rpi-bootc-bootloader copies rpi-config.txt into each
+# deployment's boot entry and includes it from the default and tryboot configs, so a bad
+# setting falls back with the rest of the update.
+for kdir in /usr/lib/modules/*/; do
+  install -m 0644 /usr/share/juniper/rpi-config.txt "$kdir/rpi-config.txt"
+done
 
 # --- signature policy: every image under our namespace (juniper, juniper-minimal) must carry
 # our cosign signature. Scoped to OS images only: a global reject would also stop podman
@@ -54,8 +62,11 @@ case $IMAGE_NAME in
     exit 1
     ;;
 esac
-sed -i '/^\(PRETTY_NAME\|VARIANT\|VARIANT_ID\|IMAGE_ID\|IMAGE_VERSION\)=/d' /usr/lib/os-release
+# NAME is ours (a modified build isn't "AlmaLinux"); ID, VERSION_ID and ID_LIKE stay, as dnf,
+# cloud-init and bootc key off them.
+sed -i '/^\(NAME\|PRETTY_NAME\|VARIANT\|VARIANT_ID\|IMAGE_ID\|IMAGE_VERSION\)=/d' /usr/lib/os-release
 cat >>/usr/lib/os-release <<EOT
+NAME="Juniper"
 PRETTY_NAME="${pretty} ${IMAGE_VERSION}"
 VARIANT="${pretty}"
 VARIANT_ID=${IMAGE_NAME}
@@ -82,6 +93,7 @@ for p in sys.stdin.read().split("\0"):
 ' "$1"; }
 # regular files only: Linux rejects user.* xattrs on symlinks
 find /ctx/system_files -type f -printf '/%P\0' | tag juniper
+printf '%s\0' /usr/share/licenses/juniper/LICENSE /usr/share/licenses/juniper/THIRD_PARTY.md | tag juniper
 printf '%s\0' /usr/lib/os-release /etc/containers/policy.json /etc/containers/registries.d/juniper.yaml \
   /etc/yum.repos.d/tailscale.repo | tag juniper
 

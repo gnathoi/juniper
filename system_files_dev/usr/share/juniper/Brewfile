@@ -1,0 +1,8 @@
+# Juniper's default CLI tools, installed with Homebrew at first login (juniper-brew-tools.service)
+# and kept current by brew-upgrade.timer. Add your own with `brew install`; re-run this file
+# with `ujust brew-tools`.
+brew "zellij"
+brew "neovim"
+brew "btop"
+brew "ripgrep"
+brew "fzf"
