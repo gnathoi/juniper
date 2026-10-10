@@ -86,4 +86,4 @@ printf '%s\0' /usr/lib/os-release /etc/containers/policy.json /etc/containers/re
   /etc/yum.repos.d/tailscale.repo | tag juniper
 
 # --- cleanup: package scriptlets leave runtime-only content that bootc lint rejects ---
-rm -rf /run/cloud-init
+/ctx/build_files/clean-runtime-dirs.sh
