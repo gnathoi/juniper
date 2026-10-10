@@ -1,0 +1,28 @@
+# Juniper flash config for `just flash DEVICE CONFIG`. Copy it OUTSIDE the repo, e.g.
+#   install -Dm600 examples/flash.yaml ~/.config/juniper/flash.yaml
+# then fill it in. A filled-in copy holds secrets (Tailscale key, Wi-Fi password): keep it
+# chmod 600. Applied once, on the Pi's first boot, then wiped from the card.
+
+# juniper (dev tools, Homebrew) or juniper-minimal (appliance base). Default: juniper.
+image: juniper
+
+hostname: juniper
+user: me                        # your login; password login is off, so SSH keys are required
+timezone: Europe/London         # optional; default UTC
+
+ssh_keys:
+  - ssh-ed25519 AAAA...replace-me me@laptop
+  # Your GitHub keys: gh api user/keys --jq '.[] | "\(.key) \(.title)"'
+
+# A one-off, pre-approved, TAGGED auth key (https://login.tailscale.com/admin/settings/keys).
+# Tagged devices don't expire, so the firewall lockdown can't lock you out. The key turns on
+# Tailscale SSH: your tailnet policy needs an "ssh" rule allowing you into that tag.
+# Leave both out to log in later with `ujust tailscale-up` (over the LAN).
+tailscale_authkey: tskey-auth-replace-me
+# tailscale_authkey_file: ~/.config/juniper/tskey   # or read it from a file
+
+# Optional; leave out for Ethernet only.
+wifi:
+  ssid: My Network
+  password: replace-me
+  country: GB                   # two-letter regulatory domain

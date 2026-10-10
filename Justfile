@@ -63,6 +63,14 @@ rechunk:
 test-image image=(image_ref + ":build"):
     podman run --rm --pull=never -v ./tests:/tests:ro,z {{ image }} /tests/image.sh
 
+# Flash a signed release (latest, a tag, or a local .raw.xz) to an SD card/USB disk with
+# first-boot settings from config (template: examples/flash.yaml)
+flash device config source="latest":
+    #!/usr/bin/bash
+    set -euo pipefail
+    cd {{ quote(invocation_directory()) }}
+    {{ quote(justfile_directory()) }}/disk/flash.sh {{ quote(device) }} {{ quote(config) }} {{ quote(source) }}
+
 # Build a flashable GPT .raw from a pushed image ref (root: loop devices)
 build-raw ref out="juniper.raw":
     disk/build-raw.sh {{ ref }} {{ out }}

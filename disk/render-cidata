@@ -1,0 +1,118 @@
+#!/usr/bin/python3
+"""Render a flash config (see examples/flash.yaml) into the CIDATA files a Juniper image reads
+on first boot: user-data and, with Wi-Fi, network-config (netplan v2, as Raspberry Pi Imager
+writes it; the image's juniper-wifi-import applies it). Both are 0600: they hold secrets.
+  render-cidata CONFIG OUTDIR
+"""
+
+import os
+import re
+import sys
+
+import yaml
+
+KEYS = {"image", "hostname", "user", "timezone", "ssh_keys", "tailscale_authkey",
+        "tailscale_authkey_file", "wifi"}
+WIFI_KEYS = {"ssid", "password", "country"}
+KEY_PREFIXES = ("ssh-", "ecdsa-", "sk-ssh-", "sk-ecdsa-")
+
+
+def fail(msg):
+    sys.exit(f"render-cidata: {msg}")
+
+
+def load(path):
+    with open(path) as f:
+        cfg = yaml.safe_load(f) or {}
+    if not isinstance(cfg, dict):
+        fail("config must be a YAML mapping")
+    unknown = set(cfg) - KEYS
+    if unknown:
+        fail(f"unknown keys: {', '.join(sorted(unknown))}")
+    if cfg.get("image", "juniper") not in ("juniper", "juniper-minimal"):
+        fail("image must be juniper or juniper-minimal")
+
+    user = cfg.get("user")
+    if not isinstance(user, str) or not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", user):
+        fail("user: a lowercase login name is required")
+    host = str(cfg.get("hostname", "juniper"))
+    if not re.fullmatch(r"[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?", host):
+        fail("hostname: letters, digits and inner hyphens only")
+    keys = cfg.get("ssh_keys")
+    if not keys or not isinstance(keys, list):
+        fail("ssh_keys: at least one public key is required (password login is off)")
+    for k in keys:
+        if not str(k).startswith(KEY_PREFIXES):
+            fail(f"ssh_keys: not an OpenSSH public key: {str(k)[:20]}...")
+
+    ts = cfg.get("tailscale_authkey")
+    if "tailscale_authkey_file" in cfg:
+        kf = os.path.join(os.path.dirname(os.path.abspath(path)),
+                          os.path.expanduser(cfg["tailscale_authkey_file"]))
+        with open(kf) as f:
+            ts = f.read().strip()
+    if ts is not None and not str(ts).startswith("tskey-auth-"):
+        fail("tailscale_authkey: expected a tskey-auth-... auth key")
+
+    wifi = cfg.get("wifi")
+    if wifi is not None:
+        if not isinstance(wifi, dict) or not wifi.get("ssid"):
+            fail("wifi: ssid is required")
+        unknown = set(wifi) - WIFI_KEYS
+        if unknown:
+            fail(f"wifi: unknown keys: {', '.join(sorted(unknown))}")
+    return host, user, [str(k) for k in keys], cfg.get("timezone"), ts, wifi
+
+
+def write_private(path, data):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(data)
+    os.chmod(path, 0o600)
+
+
+def dump(data):
+    return yaml.safe_dump(data, sort_keys=False, default_flow_style=False, allow_unicode=True,
+                          width=4096)
+
+
+def main():
+    if len(sys.argv) != 3:
+        fail("usage: render-cidata CONFIG OUTDIR")
+    config, out = sys.argv[1:]
+    if os.stat(config).st_mode & 0o077:
+        print(f"render-cidata: warning: {config} is readable by others; chmod 600 it",
+              file=sys.stderr)
+    host, user, keys, tz, ts, wifi = load(config)
+
+    ud = {
+        "hostname": host,
+        "users": [{
+            "name": user,
+            "groups": ["wheel"],
+            "sudo": ["ALL=(ALL) NOPASSWD:ALL"],
+            "ssh_authorized_keys": keys,
+        }],
+    }
+    if tz:
+        ud["timezone"] = str(tz)
+    if ts:
+        ud["write_files"] = [{"path": "/etc/tailscale/authkey", "permissions": "0600",
+                              "content": str(ts)}]
+
+    os.makedirs(out, mode=0o700, exist_ok=True)
+    write_private(os.path.join(out, "user-data"), "#cloud-config\n" + dump(ud))
+    nc_path = os.path.join(out, "network-config")
+    if wifi:
+        ap = {"password": str(wifi["password"])} if wifi.get("password") is not None else {}
+        wlan = {"dhcp4": True, "optional": True}
+        if wifi.get("country"):
+            wlan["regulatory-domain"] = str(wifi["country"])
+        wlan["access-points"] = {str(wifi["ssid"]): ap}
+        write_private(nc_path, dump({"network": {"version": 2, "wifis": {"wlan0": wlan}}}))
+    elif os.path.exists(nc_path):
+        os.remove(nc_path)
+
+
+if __name__ == "__main__":
+    main()

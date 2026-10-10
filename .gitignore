@@ -1,3 +1,8 @@
 *.raw
 *.raw.xz
 /output/
+
+# Filled-in flash configs hold secrets (Tailscale key, Wi-Fi password)
+flash.yaml
+*.flash.yaml
+!/examples/flash.yaml

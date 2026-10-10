@@ -10,6 +10,12 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+### Added
+
+- `just flash DEVICE CONFIG`: flash a signed release to an SD card or USB disk with
+  first-boot settings (user, SSH keys, Tailscale key, Wi-Fi) from a YAML file
+  (`examples/flash.yaml`).
+
 ## build-20261010 (2026-10-10)
 
 ### Fixed

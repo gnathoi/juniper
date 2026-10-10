@@ -1,8 +1,9 @@
 Juniper for Raspberry Pi 4/5
 ============================
 
-Easiest: flash with Raspberry Pi Imager using the Juniper OS list, which fills in your
-user, SSH key, Wi-Fi and Tailscale key.
+Easiest (Linux): flash with `just flash DEVICE CONFIG` from the Juniper repo
+(https://github.com/gnathoi/juniper), which writes your user, SSH keys, Wi-Fi and
+Tailscale key here for you.
 
 By hand: edit user-data on this partition (see the comments inside). For Wi-Fi, create a
 file named network-config here:
