@@ -10,6 +10,24 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+### Added
+
+- `ujust pi-eeprom` shows whether a newer Raspberry Pi bootloader EEPROM is available;
+  `ujust pi-eeprom apply` stages it for the next reboot (manual only: EEPROM writes have
+  no tryboot fallback).
+- License texts for Juniper, Tailscale and ublue-os/brew under `/usr/share/licenses`, and
+  a source-code section in THIRD_PARTY.md.
+
+### Changed
+
+- `juniper`: zellij, neovim, btop, ripgrep and fzf now come from Homebrew
+  (`/usr/share/juniper/Brewfile`), installed at your first login and kept current by
+  `brew-upgrade.timer`; `ujust brew-tools` re-runs it. tmux is no longer included
+  (`brew install tmux` if you want it).
+- Headless boot settings (no splash, no camera/display auto-detect) in each boot entry's
+  `rpi-config.txt`, so they're covered by tryboot.
+- `os-release` `NAME` is `Juniper` (`ID` stays `almalinux`).
+
 ### Fixed
 
 - An update that drops into emergency mode (e.g. a mount that fails) now reboots after 60 s

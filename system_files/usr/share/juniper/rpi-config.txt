@@ -1,0 +1,4 @@
+# Juniper: headless defaults (included from this deployment's boot entry)
+disable_splash=1
+camera_auto_detect=0
+display_auto_detect=0

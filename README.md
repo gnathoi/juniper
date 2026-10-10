@@ -19,7 +19,7 @@ A Pi 5 running `juniper`. `juniper-minimal` shows just the status block.
 | `ujust` core: update, update-schedule, lan-ssh, tailscale-*, pi-status, enable-metrics | yes | yes |
 | Login status (Tailscale, update state) | yes | yes |
 | Juniper logo + system summary at login | no | yes |
-| Homebrew, distrobox, git, tmux, neovim, btop, ripgrep, fzf | no | yes |
+| Homebrew, distrobox, git; zellij, neovim, btop, ripgrep, fzf via a Brewfile | no | yes |
 | `ujust devbox`, `ujust install-podlet` | no | yes |
 
 ## Images
@@ -129,4 +129,20 @@ with `ujust update-schedule`, or apply it now with `ujust update`.
 
 ## License
 
-Apache-2.0. See THIRD_PARTY.md for bundled components.
+Apache-2.0. See [THIRD_PARTY.md](THIRD_PARTY.md) for bundled components and where to get
+their source.
+
+Raspberry Pi is a trademark of Raspberry Pi Ltd. AlmaLinux is a trademark of the AlmaLinux
+OS Foundation. Juniper is an independent project, not affiliated with or endorsed by either.
+
+## Citing
+
+```bibtex
+@software{hey_juniper_2026,
+  author  = {Hey, Nathaniel},
+  title   = {Juniper: signed, self-updating bootc images for Raspberry Pi},
+  year    = {2026},
+  url     = {https://github.com/gnathoi/juniper},
+  license = {Apache-2.0}
+}
+```

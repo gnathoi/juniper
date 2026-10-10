@@ -1,0 +1,13 @@
+[Unit]
+Description=Install Juniper's default CLI tools with Homebrew (once per user)
+# brew-setup.service gives /home/linuxbrew to the first user only.
+ConditionPathIsDirectory=/home/linuxbrew/.linuxbrew
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/juniper/brew-tools --first-login
+# Downloads bottles; a failure (e.g. offline) isn't marked done, so the next login retries.
+TimeoutStartSec=30min
+
+[Install]
+WantedBy=default.target

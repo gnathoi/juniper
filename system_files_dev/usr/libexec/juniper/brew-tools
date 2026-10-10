@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Installs Juniper's default CLI tools with Homebrew (brew bundle on /usr/share/juniper/Brewfile),
+# so brew-upgrade.timer keeps them current instead of the weekly image. Runs once per user at
+# first login (juniper-brew-tools.service, --first-login) and on demand (ujust brew-tools).
+set -euo pipefail
+
+prefix=${JUNIPER_BREW_PREFIX:-/home/linuxbrew/.linuxbrew}
+brewfile=${JUNIPER_BREWFILE:-/usr/share/juniper/Brewfile}
+state=${JUNIPER_BREW_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/juniper}
+
+if [[ ${1:-} == --first-login && -e $state/brew-tools.done ]]; then
+  exit 0
+fi
+# brew-setup.service gives the prefix to the first user only; anyone else uses a distrobox.
+if [[ ! -x $prefix/bin/brew || ! -w $prefix ]]; then
+  echo "Homebrew isn't installed or isn't yours ($prefix); skipping." >&2
+  exit 0
+fi
+"$prefix/bin/brew" bundle --file="$brewfile"
+mkdir -p "$state"
+touch "$state/brew-tools.done"
