@@ -54,8 +54,7 @@ cosign verify --key system_files/usr/share/pki/containers/juniper.pub ghcr.io/gn
 
 | Hardware | Boot media | `juniper-minimal` | `juniper` |
 |---|---|---|---|
-| Raspberry Pi 5, 4 GB | microSD | ✅ tested 2026-10-10 | ✅ tested 2026-10-10 |
-| Raspberry Pi 5, 8/16 GB | microSD | untested | untested |
+| Raspberry Pi 5 | microSD | ✅ tested 2026-10-10 | ✅ tested 2026-10-10 |
 | Raspberry Pi 5 | USB or NVMe | untested | untested |
 | Raspberry Pi 4, 400 | microSD or USB | untested | untested |
 | Raspberry Pi 500, CM4, CM5 | any | untested | untested |
