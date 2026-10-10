@@ -1,4 +1,4 @@
-# Juniper — project status (2026-10-09, evening)
+# Juniper — project status (2026-10-10, evening)
 
 Start here when picking the project up on another machine.
 
@@ -6,69 +6,46 @@ Start here when picking the project up on another machine.
 
 | | What | Spec | Plan | State |
 |---|---|---|---|---|
-| A | Images (`juniper-minimal`, `juniper`), CI, release train | `specs/2026-10-09-juniper-image-design.md` | `plans/2026-10-09-juniper-image-core.md` | Tasks 1–10 done on `main`; images public + signed; first release `build-20261009` published and verified; Task 11 (Pi 5 hardware acceptance) pending |
-| B | Tailscale field in Raspberry Pi Imager (own-use fork, no upstream PR) | `specs/2026-10-09-imager-tailscale-design.md` | `plans/2026-10-09-imager-tailscale.md` | Fork `gnathoi/rpi-imager` created, branch `feat/tailscale-customisation` at upstream `8e7e0b6f`; pre-flight scan done and ruled; Task 0 (local build) started; no code yet. Resume from the plan's "Status and handoff" |
-| C | Encryption at rest (OTP-bound LUKS2 + recovery passphrase, Pi 4/5) | not written | not written | Needs a feasibility spike first (OTP burn is irreversible; LUKS root with rpi-bootc-bootloader/ostree unproven) |
+| A | Images (`juniper-minimal`, `juniper`), CI, releases | `specs/2026-10-09-juniper-image-design.md` | `plans/2026-10-09-juniper-image-core.md` | Done and hardened. Task 11 (Pi 5 hardware acceptance) passed except Step 7b (`juniper-minimal`); results in `docs/acceptance.md` |
+| B | Tailscale field in Raspberry Pi Imager (own-use fork) | `specs/2026-10-09-imager-tailscale-design.md` | `plans/2026-10-09-imager-tailscale.md` | **Parked** (2026-10-10): `just flash` covers it. Read the plan's "Parked" note before resuming |
+| C | Encryption at rest (OTP-bound LUKS2 + recovery passphrase) | not written | not written | Needs a spike. Known: rpi-bootc-bootloader finds the FAT partition by rewriting the root device name, so set `MNTDEV` under LUKS; the initramfs keeps `crypt`; without Pi signed boot an OTP key protects a stolen card, not a stolen Pi |
+| D | **Experimental `juniper-desktop` (niri)** | not written | not written | **Next, once A's remaining items are done** (owner decision 2026-10-10). Research below |
 
-## Tomorrow morning (2026-10-10), in order
+## Next, in order
 
-1. **CI on `main` is red.** The push build after merging #18 (run 37999745485) failed in `build (juniper)` → `Build and rechunk`. The cause was `502 Bad Gateway` while pulling a blob, a registry flake and not the changelog change. `build (juniper-minimal)` passed. Fix the follow-up below ("Retry the rechunk step's pull"): wrap the pull in the same 3-attempt retry the Push step uses. Then re-run (`gh run rerun 37999745485 --failed`) to get `main` green.
-2. **Check the changelog release test.** Dispatch run 37999760508 (`build_raw=true`, started 22:32 UTC) had both images built and the disk jobs queued at 22:45 UTC. Check: `gh run view 37999760508`. Then check that:
-   - release `build-20261009`'s notes contain the changelog entry plus "What's Changed";
-   - `main` has a `docs: changelog for build-20261009` commit by github-actions[bot], with Unreleased empty and the entry added to the existing `build-20261009` section (a same-day release);
-   - that push didn't start a `build` run.
-   If the stamp step failed, its log says why. A rerun of the release job is safe: it does nothing if the changelog is already stamped.
-3. **Imager fork (sub-project B):** finish Task 0, then Tasks 1–8 and Task 10. See the plan's "Status and handoff".
-4. **Flash the Pi 5:** use the plan's "Flashing a real card while the Juniper repo is private" (local `os-list.json` served on 127.0.0.1) with the fork's Imager, then work through Task 11's acceptance checks below. The plain `dd` route below still works if the Imager isn't ready.
+1. **Task 11 Step 7b:** flash `juniper-minimal` with `just flash /dev/mmcblk0 ~/.config/juniper/flash-minimal.yaml` (reusable, 1-day tagged key), repeat Steps 2–3, check no `distrobox`/`brew`/`devbox`. This also exercises `just flash`'s root-only CIDATA mount and disk-identity check.
+2. Merge #35 (initramfs trim) after its CI; release; update the Pi; record in `docs/acceptance.md`.
+3. Delete the repo-level `SIGNING_SECRET` and `RELEASE_DEPLOY_KEY` (the `release` environment has its own since 2026-10-10 and the first release under it succeeded): `gh secret delete SIGNING_SECRET --repo gnathoi/juniper` and the same for `RELEASE_DEPLOY_KEY`.
+4. Housekeeping: `gh auth refresh -h github.com -r write:packages,delete:packages` if not done; remove the `claude-probe` machine from the tailnet; `podman rm -f ts-probe`.
+5. Sub-project D (below).
 
-## A: what is left
+## What happened on 2026-10-10
 
-1. **Task 11 on the Pi 5** (plan, Task 11). Flash the first release:
+- First boot on hardware failed on `build-20261009`: an ordering cycle (`After=cloud-final`, which runs after `multi-user.target`) dropped the Tailscale join, the CIDATA scrub and the health check; Wi-Fi from `network-config` was ignored (cloud-init renders `wifis:` only via netplan); the hostname came from the router's DNS. Fixed in #22 with a CI cycle check (`systemd-analyze verify multi-user.target cloud-init.target`, grep, since verify exits 0).
+- `just flash` (#24, #29): YAML config → CIDATA, signed download (curl, repo is public), target checks, y/N, `run0` (via `/usr/bin/bash`: SELinux denies run0's service exec of `user_home_t` scripts).
+- Codex (gpt-6.1-sol) security review; fixes in #26 (SHA-pinned actions + lint hook, digest-pinned tool images, `just bump-tools`), #30 (firstboot retry, fork-PR lint, auto-merge bound to tested SHA, flash mount, pinned/confined node_exporter, README switch by digest, `dnf upgrade` for errata), #32 (emergency fallback, stronger health check, CIDATA from the boot disk), #33 (signing in a `release` environment job; `:latest` only ever names a signed digest; disks from their run's digest; serialized publishing; kernel-update warning).
+- Repo public; ruleset "main: pull requests only" (squash, `lint` required, no force-push/deletion; the only bypass is deploy keys, i.e. the release job's `RELEASE_DEPLOY_KEY`); ruleset "v* tags: admins only"; private vulnerability reporting on; CONTRIBUTING.md.
+- #34: `rpi-eeprom` + `rpi-eeprom-firmware`, `ujust pi-eeprom [status|apply]` (the Pi 5 reports 2025-11-05 → 2026-05-11 available; not applied), headless `rpi-config.txt` per boot entry, CLI tools via Brewfile (zellij, neovim, btop, ripgrep, fzf; tmux dropped), license texts + THIRD_PARTY.md source section, `NAME="Juniper"`.
+- On the Pi 5: unsigned image rejected (`podman pull` and `bootc switch`), update via tryboot kept, broken update fell back, emergency-mode update fell back, LAN lockdown and `lan-ssh` work. See `docs/acceptance.md`.
 
-   ```
-   gh release download build-20261009 --repo gnathoi/juniper -p 'juniper-20261009.raw.xz*'
-   cosign verify-blob --key system_files/usr/share/pki/containers/juniper.pub \
-     --bundle juniper-20261009.raw.xz.bundle juniper-20261009.raw.xz
-   xzcat juniper-20261009.raw.xz | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
-   ```
+## Sub-project D research (2026-10-10, subagent)
 
-   (8.6 GB expanded; any 16 GB+ card.) Then edit `user-data` (user, SSH key, tagged Tailscale key, timezone) and add `network-config` for Wi-Fi on the small FAT partition (`README.txt` there). Plus the final review's extra checks:
-   - `bootc upgrade` works after first boot, and an unsigned tag under `ghcr.io/gnathoi` is rejected;
-   - a deliberately broken update on a test ref falls back via tryboot;
-   - power cut during first boot;
-   - lockdown held past a DHCP lease renewal; IPv6 behaviour under the `drop` zone;
-   - `sudo reboot` with a staged update keeps the current image (TRYBOOT=1); `ujust switch` juniper ↔ juniper-minimal applies it;
-   - Tailscale's nftables rules coexist with firewalld (`sudo nft list ruleset`);
-   - the login banner/logo looks right (redraw `system_files_dev/usr/share/juniper/logo.txt` if not; regenerate `docs/images/login.svg` with `docs/images/render-login.py`).
-2. Watch the live-only behaviour: first Saturday Dependabot run (auto-merge of a workflow-file bump may be refused for `GITHUB_TOKEN` — fallback: GitHub App token or merge by hand) and the first Monday 02:00 UTC train (its job summary shows the update size; expect the `juniper` layer to be ~0.3 MB and the Homebrew/initramfs layers unchanged).
-3. When it works: make the repo public (Actions become free; the README's `os-list.json` URL starts working for rpi-imager) — do the "before making the repo public" follow-up below first.
-
-## What happened on 2026-10-09 (for context)
-
-- Evening: `CHANGELOG.md` added (#18). Release notes now come from its Unreleased section, and the release job stamps the entries under the tag on `main`. Unreleased entries go in the same PR as the change. The repo stays private while testing.
-
-- All PRs squash-merged (#1–#16); `main` CI green. Packages made public; both `:latest` images verify anonymously with `juniper.pub`.
-- Update size: rechunking split everything by RPM, but Juniper's own files and the Homebrew tarball shared one ~150 MB layer with the initramfs, so every build re-sent it. Fixed (#14) with `user.component` xattrs: separate `juniper` (~0.3 MB) and `homebrew` (~156 MB, changes only on `just bump-brew`) layers; `just check-layers` asserts this in CI.
-- Smoke test used to pull the published `:latest` over the fresh local build once the packages went public; now `--pull=never` (#14).
-- First release run failed at `xz` (raw image group still root); fixed (#16); second run published `build-20261009`: `juniper` 1006 MiB, `juniper-minimal` 757 MiB, bundles, `SHA256SUMS` (+ bundle, verified), `os-list.json` (both images).
-- Docs-only pushes skip image builds; `lint-docs.yml` lints them (#15).
+niri 26.04 and xwayland-satellite exist for epel-10-aarch64 in COPR (`yalter/niri`; `yselkowitz/wlroots-epel` also has sway, labwc, foot, waybar, fuzzel, swaylock, swaync; greetd in `yselkowitz/cosmic-epel`). AlmaLinux AppStream has the portals, PipeWire, Xwayland, Firefox ESR and a Mesa with vc4/v3d. The GPU needs `dtoverlay=vc4-kms-v3d` (in the per-entry `rpi-config.txt`, so tryboot covers it). Reference: github.com/zirconium-dev/zirconium (mkosi on Fedora, no Pi support; reuse its greetd/keyring/`local.kdl` patterns). Proposal: `FROM juniper`, niri + waybar/fuzzel/swaync, greetd auto-login, Pi 5 8 GB first. Estimate 2–4 days; ~+1 GB image; COPR dependency to pin or mirror.
 
 ## Decisions taken during execution (keep)
 
-- Rollback uses rpi-bootc-bootloader firmware tryboot (`TRYBOOT=1`), not greenboot (needs GRUB). Health check fails closed: only a tryboot flag of exactly 1 triggers a fallback reboot.
-- Two images from one Containerfile (`minimal` → `juniper` stage); dev tools only in `juniper`.
-- Homebrew baked into `juniper` from `ghcr.io/ublue-os/brew` pinned by digest, cosign-verified in CI; Dependabot ignores it; bump with `just bump-brew`.
-- Signatures: key-based cosign (public key `system_files/usr/share/pki/containers/juniper.pub`, private key only in the `SIGNING_SECRET` repo secret and the owner's password manager). Policy scoped to the namespace `ghcr.io/gnathoi`; no global reject (would break podman app pulls). The bootc origin is NOT switched to `--enforce-container-sigpolicy` (with the base's `insecureAcceptAnything` default that refuses every pull); the namespace policy still enforces on every update. cosign pinned to v2 (v3's bundle format is invisible to containers/image). SBOM attestations skip Rekor (too large); image signatures use it.
-- Release train: Dependabot Saturday → green minor/patch/digest auto-merge (majors wait; draft = hold) → Monday 02:00 UTC publish + disk images + signed release → Pis reboot Tuesday 04:00 local (+≤90 min). Pushes to `main` never publish.
-- Merge policy: squash merges. Commit subjects and PR titles (the squash subject) always start with a conventional prefix: `feat:`, `fix:`, `docs:`, `ci:`, `test:`, `chore:`, `build:`, `refactor:` (scope optional, e.g. `fix(ci):`).
+- Rollback uses rpi-bootc-bootloader firmware tryboot (`TRYBOOT=1`), not greenboot. Health check fails closed: only a tryboot flag of exactly 1 triggers a fallback reboot; so does real-root emergency mode (`juniper-emergency-fallback`).
+- Two images from one Containerfile (`minimal` → `juniper`); dev tools only in `juniper`; personal CLI tools come from Homebrew (Brewfile), not the image.
+- Homebrew from `ghcr.io/ublue-os/brew` pinned by digest, cosign-verified in CI; bump with `just bump-brew`. Tool images (bootc-image-builder, centos-bootc, node-exporter) pinned by digest; bump with `just bump-tools`. Actions pinned to SHAs.
+- Signatures: key-based cosign v2; public key `system_files/usr/share/pki/containers/juniper.pub`; private key in the `release` environment's `SIGNING_SECRET` and the owner's password manager. Policy scoped to `ghcr.io/gnathoi`; bootc's origin stays `ostree-unverified-registry` because the namespace policy enforces (verified on hardware).
+- Release: Dependabot Saturday → green minor/patch/digest auto-merge (majors wait) → Monday 02:00 UTC publish → Pis reboot Tuesday 04:00 local (+≤90 min). Pushes to `main` never publish.
+- Every build runs `dnf upgrade` except the Pi kernel and firmware, which come with the base (dnf can't place a new kernel for ostree; see the base-limitations research). CI warns when the Pi repo's kernel is newer than the base's.
+- Merge policy: squash; conventional prefixes on commit subjects and PR titles.
 
 ## Known follow-ups (deliberately deferred)
 
-- Before making the repo public: SHA-pin third-party actions in jobs that hold `SIGNING_SECRET`; pin `bootc-image-builder` and `centos-bootc:stream10` tool images by digest.
-- Unit tests: set `JUNIPER_CLOUD_DIR` in `firstboot_env` (the label test currently touches the host's `/var/lib/cloud` through a stubbed `shred`; harmless unless tests run as root).
-- README "switch from AlmaLinux": add `sudo reboot` for stock AlmaLinux sources (`apply-update` only exists on Juniper).
-- Retry the rechunk step's `centos-bootc:stream10` pull; verify-then-pull of `:latest` is check-then-use on a mutable tag (pin the verified digest).
-- `rd.emergency=reboot` covers the initramfs only; a real-root `emergency.target` still hangs under tryboot.
-- Derive the CIDATA device from the `/sysroot` device instead of `blkid -L CIDATA`.
+- Pi 4 GPU firmware on the FAT partition is never updated after flashing (only kernel/initrd/DTBs are per entry); a proper fix (`start_file`/`fixup_file` per tryboot entry) belongs upstream in rpi-bootc-bootloader.
+- `just flash` is Linux-only.
+- README's "switch from AlmaLinux" second step (`ujust switch …:latest` after a digest switch) is untested.
 - If Dependabot `groups:` are ever enabled, make auto-merge stricter (group titles hide major bumps).
-- Smaller items: lockdown could `--reload` before switching the default zone; `build_files/dev.sh` `find /brew -type f` lacks the why-comment its siblings have; a few test-strength and wording nits.
+- Smaller items: lockdown could `--reload` before switching the default zone; `dnf check-update` on devices stops at the Tailscale repo's unimported key.

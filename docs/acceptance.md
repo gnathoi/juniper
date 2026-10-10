@@ -54,10 +54,17 @@ Flashed with `just flash /dev/mmcblk0 ~/.config/juniper/flash.yaml` (run0 for th
 | 7 | Login banner (Tailscale, Update, Tip); `ujust` recipes; `pi-status` | pass |
 | 7 | `brew --version` in an interactive login shell; `distrobox`, `fastfetch` | pass |
 | 7 | Hardened `enable-metrics` quadlet (from #30): runs as nobody, `CapEff` 0, `NoNewPrivs`; `:9100/metrics` over the tailnet | pass (installed by hand; recheck via `ujust` after #30 ships) |
-| 4 | Update + tryboot | pending: needs a newer release |
-| 5 | Deliberately broken update falls back | pending |
+| 4 | Update + tryboot | pass: `juniper-update.service` staged `build-20261010` (33 layers, 534 MB: the first build with `dnf upgrade`); `ujust update` booted it with `tryboot=1`; health check made `ostree-2` the default; a plain reboot stayed on it |
+| 5 | Deliberately broken update falls back | pass: image built on the Pi with `tailscaled` masked, staged from containers-storage, booted via tryboot; health check failed after 20 tries (~5 m 40 s) and rebooted; firmware booted the previous image (`tryboot=0`, Tailscale up) 20 s later |
 | 7 | `ujust devbox`, `ujust install-podlet` | pending |
 | 7b | `juniper-minimal` | pending (also exercises `just flash`'s new root-phase checks) |
+| 5b | Update that drops into real-root emergency mode falls back (#32) | pass: required mount of a missing device → 90 s device timeout → `local-fs.target` failed → emergency → `juniper-emergency-fallback` "rebooting … in 60s" → back on the previous image (17:43 → 17:46) |
+| — | Health check (#32): locked + Tailscale SSH → healthy; IPv6 route accepted | pass (Pi run of the new script; unit tests for the rest) |
+| — | `cidata-device` on the Pi | pass: `/dev/mmcblk0p1` |
+| — | `ujust pi-eeprom` (#34), check only | pass: "update available", CURRENT 2025-11-05, LATEST 2026-05-11 (not applied) |
+| — | Brewfile tools (#34) via `brew bundle` | pass: zellij 0.45.1, neovim 0.12.6, btop, ripgrep, fzf in 25 s |
+| — | Trimmed initramfs (#35) via tryboot | pass: entry initrd 28.8 MB (was 45.8 MB); initrd stage 3.00 s (was 4.28 s); no failed units |
+| — | Release pipeline (#33) | pass: `sign` jobs in the `release` environment; `:latest` == `:sha-531a840` digest; disks from their run's digest; changelog pushed with the environment deploy key through the `main` ruleset |
 
 Notes:
 
