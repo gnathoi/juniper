@@ -80,6 +80,20 @@ legacy=0
 [[ -e $state_dir/locked && -s $run_dir/lan-ssh-legacy ]] && legacy=1
 gauge juniper_lan_ssh_legacy "1 if locked down but SSH is still open to every network (old lan-ssh rule)." "$legacy"
 
+# Root encryption, from encryption-status's report. Without the file this still says 0, so an
+# `== 0` alert fires on a device that never reported.
+enc=$state_dir/encryption
+ev() { sed -n "s/^$1=//p" "$enc" 2>/dev/null | head -1; }
+v=0
+[[ $(ev state) == encrypted ]] && v=1
+gauge juniper_encrypted "1 if the root filesystem is on LUKS2 (dm-crypt), else 0." "$v"
+v=0
+[[ $(ev key_lock) == locked ]] && v=1
+gauge juniper_encryption_key_locked "1 if the firmware HMAC is locked after unlock (needs Pi 5 EEPROM >= 2026-06-17)." "$v"
+v=0
+[[ $(ev recovery) == sealed:* ]] && v=1
+gauge juniper_encryption_recovery_sealed "1 if an age-sealed recovery keyslot exists." "$v"
+
 # Clock: yes/no from timedatectl; anything else leaves the metric out.
 sync=$(timeout -k 5 "$probe_timeout" timedatectl show -p NTPSynchronized --value 2>/dev/null) || sync=
 case $sync in

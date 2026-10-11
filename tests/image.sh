@@ -95,7 +95,8 @@ need_enabled juniper-firstboot.service juniper-tailscale-join.service
 test -x /usr/libexec/juniper/tailscale-join
 test -x /usr/libexec/juniper/lan-ssh
 test -x /usr/libexec/juniper/metrics
-need_enabled juniper-update.timer juniper-image-prune.timer juniper-metrics.timer juniper-reboot.timer juniper-healthcheck.service juniper-lan-ssh-status.service
+test -x /usr/libexec/juniper/encryption-status
+need_enabled juniper-update.timer juniper-image-prune.timer juniper-metrics.timer juniper-reboot.timer juniper-healthcheck.service juniper-lan-ssh-status.service juniper-encryption-status.service
 need_cmds rpi-bootc-bootloader
 grep -qx 'TRYBOOT=1' /etc/rpi-bootc-bootloader/tryboot.conf
 test -x /usr/libexec/juniper/bootloader
