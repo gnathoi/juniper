@@ -1,4 +1,4 @@
-# Juniper — project status (2026-10-10, evening)
+# Juniper — project status (2026-10-11, evening)
 
 Start here when picking the project up on another machine.
 
@@ -6,10 +6,10 @@ Start here when picking the project up on another machine.
 
 | | What | Spec | Plan | State |
 |---|---|---|---|---|
-| A | Images (`juniper-minimal`, `juniper`), CI, releases | `specs/2026-10-09-juniper-image-design.md` | `plans/2026-10-09-juniper-image-core.md` | Done and hardened. Task 11 (Pi 5 hardware acceptance) passed, including 7b; one unexplained first-boot hang to reproduce (see Next); results in `docs/acceptance.md` |
+| A | Images (`juniper-minimal`, `juniper`), CI, releases | `specs/2026-10-09-juniper-image-design.md` | `plans/2026-10-09-juniper-image-core.md` | Done and hardened; second release `build-20261011` passed hardware acceptance (#79). Task 11 (Pi 5 hardware acceptance) passed, including 7b; one unexplained first-boot hang to reproduce (see Next); results in `docs/acceptance.md` |
 | B | Tailscale field in Raspberry Pi Imager (own-use fork) | `specs/2026-10-09-imager-tailscale-design.md` | `plans/2026-10-09-imager-tailscale.md` | **Parked** (2026-10-10): `just flash` covers it. Read the plan's "Parked" note before resuming |
-| C | Encryption at rest (OTP-bound LUKS2 root + age recovery keyslot), issue #50 Phase 2 | `specs/2026-10-11-encryption-design.md` | `plans/2026-10-11-encryption.md` | Implementing (opt-in); hardware run pending. Blockers found: the initramfs can't unlock LUKS today (no cryptsetup, no systemd-cryptsetup), rpi-fw-crypto isn't packaged for EL10 (build it from a pinned commit), and rpi-bootc-bootloader skips the sync on a /dev/mapper root (MNTDEV wrapper, PR #75). Re-bind deferred to #76. Ships opt-in (`encrypt: true`) until the owner's Pi 5 run, then on by default |
-| D | **Experimental `juniper-desktop` (niri)** | `specs/2026-10-10-juniper-desktop-design.md` | `plans/2026-10-10-juniper-desktop.md` | Implemented on `feat/juniper-desktop` (PR #49); published as experimental (signed image, disk image, release assets; not in `os-list.json`) once merged. Boots to greetd's text login; niri after authentication. Hardware run on the owner's Pi 5 pending (spec's test plan); then the Tested-hardware cell. Research below |
+| C | Encryption at rest (OTP-bound LUKS2 root + age recovery keyslot), issue #50 Phase 0 + Phase 2 | `specs/2026-10-11-encryption-design.md` | `plans/2026-10-11-encryption.md` | **Shipped opt-in (`encrypt: true`, #78) and hardware-verified on the owner's Pi 5** (EEPROM 2026-05-11; `docs/acceptance.md`): encrypts on first boot (~3.5 min), unlocks unattended, tryboot both ways, laptop recovery works. Fixes from the run: #86 (config.txt key lock blocked genkey), #87 (`unlock-card` stdin). Next: #83 (M5: single-command `unlock-card` re-test, clone check), then flip the default (Task 14). Re-bind deferred to #76 |
+| D | **Experimental `juniper-desktop` (niri)** | `specs/2026-10-10-juniper-desktop-design.md` | `plans/2026-10-10-juniper-desktop.md` | **Published as experimental** (#49 merged 2026-10-11: signed image, disk image, release assets; not in `os-list.json`). Boots to greetd's text login; niri after authentication. Hardware desktop test pending a micro-HDMI cable (#58); then the Tested-hardware cell. Research below |
 
 ## Next, in order
 
@@ -17,6 +17,28 @@ Start here when picking the project up on another machine.
 2. Delete the repo-level `SIGNING_SECRET` and `RELEASE_DEPLOY_KEY` (the `release` environment has its own since 2026-10-10 and the first release under it succeeded): `gh secret delete SIGNING_SECRET --repo gnathoi/juniper` and the same for `RELEASE_DEPLOY_KEY`.
 3. Housekeeping: `gh auth refresh -h github.com -r write:packages,delete:packages` if not done; remove the `claude-probe` machine from the tailnet; `podman rm -f ts-probe`.
 4. Sub-project D (below). The Pi 5 is on `juniper` (switched from `juniper-minimal`, hostname `juniper-minimal`).
+
+## What happened on 2026-10-11
+
+Merged: #49 (juniper-desktop), #59, #60, #62-#67, #69-#72, #74, #75, #78, #82, #86, #87. Closed: #51, #52, #53, #61, #68, #79, #81, #84.
+
+Hardening done today:
+
+- Tailscale auth key deleted after 14 days or on rejection (#60); tailnet ACL least-privilege, pinned EPEL/Tailscale keys, `wifi.country` validation (#59).
+- `ujust lan-ssh` scoped to on-link networks, with expiry and IPv6 (#63).
+- Health-check safety net: probe timeouts, fallback on failure, readiness hooks, two-strike digest quarantine (#62, #82); `ujust update-unhold`.
+- Storage budgets: free-space check before updates, weekly image prune, low-space warnings (#65).
+- Pi kernel age in release notes, CI summary and `pi-status` (#70); status metrics for node_exporter and clock-sync warning (#71).
+- `ujust trust-images` for signed workloads and derived images (#72); `ujust` tab completion (#67); lost/stolen-device doc (#64).
+- Encryption design and plan (#74), opt-in encryption (#78), MNTDEV bootloader wrapper (#75), config-lock and `unlock-card` fixes (#86, #87).
+
+Hardware: `build-20261011` (#79) and opt-in encryption (#84) passed on the Pi 5; see `docs/acceptance.md`.
+
+## Open roadmap
+
+- #54, #55 (remainders); #56 (delivery path); #57 (canary, deferred by the owner).
+- #73 secure boot (deferred); #76 (encryption re-bind); #77; #83 (encryption M5); #85.
+- #58 desktop hardware test (micro-HDMI cable).
 
 ## What happened on 2026-10-10
 

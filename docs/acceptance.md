@@ -80,3 +80,47 @@ Notes:
   until its key is imported; it doesn't affect image updates.
 - The base image (built 2026-10-02) had 66 package updates pending on 2026-10-10, 14
   Important and 19 Moderate security advisories; #30 applies them at build time.
+
+## 2026-10-11, second release: `build-20261011` (#79)
+
+Run over the serial console and SSH through a tailnet probe, on the same Pi 5. All sections
+passed.
+
+| Section | Check | Result |
+|---|---|---|
+| 1 | First boot to login in ~42 s, no failed units; Tailscale joined, authkey gone, locked; sshd key-only (password and keyboard-interactive refused) | pass |
+| 2 | Banner clean; `ujust` completion; `pi-status` kernel age (built 72 days ago); timers scheduled; metrics file complete | pass |
+| 3 | node_exporter serves all 11 `juniper_*` metrics, `textfile_scrape_error` 0 (SELinux fine with `SecurityLabelDisable`) | pass |
+| 4 | `lan-ssh` off/on/for/off: on-link prefixes only, LAN SSH opens and closes, a 1-minute window expires on its own, no legacy warning | pass |
+| 5 | `policy.json` equals the base; `trust-images` lists the protected namespaces; signed pull works | pass |
+| 6 | Real tryboot update `juniper` to `juniper-minimal`: health check succeeded, firmware default synced (#75 wrapper on a plain root) | pass |
+| 6 | Two-strike quarantine, with a forced-failing local hook: tryboot fails, fallback, strike 1 (no reboot on the normal boot; `OnFailure` fallback correctly idle); second attempt "trying it once more", fallback, strike 2; the re-offered image is refused ("failed its health check twice"), banner and `juniper_update_held 1` | pass |
+| 6 | A plain reboot with the held image staged still boots the previous deployment (firmware default unchanged); restored to `juniper`, healthy | pass |
+| 7 | Free-space skip: marker, log and banner warning; cleared by the next normal stage | pass |
+
+Follow-up: #81, fixed in #82.
+
+## 2026-10-11, opt-in root encryption (#78, #84)
+
+Same Pi 5, EEPROM updated to 2026-05-11 during the run (it reported 2025-11-05 before).
+Serial console plus SSH.
+
+| Step | Check | Result |
+|---|---|---|
+| 1 | First attempt, release as published | **fail, open as designed**: `genkey failed (firmware error 4)` = KEY_LOCKED. `lock_device_private_key=1` in `rpi-config.txt` sets the old global lock, which on EEPROM 2026-05-11 also blocks genkey. The card booted plain; motd, `pi-status` and metrics showed NOT ENCRYPTED loudly. Fixed by dropping the config lock (#86) |
+| 2 | Second attempt, same release, lock line removed by hand from the card's boot entry before first boot | pass: genkey, in-place LUKS2 conversion of the 6 GB root (~3.5 min, silent), grow to 117.2 GB, `unlocked /dev/mmcblk0p3`, boot. `luksDump`: keyslots 0 and 1; tokens `juniper`, `juniper-recovery`; aes-xts-plain64. State: encrypted, binding board+mmc, recovery sealed:3, key_lock unavailable (firmware before 2026-06-17). `pi-status` and metrics correct, no NOT ENCRYPTED warning |
+| 2 | Plain reboot | pass: unlocks unattended in ~4 s, no failed units |
+| 3 | Laptop recovery | pass via a root shell: the recovery keyslot opens with the owner's laptop SSH key (`age -d -i ~/.ssh/id_ed25519` on CIDATA's `juniper-recovery.age`, piped into `cryptsetup open --readonly`); mounted read-only showing `/boot`, `ostree` and hostname `juniper`. `just unlock-card` itself **failed**: run0 doesn't forward piped stdin to cryptsetup, and Homebrew's age isn't on root's PATH. Fixed in #87 (one root shell) |
+| 4 | Final clean flash (22:16 release, config lock removed, no hand edits) | pass: "encrypting the root partition ... don't cut power", done at 213 s, token imported, grown to 117.2 GB, unlocked; joined Tailscale and locked down at the next lockdown timer tick. keyslots 0 and 1; tokens `juniper`, `juniper-recovery`; binding board+mmc; recovery sealed:3; no failed units. The board reused its OTP key from the earlier attempt. This is now the owner's everyday card |
+| 5 | Tryboot update `juniper` to `juniper-minimal` and back | pass: both deployments unlocked; header and CIDATA unchanged |
+
+Remaining (moved to #83): the single-command `just unlock-card` re-test and an optional clone check.
+
+Side finding: on first boot, `juniper-update`'s catch-up run (after the clock jump) ran before
+DNS was up and failed; it retries daily.
+
+### Firmware findings
+
+- `rpi-fw-crypto hmac` locks up on EEPROM 2025-11-05 (a known bug, fixed in pieeprom-2026-01-21); after updating to 2026-05-11 with `sudo rpi-eeprom-update -a`, hmac works (the encrypted card unlocks with it on every boot). fwkey refuses firmware older than 2026-01-21.
+- `lock_device_private_key=1` blocks genkey on firmware before 2026-06-17, because it is the old global lock; per-operation locks (`set-key-status`) exist only from that release. The config lock is therefore no longer set (#86).
+- Thermals (Pi 5): idle 44 C; the fan starts at the 50 C trip point; peak 59.5 C under full load; never throttled.
