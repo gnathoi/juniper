@@ -3289,7 +3289,8 @@ luks_card() {
 }
 
 # cryptroot_env STATE MARKER
-#   STATE:  plain | luks-notoken (header, no token, mid-reencrypt) | luks-reencrypt |
+#   STATE:  plain | luks-notoken (header marked for reencryption, so no token: C1) |
+#           luks-done-notoken (conversion finished, cut before the token) |
 #           luks-pending | luks-sealed
 #   MARKER: on | off | converting | encrypted | missing | anything else
 cryptroot_env() {
@@ -3320,7 +3321,7 @@ EOF
   [[ $marker == missing ]] || echo "$marker" >"$T/cidata/juniper-encrypt"
   case $state in
     luks-notoken) luks_card mmcblk0p3 '' 0 reencrypt ;;
-    luks-reencrypt) luks_card mmcblk0p3 pending 0 reencrypt ;;
+    luks-done-notoken) luks_card mmcblk0p3 '' 0 ;;
     luks-pending) luks_card mmcblk0p3 pending 0 ;;
     luks-sealed)
       luks_card mmcblk0p3 sealed "0 1"
@@ -3366,6 +3367,14 @@ done
 d=$T/luks/$n
 has() { local a; for a in "${@:2}"; do [[ $a == "$1" ]] && return 0; done; return 1; }
 val() { local p=; for a in "${@:2}"; do [[ $p == "$1" ]] && { echo "$a"; return; }; p=$a; done; }
+# Like cryptsetup 2.8: no header metadata changes while the header is marked for reencryption.
+case $cmd:${1:-} in
+  token:import | luksAddKey:* | luksKillSlot:*)
+    if [[ -e $d/reencrypt ]]; then
+      echo "Operation incompatible with device marked for LUKS2 reencryption. Aborting." >&2
+      exit 1
+    fi ;;
+esac
 if has --key-file "$@"; then
   k=$(cat)
   if [[ $k != "$FAKE_PASS" ]]; then echo "cryptsetup-key bad" >>"$CALLS"; exit 2; fi
@@ -3399,9 +3408,9 @@ case $cmd in
     if [[ -e $d/reencrypt ]]; then printf 'Requirements:\tonline-reencrypt-v2\n'; fi
     printf '\nKeyslots:\n'
     for s in $(cat "$d/slots"); do printf '  %s: luks2\n\tKey:        512 bits\n' "$s"; done
-    if [[ -e $d/reencrypt ]]; then printf '  2: reencrypt (unbound)\n'; fi
+    if [[ -e $d/reencrypt ]]; then printf '  1: reencrypt (unbound)\n'; fi
     printf 'Tokens:\n'
-    for t in "$d"/token*; do [[ -e $t ]] && printf '  %s: juniper\n' "${t##*token}"; done ;;
+    for t in "$d"/token*; do if [[ -e $t ]]; then printf '  %s: juniper\n' "${t##*token}"; fi; done ;;
   luksKillSlot)
     s=" $(cat "$d/slots") "; s=${s/ ${!#} / }; echo $s >"$d/slots" ;;
   luksAddKey)
@@ -3484,7 +3493,7 @@ test_cryptroot_first_boot_sequence() {
   check "prep: partx after grow" called "partx -u -n 3 /dev/mmcblk0"
   check "prep: init-only slot 0" called "--init-only --type luks2 --key-slot 0 --reduce-device-size 32M"
   check "prep: label, pbkdf2" called "--pbkdf pbkdf2 --pbkdf-force-iterations 1000 --label juniper-root --key-file - /dev/mmcblk0p3"
-  check "prep: token before resume" order "cryptsetup token import --token-id 0" "--resume-only"
+  check "prep: resume before token" order "--resume-only" "cryptsetup token import --token-id 0"
   check "prep: no repair within one boot" not_called "cryptsetup repair"
   check "prep: resume with progress" called "cryptsetup reencrypt --batch-mode --resume-only --progress-frequency 10 --key-file - /dev/mmcblk0p3"
   check "prep: sector 512, aes" called "--cipher aes-xts-plain64 --key-size 512 --sector-size 512"
@@ -3683,6 +3692,7 @@ test_cryptroot_token_failure_keeps_converting() {
   : >"$CALLS"
   crt prepare 2>/dev/null
   check "prep: next boot imports the token (C1)" called "cryptsetup token import --token-id 0"
+  check "prep: next boot does not resume again" not_called "cryptsetup reencrypt"
   check "prep: next boot finishes" grep -qx encrypted "$T/cidata/juniper-encrypt"
 }
 
@@ -3699,8 +3709,61 @@ test_cryptroot_resume_after_header_without_token() { # C1
   check "prep: token imported" called "cryptsetup token import --token-id 0"
   check "prep: token has root uuid" grep -q '"root_uuid":"U1"' "$T/luks/mmcblk0p3/token0"
   check "prep: repair then resume" order "cryptsetup repair" "--resume-only"
+  check "prep: resume then token" order "--resume-only" "cryptsetup token import --token-id 0"
+  check "prep: token then seal" order "cryptsetup token import --token-id 0" "cryptsetup luksAddKey"
   check "prep: C1 finishes" grep -qx encrypted "$T/cidata/juniper-encrypt"
+  check "prep: C1 sealed" grep -q '"recovery":"sealed"' "$T/luks/mmcblk0p3/token0"
   check "prep: no second header" not_called "--init-only"
+}
+
+# Kill point: the conversion finished, power was cut before the token import.
+test_cryptroot_cut_after_resume_before_token() {
+  cryptroot_env luks-done-notoken converting
+  crt prepare 2>/dev/null
+  check "prep: no repair" not_called "cryptsetup repair"
+  check "prep: no resume" not_called "cryptsetup reencrypt"
+  check "prep: token imported" grep -q '"root_uuid":"U1"' "$T/luks/mmcblk0p3/token0"
+  check "prep: sealed" grep -q '"recovery":"sealed"' "$T/luks/mmcblk0p3/token0"
+  check "prep: grown" grep -qx 'size=+' "$T/sfdisk.1"
+  check "prep: recorded" grep -qx encrypted "$T/cidata/juniper-encrypt"
+}
+
+test_cryptroot_unlock_adopts_finished_tokenless_header() {
+  cryptroot_env luks-done-notoken converting
+  crt unlock 2>/dev/null
+  check "unlock adopt: exit 0" test "$RC" = 0
+  check "unlock adopt: token then open" order "cryptsetup token import --token-id 0" "cryptsetup open"
+  check "unlock adopt: token root uuid" grep -q '"root_uuid":"U1"' "$T/luks/mmcblk0p3/token0"
+  check "unlock adopt: opened" test "$(cat "$T/luks/active")" = mmcblk0p3
+  check "unlock adopt: recovery pending" test "$(runf recovery)" = pending
+  check "unlock adopt: CIDATA unmounted" called "umount"
+  cryptroot_env luks-done-notoken encrypted
+  crt unlock 2>/dev/null
+  check "unlock adopt: needs the converting marker" not_called "cryptsetup token import"
+  cryptroot_env luks-done-notoken converting
+  printf '\0\0\0\1' >"$T/tryboot"
+  export JUNIPER_TRYBOOT_FLAG=$T/tryboot
+  crt unlock 2>/dev/null
+  check "unlock adopt: no header write under tryboot" not_called "cryptsetup token import"
+}
+
+test_cryptroot_unlock_unfinished_conversion_hint() {
+  cryptroot_env luks-notoken converting
+  crt unlock 2>/dev/null
+  check "unlock unfinished: exit 1" test "$RC" = 1
+  check "unlock unfinished: not opened" not_called "cryptsetup open"
+  check "unlock unfinished: says it could not resume" grep -q "could not resume" "$T/console"
+  check "unlock unfinished: not 'another Pi'" not_grep_dir "another Raspberry Pi" "$T/console"
+}
+
+test_cryptroot_first_boot_resume_failure_exits_0() { # prepare exits 0 (brief)
+  cryptroot_env plain on
+  touch "$T/cs.resume.fail"
+  crt prepare 2>/dev/null
+  check "prep: resume failure on first boot exits 0" test "$RC" = 0
+  check "prep: first-boot resume failure keeps converting" grep -qx converting "$T/cidata/juniper-encrypt"
+  check "prep: first-boot resume failure, no token yet" not_called "cryptsetup token import"
+  check "prep: first-boot resume failure, run reason" test "$(runf reason)" = "encryption unfinished; the next boot retries"
 }
 
 test_cryptroot_c1_needs_converting_marker() {
@@ -3718,7 +3781,7 @@ test_cryptroot_c1_needs_converting_marker() {
 }
 
 test_cryptroot_resume_mid_reencrypt() {
-  cryptroot_env luks-reencrypt converting
+  cryptroot_env luks-notoken converting
   crt prepare 2>/dev/null
   check "prep: repair" called "cryptsetup repair --batch-mode --key-file - /dev/mmcblk0p3"
   check "prep: repair then resume" order "cryptsetup repair" "--resume-only"
@@ -3731,7 +3794,7 @@ test_cryptroot_resume_mid_reencrypt() {
 }
 
 test_cryptroot_resume_failure_keeps_converting() {
-  cryptroot_env luks-reencrypt converting
+  cryptroot_env luks-notoken converting
   touch "$T/cs.resume.fail"
   crt prepare 2>/dev/null
   check "prep: resume failure exits 0" test "$RC" = 0
@@ -3919,7 +3982,7 @@ test_cryptroot_unlock_ignores_unknown_token_fields() {
 }
 
 test_cryptroot_unlock_skips_unfinished_conversion() {
-  cryptroot_env luks-reencrypt converting
+  cryptroot_env luks-notoken converting
   crt unlock 2>/dev/null
   check "unlock: half-encrypted root not opened" not_called "cryptsetup open"
 }

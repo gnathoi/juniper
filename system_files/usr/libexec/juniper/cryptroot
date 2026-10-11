@@ -223,9 +223,10 @@ luks=()
 c1=()
 find_plain() { mapfile -t plain < <(bk_devices "UUID=$X"); }
 
-# find_luks MODE: luks = crypto_LUKS partitions labelled juniper-root whose token 0 has
-# root_uuid == X. In prepare mode, c1 = those with no juniper token yet (a header written
-# before the token, C1): GPT root-arm64, on the CIDATA disk, marker `converting`.
+# find_luks: luks = crypto_LUKS partitions labelled juniper-root whose token 0 has
+# root_uuid == X. c1 = those with no juniper token yet (C1: cryptsetup refuses `token import`
+# while a header is marked for reencryption, so the token only follows a finished
+# conversion): GPT root-arm64, on the CIDATA disk, marker `converting`.
 find_luks() {
   local d j
   luks=()
@@ -235,7 +236,7 @@ find_luks() {
     j=$(token_get "$d" 0)
     if [[ $(json_field "$j" type) == juniper ]]; then
       if [[ $(json_field "$j" root_uuid) == "$X" ]]; then luks+=("$d"); fi
-    elif [[ $1 == prepare && $(part_type "$d") == "$root_type" ]] && part_info "$d" &&
+    elif [[ $(part_type "$d") == "$root_type" ]] && part_info "$d" &&
       cidata_open "$disk" && [[ $(marker_read) == converting ]]; then
       c1+=("$d")
     fi
@@ -285,7 +286,6 @@ fail_open() {
 }
 
 why=
-id_type=
 precheck() {
   local out k
   if ((${#plain[@]} > 1)); then
@@ -304,7 +304,7 @@ precheck() {
     why="no usable recovery recipient"
     return 1
   fi
-  if ! id_type=$(id_type_of "$disk"); then
+  if ! id_type_of "$disk" >/dev/null; then
     why="disk not found in sysfs"
     return 1
   fi
@@ -393,14 +393,15 @@ first_boot() {
     return 0
   fi
   # The header exists: from here a failure leaves `converting` and the next boot resumes.
+  # The token follows the finished conversion (luks_steps).
   guard_off
   step=
-  if ! token_write "$dev" "$id_type" pending "$(count_recipients)"; then
-    log "token import failed on $dev; the next boot retries"
-    run_write state=not-encrypted "reason=conversion unfinished; retrying next boot"
-    return 0
-  fi
-  luks_steps "$dev" "$fresh"
+  luks_steps "$dev" "$fresh" || unfinished "$dev"
+}
+
+unfinished() {
+  log "could not finish $1; the next boot retries"
+  run_write state=not-encrypted "reason=encryption unfinished; the next boot retries"
 }
 
 # --- resume, seal, grow, record (each skips itself when there is nothing to do) ---
@@ -451,6 +452,16 @@ seal() {
   token_write "$dev" "$(token_read "$dev" id_type)" sealed "$(count_recipients)" --token-replace
 }
 
+# adopt DEV: import token 0 (recovery pending) on a finished header that has none yet (C1).
+adopt() {
+  local it
+  [[ $(token_read "$1" type) == juniper ]] && return 0
+  part_info "$1" || return 1
+  log "importing the juniper token on $1"
+  it=$(id_type_of "$disk") || it=board
+  token_write "$1" "$it" pending "$(count_recipients)"
+}
+
 luks_steps() {
   local dev=$1 fresh=$2 m dump it
   part_info "$dev" || {
@@ -459,11 +470,6 @@ luks_steps() {
   }
   cidata_open "$disk" || log "no CIDATA on $disk"
   m=$(marker_read)
-  if [[ $(token_read "$dev" type) != juniper ]]; then
-    log "$dev has a header but no token (C1); importing it"
-    it=$(id_type_of "$disk") || it=board
-    token_write "$dev" "$it" pending "$(count_recipients)" || return 1
-  fi
   dump=$(cryptsetup luksDump "$dev") || return 1
   if [[ $dump == *online-reencrypt* ]]; then
     # A killed run needs repair before --resume-only; right after --init-only it doesn't.
@@ -477,6 +483,7 @@ luks_steps() {
     [[ $dump != *online-reencrypt* ]] || return 1
     log "encryption of $dev finished"
   fi
+  adopt "$dev" || return 1
   if [[ $(token_read "$dev" recovery) == pending ]]; then
     seal "$dev" || log "sealing the recovery key failed; it stays pending and the next boot retries"
   fi
@@ -519,7 +526,7 @@ prepare() {
     esac
     return 0
   fi
-  find_luks prepare
+  find_luks
   if ((${#luks[@]} + ${#c1[@]} == 0)); then
     log "no partition carries root UUID=$X"
     return 0
@@ -531,8 +538,7 @@ prepare() {
   fi
   mkdir -p "$lock_dir" || log "could not create $lock_dir"
   for d in "${luks[@]}" "${c1[@]}"; do
-    luks_steps "$d" 0 ||
-      log "could not finish $d; the next boot retries"
+    luks_steps "$d" 0 || unfinished "$d"
   done
   return 0
 }
@@ -553,14 +559,25 @@ report_open() {
   run_write state=encrypted reason= "cipher=$cipher" "binding=$it" "key_lock=$kl" "recovery=$rec"
 }
 
+# try_open: the first candidate this Pi's key opens. A tokenless header (C1) is adopted
+# first if its conversion finished (power cut before the token); one still marked for
+# reencryption is never opened (half of it is plaintext) and sets `unfinished_conv`.
+unfinished_conv=0
 try_open() {
   local d dump
-  for d in "${luks[@]}"; do
+  for d in "${luks[@]}" "${c1[@]}"; do
     part_info "$d" || continue
     dump=$(cryptsetup luksDump "$d" 2>/dev/null || true)
     if [[ $dump == *online-reencrypt* ]]; then
       log "$d is still being encrypted; not opening it (prepare resumes it)"
+      unfinished_conv=1
       continue
+    fi
+    if [[ $(token_read "$d" type) != juniper ]]; then
+      # I9: no header writes under tryboot (a converting card never boots under tryboot).
+      is_tryboot && continue
+      adopt "$d" || continue
+      part_info "$d" || continue
     fi
     if with_key "$disk" cryptsetup open --allow-discards --key-file - "$d" juniper-root; then
       log "unlocked $d"
@@ -572,7 +589,8 @@ try_open() {
 }
 
 unlock() {
-  local a tries=3 seen=0 reason=
+  local a tries=3 seen=0 reason='' msg
+  trap cleanup EXIT
   read_cmdline
   if [[ -z $X ]]; then
     log "no root=UUID= on the kernel command line; nothing to unlock"
@@ -588,8 +606,8 @@ unlock() {
       run_write state=not-encrypted "reason=$reason"
       return 0
     fi
-    find_luks unlock
-    if ((${#luks[@]})); then
+    find_luks
+    if ((${#luks[@]} + ${#c1[@]})); then
       seen=1
       try_open && return 0
     fi
@@ -603,7 +621,11 @@ unlock() {
     log "unlock failed under tryboot; failing so the firmware returns to the previous deployment"
     return 1
   fi
-  local msg="juniper-cryptroot: this card is bound to another Raspberry Pi or another card; unlock it on a laptop with the recovery key (just unlock-card)"
+  if ((unfinished_conv)); then
+    msg="juniper-cryptroot: encrypting this card could not resume (see the messages above); every boot retries. If it keeps failing, reflash the card: its recovery key is not sealed yet"
+  else
+    msg="juniper-cryptroot: this card is bound to another Raspberry Pi or another card; unlock it on a laptop with the recovery key (just unlock-card)"
+  fi
   printf '%s\n' "$msg" >&2
   { printf '\n%s\n\n' "$msg" >"$console"; } 2>/dev/null || true
   sleep "$fail_delay"
