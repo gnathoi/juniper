@@ -160,6 +160,8 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
     swaylock swayidle swaync pipewire wireplumber flatpak notify-send
   need_enabled greetd.service
   systemd-analyze verify greetd.service
+  # An update that doesn't bring greetd up is rolled back under tryboot (healthcheck hook).
+  test -x /usr/lib/juniper/health.d/10-greetd
   grep -q '^GPGKey=' /etc/flatpak/remotes.d/flathub.flatpakrepo
   need_enabled juniper-flatpak-setup.service juniper-flatpak-update.timer
   systemd-analyze verify juniper-flatpak-setup.service juniper-flatpak-update.service
@@ -218,6 +220,10 @@ else
   # The base defaults to graphical.target; nothing graphical starts without a display manager.
   if [[ -e /etc/systemd/system/display-manager.service ]]; then
     echo "display manager enabled in a headless image"
+    exit 1
+  fi
+  if [[ -e /usr/lib/juniper/health.d ]]; then
+    echo "health hooks in a headless image"
     exit 1
   fi
 fi

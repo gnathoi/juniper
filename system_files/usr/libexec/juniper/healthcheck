@@ -10,6 +10,7 @@ state_dir=${JUNIPER_STATE_DIR:-/var/lib/juniper}
 tries=${JUNIPER_HEALTH_TRIES:-20}
 interval=${JUNIPER_HEALTH_INTERVAL:-15}
 tryboot_flag=${JUNIPER_TRYBOOT_FLAG:-/proc/device-tree/chosen/bootloader/tryboot}
+health_d=${JUNIPER_HEALTH_D:-/usr/lib/juniper/health.d}
 
 healthy() {
   [[ -n $(ip route show default) || -n $(ip -6 route show default) ]] || return 1
@@ -20,6 +21,12 @@ healthy() {
     [[ $(tailscale debug prefs 2>/dev/null | jq -r '.RunSSH // false') == true ]] ||
       [[ $(systemctl is-active sshd.service 2>/dev/null) == active ]] || return 1
   fi
+  # Image-specific checks (juniper-desktop: greetd must be running). None on headless images.
+  local hook
+  for hook in "$health_d"/*; do
+    [[ -x $hook ]] || continue
+    "$hook" || return 1
+  done
 }
 
 in_tryboot() {

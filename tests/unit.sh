@@ -390,6 +390,30 @@ test_healthcheck_locked_sshd_is_healthy() {
   check "health: locked + sshd (ujust tailscale-ssh off) -> healthy" called "rpi-bootc-bootloader sync"
 }
 
+test_healthcheck_hook_failure_falls_back_under_tryboot() {
+  health_env
+  export JUNIPER_HEALTH_D=$T/health.d
+  mkdir -p "$JUNIPER_HEALTH_D"
+  printf '#!/bin/sh\nexit 1\n' >"$JUNIPER_HEALTH_D/10-greetd" && chmod +x "$JUNIPER_HEALTH_D/10-greetd"
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  "$LIBEXEC/healthcheck" || true
+  check "health: failing hook under tryboot -> reboot" called "systemctl reboot"
+}
+
+test_healthcheck_passing_hook_and_no_hooks() {
+  health_env
+  export JUNIPER_HEALTH_D=$T/health.d
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  "$LIBEXEC/healthcheck"
+  check "health: no hook dir -> healthy" called "rpi-bootc-bootloader sync"
+  mkdir -p "$JUNIPER_HEALTH_D"
+  printf '#!/bin/sh\nexit 0\n' >"$JUNIPER_HEALTH_D/10-ok" && chmod +x "$JUNIPER_HEALTH_D/10-ok"
+  : >"$CALLS"
+  "$LIBEXEC/healthcheck"
+  check "health: passing hook -> healthy" called "rpi-bootc-bootloader sync"
+}
+
 # Real-root emergency mode under tryboot: PID 1 keeps the watchdog fed, so nothing would
 # reboot into the previous deployment without this.
 test_emergency_fallback_reboots_under_tryboot() {

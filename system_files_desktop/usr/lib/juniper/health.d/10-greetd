@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# juniper-desktop: an update whose login/lock screen doesn't start is broken.
+exec systemctl is-active --quiet greetd.service
