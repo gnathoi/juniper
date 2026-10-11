@@ -12,6 +12,7 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ### Added
 
+- The Pi kernel's age is now visible: release notes and the CI step summary state its build date (and any newer kernel waiting in AlmaLinux's Pi repo, with escalated wording past 14 days), and `ujust pi-status` shows the running kernel and how many days ago it was built. It never fails a release
 - Tab completion for `ujust` in bash: recipe names (including image-specific ones) and fixed arguments like `lan-ssh on|off|for|status`. Adds the small `bash-completion` package to every image
 - README section "If a device is lost or stolen": what a stolen card or board exposes today
   (nothing is encrypted at rest; the boot partition is unsigned) and the revocation steps.

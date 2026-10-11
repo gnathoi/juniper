@@ -27,7 +27,8 @@ issue.
   only get kernel updates when the base is rebuilt.
 - Ask: document it, or make the scriptlets work for container builds.
 - Juniper's workaround: `dnf upgrade --exclude='raspberrypi2-kernel*' --exclude='raspberrypi2-firmware*'`
-  plus a CI warning when the repo has a newer kernel (#30, #33).
+  plus a CI warning when the repo has a newer kernel (#30, #33), now with the kernel's build
+  date and age in the step summary and release notes (#56).
 
 ### Generic initramfs (comment on issue #13 "Shrink base image")
 

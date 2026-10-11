@@ -108,22 +108,41 @@ jobs:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
         run: sudo "$(command -v just)" image="${{ matrix.image }}" image_ref="$IMAGE_REF" test-image "$IMAGE_REF:latest"
 
-      # The Pi kernel only arrives with base rebuilds (build.sh can't upgrade it safely).
+      # The Pi kernel only arrives with base rebuilds (build.sh can't upgrade it safely). A
+      # stale kernel never fails the build (that would also stop the weekly userland security
+      # updates); it is made loud instead: step summary, warning, and a line in the release notes.
       - name: Check for a newer Pi kernel than the base ships
         if: matrix.image == 'juniper-minimal'
         continue-on-error: true
         env:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
         run: |
-          # shellcheck disable=SC2016 # expands inside the image
-          read -r have want < <(sudo podman run --rm --pull=never "$IMAGE_REF:latest" bash -c '
-            echo "$(rpm -q --qf "%{evr}" raspberrypi2-kernel4)" \
-              "$(dnf -q repoquery --disablerepo=tailscale-stable --latest-limit 1 --qf "%{evr}" \
-                raspberrypi2-kernel4 2>/dev/null | tail -1)"')
-          echo "Pi kernel in the image: $have; newest in the repo: ${want:-unknown}"
-          if [ -n "$want" ] && [ "$have" != "$want" ]; then
-            echo "::warning::AlmaLinux's Pi repo has kernel $want; the base image ships $have"
+          mkdir -p kernel-info
+          # shellcheck disable=SC2016,SC2024 # expands inside the image; the file stays runner-owned
+          sudo podman run --rm --pull=never "$IMAGE_REF:latest" bash -c '
+            pkg=raspberrypi2-kernel4
+            echo "have=$(rpm -q --qf "%{evr}" $pkg)"
+            echo "have_ts=$(rpm -q --qf "%{buildtime}" $pkg)"
+            newest=$(dnf -q repoquery --disablerepo=tailscale-stable --latest-limit 1 \
+              --qf "%{evr}|%{buildtime}" $pkg 2>/dev/null | tail -1)
+            echo "want=${newest%%|*}"
+            echo "want_ts=${newest#*|}"' >kernel-info/kernel.env
+          # dnf may print the build time as a date rather than epoch seconds
+          ts=$(sed -n 's/^want_ts=//p' kernel-info/kernel.env)
+          if [ -n "$ts" ] && ! [[ $ts =~ ^[0-9]+$ ]]; then
+            sed -i "s/^want_ts=.*/want_ts=$(date -u -d "$ts" +%s 2>/dev/null)/" kernel-info/kernel.env
           fi
+          cat kernel-info/kernel.env
+          # A repo that is not newer: no want. (The base ships the newest = the same EVR.)
+          .github/scripts/kernel-age.sh report kernel-info/kernel.env | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && env.PUBLISH == 'true' && matrix.image == 'juniper-minimal'
+        with:
+          name: kernel-info
+          path: kernel-info/kernel.env
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Log in to registry
         if: env.PUBLISH == 'true'
@@ -423,6 +442,16 @@ jobs:
         with:
           pattern: disk-*
           merge-multiple: true
+      # Best-effort: no artifact (the check didn't run) reads as "unknown" in the notes.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          name: kernel-info
+          path: kernel-info
+      - name: Pi kernel line in the release notes
+        run: |
+          echo "" >>notes.md
+          .github/scripts/kernel-age.sh note kernel-info/kernel.env >>notes.md
       - name: Merge OS lists and checksum
         run: |
           jq -s '{os_list: [.[].os_list[]]}' os-list-juniper.json os-list-juniper-minimal.json >os-list.json
