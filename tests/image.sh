@@ -225,8 +225,12 @@ for sub in 'hmac --in' 'genkey' 'get-key-status' 'set-key-status'; do
 done
 test -s /usr/share/licenses/rpi-fw-crypto/LICENCE || fail "no rpi-fw-crypto LICENCE"
 for kdir in /usr/lib/modules/*/; do
-  grep -qx 'lock_device_private_key=1' "$kdir/rpi-config.txt" ||
-    fail "no lock_device_private_key=1 in $kdir/rpi-config.txt"
+  # lock_device_private_key=1 must stay out: it is the old global lock (status bit 8), which on
+  # firmware before 2026-06-17 also blocks genkey (error 4), so a blank board could never get
+  # a key. fwkey applies the per-operation locks at runtime instead.
+  if grep -q 'lock_device_private_key' "$kdir/rpi-config.txt"; then
+    fail "lock_device_private_key in $kdir/rpi-config.txt blocks genkey on current firmware"
+  fi
   if grep -q 'lock_device_key_write' "$kdir/rpi-config.txt"; then
     fail "lock_device_key_write breaks genkey"
   fi

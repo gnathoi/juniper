@@ -19,7 +19,7 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ### Changed
 
-- config.txt sets `lock_device_private_key=1`, so Linux can no longer read the Pi's OTP device key (it can still use it)
+- raw-key read lock removed from config.txt: on pre-2026-06-17 firmware it also blocks key generation; the runtime per-operation lock applies on newer firmware. `fwkey` reports a config-locked key as `unavailable:key-locked-by-config`
 - `bootc status` shows Juniper's version (e.g. 20261011) instead of the base image's: every image sets the `org.opencontainers.image.version` label. A derived image inherits it unless it sets its own
 - `ujust pi-status` no longer echoes its commands
 

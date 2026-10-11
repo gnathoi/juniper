@@ -70,7 +70,7 @@ Success looks like this:
 | Ruling 1 | **USB disk with no serial:** bind to the board key only and say so in `pi-status`. Cost: a clone of such a disk unlocks on the same board |
 | Ruling 2 | **Cards not written by `just flash`** stay unencrypted, with the warning, even after the default flips |
 | Ruling 3 | **No usable recovery recipient means no encryption.** Fail open with a warning; `just flash` says so up front |
-| Ruling 4 | **No per-operation HMAC lock for now.** It needs Pi 5 EEPROM 2026-06-17 or later, which AlmaLinux doesn't ship yet. `lock_device_private_key=1` covers raw reads now. The `set-key-status` call is best-effort and reported |
+| Ruling 4 | **No per-operation HMAC lock for now.** It needs Pi 5 EEPROM 2026-06-17 or later, which AlmaLinux doesn't ship yet. `lock_device_private_key=1` covers raw reads now. The `set-key-status` call is best-effort and reported | **Superseded 2026-10-11 (config lock blocks genkey; see Hardware findings)**
 | Ruling 5 | **Re-binding is deferred** to a follow-up issue |
 | Ruling 6 | **The initramfs grows the partition only on the encrypting path.** Plain cards keep cloud-init `growpart`, so nothing changes for them |
 | Ruling 7 | **EEPROM update before the hardware run** is recommended. It has no tryboot fallback, so the owner decides at the session |
@@ -115,7 +115,7 @@ The OTP research (issue #50, 2026-10-11) settles the details:
   that line. **The probe and `genkey` run last among the first-boot preconditions,** so no
   OTP write ever happens before a fail-open (I7).
 - **Never read raw.** No `privkey`, no `rpi-otp-private-key`, no `vcmailbox 0x00030081`.
-  Every image's per-deployment `rpi-config.txt` gains `lock_device_private_key=1`. That
+  Every image's per-deployment `rpi-config.txt` gains `lock_device_private_key=1`. That **Superseded 2026-10-11 (config lock blocks genkey; see Hardware findings)**
   covers `juniper-desktop`, which ships its own `rpi-config.txt` (I12). **No**
   `lock_device_key_write=1`: it would make `genkey` fail. **No** `set-key-usage`.
 - **Message (domain separated):**
@@ -471,7 +471,7 @@ New `flash.yaml` keys:
 1. **PR #75** (plan Task 1): the `MNTDEV` wrapper, separate and harmless on plain roots.
 2. **The implementation PR** (plan Tasks 2–9 and 11, 12b) merges with `encrypt`
    **defaulting to false**. Plain cards see only:
-   - `lock_device_private_key=1`;
+   - `lock_device_private_key=1`; **Superseded 2026-10-11 (config lock blocks genkey; see Hardware findings)**
    - the NOT ENCRYPTED reporting.
 
    cloud-init growpart is unchanged.
@@ -489,6 +489,13 @@ First runs on a Pi 5 changed three parts of the design above:
 - **Probe with `pubkey`.** Exit 250 means the key is not set, the only case that runs
   `genkey`. Every `rpi-fw-crypto` call has a deadline; one that overruns writes a wedged
   marker and the boot fails open.
+- **Superseded 2026-10-11: the config lock.** `lock_device_private_key=1` in `rpi-config.txt`
+  (Ruling 4 and the "Never read raw" bullet) is gone. It sets the old global key lock (status
+  bit 8, READ_LOCKED), which on EEPROM 2026-05-11 also blocks `genkey`: the serial log showed
+  "genkey failed (firmware error 4)" and `get-key-status 1` read 0x101. A board with no key
+  could never be provisioned. Per-operation locks (READ, GEN, HMAC) exist from 2026-06-17, and
+  `fwkey lock` applies them at runtime after unlock. `fwkey` reports a status with bit 8 set
+  on older firmware as `unavailable:key-locked-by-config` and doesn't try `genkey`.
 - **Token 0 follows the conversion.** cryptsetup refuses `token import` while the header is
   marked for reencryption. The token is imported after the conversion completes. Until then
   the candidate is found by the `converting` marker, the GPT root type (root-arm64) and the
