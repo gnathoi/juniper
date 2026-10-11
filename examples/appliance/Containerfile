@@ -11,5 +11,8 @@ RUN dnf -y install i2c-tools && dnf clean all
 COPY sensor.container /usr/share/containers/systemd/sensor.container
 # Readiness hook: after an update, the new image is kept only once the sensor stores samples.
 COPY health.d/50-sensor-sample /usr/lib/juniper/health.d/50-sensor-sample
+# To require your cosign signature on images under your namespace (see README.md):
+#   COPY cosign.pub /tmp/cosign.pub
+#   RUN /usr/libexec/juniper/trust-images ghcr.io/you /tmp/cosign.pub && rm /tmp/cosign.pub
 
 RUN bootc container lint

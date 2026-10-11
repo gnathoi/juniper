@@ -12,6 +12,7 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ### Added
 
+- `ujust trust-images NAMESPACE PUBKEY_FILE` requires your cosign signature for every image under a namespace (derived OS images via `bootc switch`/updates, and podman workload pulls including `podman auto-update`); `ujust trust-images` lists, `ujust untrust-images` removes. Juniper's own namespace can't be changed. The appliance example now pins its workload by digest and documents signed auto-update, readiness and keeping app data safe across a rollback (part of #55)
 - The Pi kernel's age is now visible: release notes and the CI step summary state its build date (and any newer kernel waiting in AlmaLinux's Pi repo, with escalated wording past 14 days), and `ujust pi-status` shows the running kernel and how many days ago it was built. It never fails a release
 - Tab completion for `ujust` in bash: recipe names (including image-specific ones) and fixed arguments like `lan-ssh on|off|for|status`. Adds the small `bash-completion` package to every image
 - README section "If a device is lost or stolen": what a stolen card or board exposes today

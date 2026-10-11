@@ -242,6 +242,24 @@ also needs greetd to be running, or it falls back.
 See [examples/appliance](examples/appliance): `FROM ghcr.io/gnathoi/juniper-minimal`, add
 packages and quadlets, push, `bootc switch` the device to it.
 
+### Your own images
+
+Juniper only enforces signatures on its own namespace, so your images (a derived OS image or a
+workload) are accepted unsigned until you say otherwise. Sign them with cosign and trust your
+key on the device:
+
+    ujust trust-images ghcr.io/you ~/cosign.pub    # images under ghcr.io/you need your signature
+    ujust trust-images                             # list trusted namespaces and keys
+    ujust untrust-images ghcr.io/you               # stop requiring it
+
+From then on `bootc switch`, OS updates, podman pulls and `podman auto-update` refuse any image
+under that namespace without your signature. Run it before switching to a derived image and the
+first switch is verified too. It edits `/etc/containers/policy.json` (validated first, previous
+copy kept as `policy.json.bak`) and never changes Juniper's own entry. For workloads, sign and
+auto-update on a fleet, or pin by digest on a one-off: see
+[the appliance example](examples/appliance#workload-images-signed-or-pinned), which also covers
+keeping app data safe across a rollback.
+
 ### Readiness checks for your workload
 
 After an update, the boot health check keeps the new image only if the device is reachable
