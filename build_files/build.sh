@@ -8,6 +8,13 @@ set -xeuo pipefail
 # EPEL: dnf doesn't check a command-line package's signature, so verify epel-release against
 # the pinned key alone (own rpm database; _pkgverify_level all fails an unsigned package).
 # Its repo files point gpgkey= at the key it ships, which that signature covers.
+# Pinning the key stops a forged package, not a downgrade: a mirror can still serve an older
+# epel-release that is validly signed. No minimum version is enforced on purpose: the package
+# holds only repo files and the key (its release number moves a few times a year and says
+# nothing about security), so a floor would need a manual bump after every EPEL release and
+# fail builds without closing anything. What a downgrade can change is the repo file, which
+# is still gpgcheck=1 with the local pinned key, and the image test (tests/repo-audit.sh) fails CI if
+# not. Every package EPEL installs is signature-checked against that same key.
 epel=$(mktemp -d)
 curl -fsSLo "$epel/epel-release.rpm" https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
 rpmkeys --dbpath "$epel/db" --import /ctx/build_files/keys/RPM-GPG-KEY-EPEL-10

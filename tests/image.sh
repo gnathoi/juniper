@@ -62,16 +62,13 @@ for opt in passwordauthentication kbdinteractiveauthentication; do
   }
 done
 
-# Package repos trust only local keys (build_files/keys): no gpgkey= over HTTPS, signatures
-# on, and the EPEL and Tailscale keys are the pinned ones.
-if grep -H '^gpgkey=' /etc/yum.repos.d/*.repo | grep -v '=file:///etc/pki/rpm-gpg/'; then
-  echo "repo key not a local file"
-  exit 1
-fi
-if grep -H '^gpgcheck=0' /etc/yum.repos.d/*.repo; then
-  echo "repo with signature checks off"
-  exit 1
-fi
+# Package repos trust only local keys (build_files/keys): every enabled repo, whichever file
+# it's in, has signature checks on and nothing but file:///etc/pki/rpm-gpg/ keys (tests/
+# repo-audit.sh parses the files strictly: truthy forms, continuation lines, extra keys). EPEL
+# and Tailscale must be among them, and are checked against the pinned keys below.
+repo_dirs=(/etc/yum.repos.d)
+[[ -d /etc/distro.repos.d ]] && repo_dirs+=(/etc/distro.repos.d)
+"$(dirname "$0")/repo-audit.sh" -r epel -r tailscale-stable "${repo_dirs[@]}"
 for want in gpgcheck=1 repo_gpgcheck=1 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-tailscale; do
   grep -qx "$want" /etc/yum.repos.d/tailscale.repo
 done

@@ -1152,6 +1152,14 @@ test_wifi_import_rejects_bad_regdom() {
     "$LIBEXEC/wifi-import" >/dev/null 2>&1
     check "wifi: regdom $bad not written" test ! -e "$JUNIPER_MODPROBE_DIR/juniper-wifi-regdom.conf"
   done
+  # Case folding must not turn non-ASCII into letters: "ß".upper() is "SS", "ﬀ".upper() is "FF".
+  for bad in '"ß"' '"ﬀ"' '"ıı"'; do
+    rm -rf "$JUNIPER_MODPROBE_DIR"
+    printf 'version: 2\nwifis:\n  wlan0:\n    regulatory-domain: %s\n    access-points:\n      a: {}\n' "$bad" \
+      >"$JUNIPER_CIDATA_DIR/network-config"
+    "$LIBEXEC/wifi-import" >/dev/null 2>&1
+    check "wifi: non-ASCII regdom $bad not written" test ! -e "$JUNIPER_MODPROBE_DIR/juniper-wifi-regdom.conf"
+  done
   printf 'version: 2\nwifis:\n  wlan0:\n    regulatory-domain: "de"\n    access-points:\n      a: {}\n' \
     >"$JUNIPER_CIDATA_DIR/network-config"
   "$LIBEXEC/wifi-import" >/dev/null
@@ -1239,7 +1247,7 @@ test_render_cidata_wifi_country() {
   check "cidata: lowercase country uppercased" \
     test "$(yget "$T/o1/network-config" 'd["network"]["wifis"]["wlan0"]["regulatory-domain"]')" = GB
   local c i=0
-  for c in '"GB\ninstall cfg80211 /bin/sh"' '"G\x01"' '"G\tB"' GBR '"G"' '"12"' 44; do
+  for c in '"GB\ninstall cfg80211 /bin/sh"' '"G\x01"' '"G\tB"' GBR '"G"' '"12"' 44 '"ß"' '"ﬀ"' '"ıı"'; do
     i=$((i + 1))
     # shellcheck disable=SC2059 # base is the format
     printf "$base" "$c" >"$T/bad$i.yaml"
@@ -1991,6 +1999,23 @@ test_lan_ssh_refresh_writes_legacy_status_file() {
   check "off: clears the status file" test ! -e "$JUNIPER_RUN_DIR/lan-ssh-legacy"
 }
 
+# The login user reads this file (the banner): a root caller's umask must not hide it.
+test_lan_ssh_refresh_pins_modes_whatever_the_umask() {
+  lan_setup
+  echo ssh >"$T/fw/run_svc"
+  (
+    umask 077
+    "$LIBEXEC/lan-ssh" refresh
+  )
+  check "refresh: run dir 0755 under umask 077" test "$(stat -c %a "$JUNIPER_RUN_DIR")" = 755
+  check "refresh: status file 0644 under umask 077" test "$(stat -c %a "$JUNIPER_RUN_DIR/lan-ssh-legacy")" = 644
+  chmod 700 "$JUNIPER_RUN_DIR"
+  chmod 600 "$JUNIPER_RUN_DIR/lan-ssh-legacy"
+  "$LIBEXEC/lan-ssh" refresh
+  check "refresh: existing run dir fixed to 0755" test "$(stat -c %a "$JUNIPER_RUN_DIR")" = 755
+  check "refresh: existing status file fixed to 0644" test "$(stat -c %a "$JUNIPER_RUN_DIR/lan-ssh-legacy")" = 644
+}
+
 test_lan_ssh_off_removes_everything() {
   lan_setup
   "$LIBEXEC/lan-ssh" on 10.1.0.0/24 fd00::/64 >/dev/null
@@ -2101,6 +2126,52 @@ esac'
   check "completion: recipe without fixed args" test -z "$(comp ujust update '')"
   check "completion: just failure is silent" bash -c "PATH=/nonexistent; source '$ROOT/system_files/usr/share/bash-completion/completions/ujust'; COMP_WORDS=(ujust x); COMP_CWORD=1; _ujust 2>&1; test -z \"\${COMPREPLY[*]}\""
 }
+
+# --- tests/repo-audit.sh (the image smoke test's repo-key check) ---
+repo_dir() { # NAME CONTENT: a one-file repo dir under $T/repos-NAME
+  mkdir -p "$T/repos-$1"
+  printf '%b' "$2" >"$T/repos-$1/x.repo"
+}
+audit() { "$ROOT/tests/repo-audit.sh" "$@"; }
+test_repo_audit() {
+  local k=file:///etc/pki/rpm-gpg/K good
+  good="[a]\nname=a\nenabled=1\ngpgcheck=1\ngpgkey=$k\n"
+  repo_dir good "$good"
+  check "repo-audit: a clean repo passes" audit "$T/repos-good"
+  repo_dir truthy "[a]\ngpgcheck=Yes\ngpgkey=$k\n[b]\ngpgcheck=TRUE\ngpgkey=$k\n[c]\ngpgcheck=on\ngpgkey=$k\n"
+  check "repo-audit: dnf truthy forms pass" audit "$T/repos-truthy"
+  repo_dir cont "[a]\ngpgcheck=1\ngpgkey=$k\n    $k.2\n"
+  check "repo-audit: local continuation line passes" audit "$T/repos-cont"
+  repo_dir off "[a]\nenabled=0\ngpgcheck=0\ngpgkey=https://x/y\n"
+  check "repo-audit: a disabled repo is ignored" audit "$T/repos-off"
+  local name body
+  while IFS='|' read -r name body; do
+    repo_dir "$name" "$body"
+    check "repo-audit: refuses $name" not_ok audit "$T/repos-$name"
+  done <<EOF
+no-check|[a]\ngpgcheck=0\ngpgkey=$k\n
+false|[a]\ngpgcheck=False\ngpgkey=$k\n
+spaced-zero|[a]\ngpgcheck = 0\ngpgkey=$k\n
+unset|[a]\nname=a\ngpgkey=$k\n
+garbage|[a]\ngpgcheck=maybe\ngpgkey=$k\n
+https-key|[a]\ngpgcheck=1\ngpgkey=https://evil/key\n
+second-key|[a]\ngpgcheck=1\ngpgkey=$k https://evil/key\n
+comma-key|[a]\ngpgcheck=1\ngpgkey=$k,https://evil/key\n
+cont-key|[a]\ngpgcheck=1\ngpgkey=$k\n    https://evil/key\n
+other-dir|[a]\ngpgcheck=1\ngpgkey=file:///tmp/key\n
+no-key|[a]\ngpgcheck=1\n
+upper-key-name|[a]\nGPGCHECK=0\ngpgkey=$k\n
+dup-check|[a]\ngpgcheck=0\ngpgcheck=1\ngpgkey=$k\n
+second-repo|[a]\ngpgcheck=1\ngpgkey=$k\n[b]\nbaseurl=http://x\n
+enabled-garbage|[a]\nenabled=maybe\ngpgcheck=0\ngpgkey=$k\n
+EOF
+  check "repo-audit: -r wants the repo present" not_ok audit -r missing "$T/repos-good"
+  check "repo-audit: -r finds it" audit -r a "$T/repos-good"
+  check "repo-audit: -r wants it enabled" not_ok audit -r a "$T/repos-off"
+  mkdir "$T/empty"
+  check "repo-audit: no repo files is an error" not_ok audit "$T/empty"
+}
+not_ok() { ! "$@" 2>/dev/null; }
 
 # --- runner ---
 for t in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do
