@@ -119,6 +119,17 @@ jobs:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
         run: sudo "$(command -v just)" image="${{ matrix.image }}" image_ref="$IMAGE_REF" test-image "$IMAGE_REF:latest"
 
+      # First-boot encryption (issue #50) with the image's real cryptroot, cryptsetup, sfdisk
+      # and age on loop devices; only the firmware key is stubbed. Privileged, host /dev.
+      - name: Encryption loop-device test
+        if: matrix.image == 'juniper-minimal'
+        timeout-minutes: 45
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+        run: |
+          sudo "$(command -v just)" image="${{ matrix.image }}" image_ref="$IMAGE_REF" \
+            test-cryptroot "$IMAGE_REF:latest"
+
       # The Pi kernel only arrives with base rebuilds (build.sh can't upgrade it safely). A
       # stale kernel never fails the build (that would also stop the weekly userland security
       # updates); it is made loud instead: step summary, warning, and a line in the release notes.
