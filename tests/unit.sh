@@ -295,8 +295,8 @@ test_changelog_repo_file() {
 }
 
 # tailscale status --json of a locked device that is up and connected to the control plane.
-TS_ONLINE='{"BackendState":"Running","Self":{"Online":true}}'
-export TS_ONLINE
+# shellcheck disable=SC2089,SC2090 # JSON text, echoed verbatim by the stubs
+export TS_ONLINE='{"BackendState":"Running","Self":{"Online":true}}'
 
 health_env() {
   export JUNIPER_HEALTH_TRIES=1 JUNIPER_HEALTH_INTERVAL=0 JUNIPER_TRYBOOT_FLAG=$T/tryboot \
@@ -700,6 +700,119 @@ test_healthcheck_unit_has_fallback_on_failure() {
     grep -qx 'OnFailure=juniper-healthcheck-fallback.service' "$u/juniper-healthcheck.service"
   check "fallback unit: runs healthcheck --fallback" \
     grep -qx 'ExecStart=/usr/libexec/juniper/healthcheck --fallback' "$u/juniper-healthcheck-fallback.service"
+}
+
+# Quarantine: a digest that failed its health check under tryboot is recorded in
+# $JUNIPER_STATE_DIR/bad-digests (/var survives the fallback) and never applied again.
+BAD=sha256:$(printf 'b%.0s' {1..64})
+NEW=sha256:$(printf 'c%.0s' {1..64})
+booted_digest() { stub bootc "echo '{\"status\":{\"booted\":{\"image\":{\"imageDigest\":\"$1\"}}}}'"; }
+
+test_healthcheck_fallback_records_booted_digest() {
+  health_env
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  booted_digest "$BAD"
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "quarantine: failed tryboot digest recorded" grep -qx "$BAD" "$JUNIPER_STATE_DIR/bad-digests"
+  check "quarantine: still reboots" called "systemctl reboot"
+}
+
+test_healthcheck_fallback_mode_records_booted_digest() {
+  health_env
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  booted_digest "$BAD"
+  "$LIBEXEC/healthcheck" --fallback 2>/dev/null
+  check "quarantine: --fallback records the digest" grep -qx "$BAD" "$JUNIPER_STATE_DIR/bad-digests"
+  # The main check already recorded it, then OnFailure= runs --fallback: listed once.
+  "$LIBEXEC/healthcheck" --fallback 2>/dev/null
+  check "quarantine: recorded once" test "$(grep -cx "$BAD" "$JUNIPER_STATE_DIR/bad-digests")" = 1
+}
+
+test_healthcheck_normal_boot_records_nothing() {
+  health_env
+  booted_digest "$BAD"
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  "$LIBEXEC/healthcheck" --fallback 2>/dev/null
+  check "quarantine: normal boot records nothing" test ! -e "$JUNIPER_STATE_DIR/bad-digests"
+}
+
+test_healthcheck_quarantine_is_bounded() {
+  health_env
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  local i
+  for i in 0 1 2 3 4 5 6 7 8 9; do echo "sha256:$(printf "$i%.0s" {1..64})"; done >"$JUNIPER_STATE_DIR/bad-digests"
+  booted_digest "$BAD"
+  "$LIBEXEC/healthcheck" --fallback 2>/dev/null
+  check "quarantine: keeps the last 10" test "$(wc -l <"$JUNIPER_STATE_DIR/bad-digests")" = 10
+  check "quarantine: newest kept" test "$(tail -n1 "$JUNIPER_STATE_DIR/bad-digests")" = "$BAD"
+  check "quarantine: oldest dropped" fails grep -q "sha256:0000" "$JUNIPER_STATE_DIR/bad-digests"
+}
+
+test_healthcheck_quarantine_ignores_bad_bootc_output() {
+  health_env
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  # shellcheck disable=SC2016 # a literal, never expanded
+  booted_digest 'sha256:nope$(reboot)'
+  "$LIBEXEC/healthcheck" --fallback 2>/dev/null
+  check "quarantine: malformed digest not recorded" test ! -s "$JUNIPER_STATE_DIR/bad-digests"
+  check "quarantine: malformed digest -> still reboots" called "systemctl reboot"
+  : >"$CALLS"
+  stub bootc "$hang"
+  local start=$SECONDS
+  "$LIBEXEC/healthcheck" --fallback 2>/dev/null
+  check "quarantine: hung bootc doesn't stall the fallback" test $((SECONDS - start)) -lt 10
+  check "quarantine: hung bootc -> still reboots" called "systemctl reboot"
+}
+
+staged_digest() { stub bootc "echo '{\"status\":{\"staged\":{\"image\":{\"imageDigest\":\"$1\"}}}}'"; }
+
+test_apply_update_skips_quarantined_digest() {
+  echo "$BAD" >"$JUNIPER_STATE_DIR/bad-digests"
+  staged_digest "$BAD"
+  local out
+  out=$("$LIBEXEC/apply-update")
+  check "apply-update: quarantined digest -> no tryreboot" not_called "rpi-bootc-bootloader"
+  check "apply-update: quarantined digest logged" grep -q "update $BAD failed its health check; waiting for a newer image" <<<"$out"
+  check "apply-update: quarantine shown (update-held)" grep -q "failed its health check" "$JUNIPER_STATE_DIR/update-held"
+}
+
+test_apply_update_newer_digest_proceeds() {
+  echo "$BAD" >"$JUNIPER_STATE_DIR/bad-digests"
+  echo "update $BAD failed its health check; waiting for a newer image" >"$JUNIPER_STATE_DIR/update-held"
+  staged_digest "$NEW"
+  "$LIBEXEC/apply-update"
+  check "apply-update: newer digest -> tryreboot" called "rpi-bootc-bootloader tryreboot"
+  check "apply-update: newer digest clears update-held" test ! -e "$JUNIPER_STATE_DIR/update-held"
+}
+
+test_apply_update_check_mode_never_reboots() {
+  echo "$BAD" >"$JUNIPER_STATE_DIR/bad-digests"
+  staged_digest "$BAD"
+  "$LIBEXEC/apply-update" --check >/dev/null
+  check "apply-update --check: quarantined -> update-held" grep -q "$BAD" "$JUNIPER_STATE_DIR/update-held"
+  staged_digest "$NEW"
+  "$LIBEXEC/apply-update" --check >/dev/null
+  check "apply-update --check: newer -> update-held cleared" test ! -e "$JUNIPER_STATE_DIR/update-held"
+  check "apply-update --check: never reboots" not_called "rpi-bootc-bootloader"
+}
+
+test_update_service_refreshes_quarantine_status() {
+  check "juniper-update: refreshes update-held after staging" grep -qx \
+    'ExecStartPost=-/usr/libexec/juniper/apply-update --check' \
+    "$ROOT/system_files/usr/lib/systemd/system/juniper-update.service"
+}
+
+test_motd_shows_quarantined_update() {
+  stub fastfetch ''
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub systemctl '[[ $* != *is-failed* ]]'
+  echo "update $BAD failed its health check; waiting for a newer image" >"$JUNIPER_STATE_DIR/update-held"
+  check "motd: quarantined update shown" grep -q "update $BAD failed its health check" <<<"$("$LIBEXEC/motd" 2>/dev/null)"
+}
+
+test_pi_status_shows_quarantined_update() {
+  check "pi-status: shows update-held" grep -q '/var/lib/juniper/update-held' \
+    "$ROOT/system_files/usr/share/juniper/just/pi.just"
 }
 
 test_healthcheck_probe_timeout_is_short() {

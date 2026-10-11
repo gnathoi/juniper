@@ -2,8 +2,8 @@
 # Every boot (juniper-healthcheck.service): if the system is healthy, make the booted
 # deployment the firmware default; if an update booted via tryboot is unhealthy, reboot
 # so the firmware falls back to the previous deployment.
-# ponytail: a bad update is retried at each reboot window until a fixed image ships; add a
-# known-bad digest list if that ever matters.
+# An update that fails here under tryboot is quarantined (bad-digests, below): apply-update
+# skips that image until a newer one is staged.
 set -euo pipefail
 
 state_dir=${JUNIPER_STATE_DIR:-/var/lib/juniper}
@@ -59,7 +59,7 @@ healthy() {
 root_controlled() {
   local uid mode
   read -r uid mode < <(stat -L -c '%u %a' -- "$1" 2>/dev/null) || return 1
-  [[ $uid == "$local_owner" ]] && ((!(8#$mode & 8#022)))
+  [[ $uid == "$local_owner" ]] && ((! (8#$mode & 8#022)))
 }
 
 # run_hooks DIR [local]: run each executable in DIR, sorted; any failure fails the try. Each is
@@ -91,7 +91,28 @@ in_tryboot() {
 fall_back() {
   in_tryboot || return 0
   echo "Unhealthy update under tryboot; rebooting into the previous deployment." >&2
+  quarantine || true
   systemctl reboot
+}
+
+# Record the booted (failed tryboot) image digest in $state_dir/bad-digests, so apply-update
+# doesn't boot it again at every reboot window; a newer image proceeds. /var survives the
+# fallback. Best effort: it must never stand in the way of the reboot.
+quarantine() {
+  local digest list=$state_dir/bad-digests
+  digest=$(probe bootc status --json 2>/dev/null | jq -r '.status.booted.image.imageDigest // empty' 2>/dev/null) || true
+  if [[ ! $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo "No image digest for this deployment; not quarantined." >&2
+    return 1
+  fi
+  echo "Quarantining $digest: it won't be applied again; a newer image will." >&2
+  mkdir -p "$state_dir"
+  # Newest last, each once, the last 10 only.
+  {
+    grep -vxF -- "$digest" "$list" 2>/dev/null || true
+    echo "$digest"
+  } | tail -n 10 >"$list.tmp"
+  mv -f "$list.tmp" "$list"
 }
 
 case ${1:-} in

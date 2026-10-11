@@ -1,10 +1,12 @@
-# Show Pi temperature, throttling and clock speed, and whether the Tailscale join gave up
+# Show Pi temperature, throttling and clock speed, whether the Tailscale join gave up, and a
+# held (quarantined) update
 pi-status:
     sudo vcgencmd measure_temp
     sudo vcgencmd get_throttled
     sudo vcgencmd measure_clock arm
     @if [ -e /var/lib/juniper/tailscale-join-gave-up ] && ! tailscale ip -4 >/dev/null 2>&1; then echo "Tailscale: gave up joining ($(cat /var/lib/juniper/tailscale-join-gave-up)); key deleted. Run: ujust tailscale-up"; fi
     @if [ -e /var/lib/juniper/locked ]; then sudo /usr/libexec/juniper/lan-ssh legacy || true; fi
+    @cat /var/lib/juniper/update-held 2>/dev/null || true
 
 # Bootloader EEPROM: show status, or `apply` to stage the latest default release for the next
 # reboot. Manual on purpose: EEPROM writes have no tryboot fallback.
