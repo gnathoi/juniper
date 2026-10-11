@@ -12,6 +12,7 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ### Added
 
+- Tab completion for `ujust` in bash: recipe names (including image-specific ones) and fixed arguments like `lan-ssh on|off|for|status`. Adds the small `bash-completion` package to every image
 - README section "If a device is lost or stolen": what a stolen card or board exposes today
   (nothing is encrypted at rest; the boot partition is unsigned) and the revocation steps.
 - Local health hooks: executables in `/etc/juniper/health.d` (root-owned, not group- or

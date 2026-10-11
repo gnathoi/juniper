@@ -1,0 +1,33 @@
+# bash completion for ujust (Juniper's recipe runner). Recipes are read from just at
+# completion time, so image-specific ones (dev, desktop) appear only where installed.
+_ujust() {
+  local justfile=/usr/share/juniper/just/main.just
+  local cur=${COMP_WORDS[COMP_CWORD]} recipe vals
+  COMPREPLY=()
+  if ((COMP_CWORD == 1)); then
+    if [[ $cur == -* ]]; then
+      vals="--list --help"
+    else
+      vals=$(just --justfile "$justfile" --summary 2>/dev/null) || return 0
+    fi
+    mapfile -t COMPREPLY < <(compgen -W "$vals" -- "$cur")
+    return 0
+  fi
+  recipe=${COMP_WORDS[1]}
+  case $recipe in
+    # Not a `case` in the recipe body: the argument grammar lives in the script it calls.
+    lan-ssh) ((COMP_CWORD == 2)) && vals="on off for status" ;;
+    update-schedule) ((COMP_CWORD == 2)) && vals="off daily mon tue wed thu fri sat sun" ;;
+    switch) ((COMP_CWORD == 2)) && vals="ghcr.io/gnathoi/juniper:latest ghcr.io/gnathoi/juniper-minimal:latest ghcr.io/gnathoi/juniper-desktop:latest" ;;
+    *)
+      # First argument: the patterns of the recipe's `case` (on|off, status|apply, ...).
+      if ((COMP_CWORD == 2)); then
+        vals=$(just --justfile "$justfile" --show "$recipe" 2>/dev/null |
+          sed -n -E 's/^[[:space:]]+([a-z][a-z|-]*)\).*/\1/p' | tr '|' ' ')
+      fi
+      ;;
+  esac
+  [[ -n ${vals:-} ]] || return 0
+  mapfile -t COMPREPLY < <(compgen -W "$vals" -- "$cur")
+}
+complete -F _ujust ujust

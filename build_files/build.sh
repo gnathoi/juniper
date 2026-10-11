@@ -38,7 +38,7 @@ dnf -y upgrade --exclude='raspberrypi2-kernel*' --exclude='raspberrypi2-firmware
 # Homebrew, and an appliance doesn't need it.
 dnf -y install --exclude=fzf \
   podman firewalld cloud-init cloud-utils-growpart zram-generator \
-  jq rsync NetworkManager-wifi avahi just \
+  jq rsync NetworkManager-wifi avahi just bash-completion \
   tailscale rpi-eeprom rpi-eeprom-firmware binutils
 dnf clean all
 

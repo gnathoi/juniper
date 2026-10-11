@@ -2105,6 +2105,28 @@ test_pi_status_shows_gave_up_legacy_and_held() {
   check "pi-status: held line kept" grep -q 'update-held' "$j"
 }
 
+test_ujust_completion() {
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub just 'case $3 in
+  --summary) echo "lan-ssh pi-eeprom switch update update-schedule tailscale-ssh" ;;
+  --show) [[ $4 == pi-eeprom ]] && printf "pi-eeprom action=\"status\":\n    case x in\n      status) a ;;\n      apply|force) b ;;\n      *) c ;;\n    esac\n" ;;
+esac'
+  comp() { # words... (last = word being completed); prints COMPREPLY
+    # shellcheck disable=SC1091
+    source "$ROOT/system_files/usr/share/bash-completion/completions/ujust"
+    COMP_WORDS=("$@") COMP_CWORD=$(($# - 1))
+    _ujust
+    echo "${COMPREPLY[*]}"
+  }
+  check "completion: registered for ujust" bash -c "source '$ROOT/system_files/usr/share/bash-completion/completions/ujust'; complete -p ujust | grep -q '_ujust'"
+  check "completion: first word by prefix" test "$(comp ujust up)" = "update update-schedule"
+  check "completion: lan-ssh args" test "$(comp ujust lan-ssh '')" = "on off for status"
+  check "completion: lan-ssh prefix" test "$(comp ujust lan-ssh f)" = "for"
+  check "completion: case patterns from recipe" test "$(comp ujust pi-eeprom '')" = "status apply force"
+  check "completion: recipe without fixed args" test -z "$(comp ujust update '')"
+  check "completion: just failure is silent" bash -c "PATH=/nonexistent; source '$ROOT/system_files/usr/share/bash-completion/completions/ujust'; COMP_WORDS=(ujust x); COMP_CWORD=1; _ujust 2>&1; test -z \"\${COMPREPLY[*]}\""
+}
+
 # --- tests/repo-audit.sh (the image smoke test's repo-key check) ---
 repo_dir() { # NAME CONTENT: a one-file repo dir under $T/repos-NAME
   mkdir -p "$T/repos-$1"
