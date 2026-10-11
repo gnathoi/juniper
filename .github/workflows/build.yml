@@ -50,11 +50,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # juniper-desktop: built and tested; not published until Task 10
-        image: [juniper-minimal, juniper, juniper-desktop]
+        image: [juniper-minimal, juniper]
     outputs:
       version: ${{ steps.meta.outputs.version }}
-    steps:
+    steps: &build-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Free disk space
@@ -135,7 +134,7 @@ jobs:
 
       - name: Push (sha- tag only; the sign job adds latest once signed)
         id: push
-        if: env.PUBLISH == 'true' && matrix.image != 'juniper-desktop'
+        if: env.PUBLISH == 'true'
         env:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
           IMAGE_NAME: ${{ matrix.image }}
@@ -176,11 +175,25 @@ jobs:
           ) || echo "::warning::update-size report failed for $IMAGE_NAME"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: env.PUBLISH == 'true' && matrix.image != 'juniper-desktop'
+        if: env.PUBLISH == 'true'
         with:
           name: digest-${{ matrix.image }}
           path: digest/${{ matrix.image }}
           retention-days: 3
+
+  # The experimental desktop has its own job chain (build-desktop -> sign-desktop ->
+  # disk-desktop), with the same steps as the headless jobs: a desktop failure (a pruned COPR
+  # build, say) never blocks signing, disk images or the release of juniper and
+  # juniper-minimal, and the desktop is published only when its own build and tests pass.
+  build-desktop:
+    needs: lint
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      matrix:
+        image: [juniper-desktop]
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps: *build-steps
 
   # The only job besides release that holds SIGNING_SECRET (environment "release": main and
   # v* tags only). It runs no image or build code: cosign, skopeo and the public key.
@@ -200,7 +213,7 @@ jobs:
     env:
       REGISTRY: ${{ vars.IMAGE_REGISTRY || 'ghcr.io' }}
       VERSION: ${{ needs.build.outputs.version }}
-    steps:
+    steps: &sign-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -279,6 +292,23 @@ jobs:
           cosign verify --key system_files/usr/share/pki/containers/juniper.pub "$IMAGE_REF:latest" \
             | jq -e --arg d "$DIGEST" '.[0].critical.image."docker-manifest-digest" == $d' >/dev/null
 
+  sign-desktop:
+    needs: build-desktop
+    # yamllint disable-line rule:line-length
+    if: github.event_name == 'schedule' || startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        image: [juniper-desktop]
+    env:
+      REGISTRY: ${{ vars.IMAGE_REGISTRY || 'ghcr.io' }}
+      VERSION: ${{ needs.build-desktop.outputs.version }}
+    steps: *sign-steps
+
   disk:
     needs: [build, sign]
     # yamllint disable-line rule:line-length
@@ -295,7 +325,7 @@ jobs:
       IMAGE: ${{ matrix.image }}
       VERSION: ${{ needs.build.outputs.version }}
       TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', needs.build.outputs.version) }}
-    steps:
+    steps: &disk-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Free disk space
         run: |
@@ -327,9 +357,12 @@ jobs:
         run: |
           sudo chown "$USER:$(id -gn)" "$IMAGE-$VERSION.raw"
           xz -T0 -k "$IMAGE-$VERSION.raw"
-          disk/render-os-list.sh "$IMAGE" "$IMAGE-$VERSION.raw" "$IMAGE-$VERSION.raw.xz" \
-            "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$IMAGE-$VERSION.raw.xz" \
-            "$VERSION" >"os-list-$IMAGE.json"
+          # The experimental desktop stays out of the Raspberry Pi Imager list (os-list.json).
+          if [ "$IMAGE" != juniper-desktop ]; then
+            disk/render-os-list.sh "$IMAGE" "$IMAGE-$VERSION.raw" "$IMAGE-$VERSION.raw.xz" \
+              "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$IMAGE-$VERSION.raw.xz" \
+              "$VERSION" >"os-list-$IMAGE.json"
+          fi
           rm "$IMAGE-$VERSION.raw"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -339,8 +372,27 @@ jobs:
             os-list-${{ matrix.image }}.json
           retention-days: 3
 
+  disk-desktop:
+    needs: [build-desktop, sign-desktop]
+    # yamllint disable-line rule:line-length
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.build_raw)
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      matrix:
+        image: [juniper-desktop]
+    env:
+      IMAGE: ${{ matrix.image }}
+      VERSION: ${{ needs.build-desktop.outputs.version }}
+    steps: *disk-steps
+
   release:
-    needs: [build, disk]
+    needs: [build, disk, disk-desktop]
+    # The headless disk images are required; the desktop's join the release only when its own
+    # chain passed (otherwise disk-desktop failed or was skipped, and the release goes ahead).
+    if: ${{ !cancelled() && needs.disk.result == 'success' }}
     runs-on: ubuntu-24.04
     environment: release
     permissions:
@@ -375,6 +427,10 @@ jobs:
         run: |
           jq -s '{os_list: [.[].os_list[]]}' os-list-juniper.json os-list-juniper-minimal.json >os-list.json
           sha256sum ./*.raw.xz os-list.json >SHA256SUMS
+          if compgen -G 'juniper-desktop-*.raw.xz' >/dev/null; then
+            echo "" >>notes.md
+            echo "**juniper-desktop** (the niri desktop) is experimental and untested on hardware." >>notes.md
+          fi
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: v2.5.2
