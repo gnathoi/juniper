@@ -37,8 +37,9 @@ to your Containerfile:
     COPY cosign.pub /tmp/cosign.pub
     RUN /usr/libexec/juniper/trust-images ghcr.io/you /tmp/cosign.pub && rm /tmp/cosign.pub
 
-A device whose `/etc/containers/policy.json` was edited locally (by `trust-images` too) keeps
-its own copy across updates, so a policy baked into a later image doesn't reach it.
+That puts the same drop-in (`/etc/juniper/trusted-images.d/`) and key in your image. Don't edit
+`/etc/containers/policy.json` in your image directly: every boot rebuilds it from Juniper's base
+policy and the drop-ins, and logs and drops anything else.
 
 ## Workload images: signed or pinned
 

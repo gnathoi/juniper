@@ -73,13 +73,18 @@ done
 # --- signature policy: every image under our namespace (juniper, juniper-minimal) must carry
 # our cosign signature. Scoped to OS images only: a global reject would also stop podman
 # pulling unsigned app images for quadlets.
+# The policy ships read-only in /usr, so it updates with the image; juniper-containers-policy
+# regenerates /etc/containers/policy.json from it (plus `ujust trust-images` drop-ins) at every
+# boot. /etc gets the same bytes here, so a fresh device matches.
 namespace=${IMAGE_REF%/*}
+install -d -m 0755 /usr/share/juniper/containers
 jq --arg ns "$namespace" \
   '.transports.docker[$ns] = [{"type": "sigstoreSigned",
      "keyPath": "/usr/share/pki/containers/juniper.pub",
      "signedIdentity": {"type": "matchRepository"}}]' \
-  /etc/containers/policy.json >/tmp/policy.json
-mv /tmp/policy.json /etc/containers/policy.json
+  /etc/containers/policy.json >/usr/share/juniper/containers/policy.json
+chmod 0644 /usr/share/juniper/containers/policy.json
+cp /usr/share/juniper/containers/policy.json /etc/containers/policy.json
 printf 'docker:\n  %s:\n    use-sigstore-attachments: true\n' "$namespace" \
   >/etc/containers/registries.d/juniper.yaml
 
@@ -110,7 +115,7 @@ systemctl enable tailscaled.service firewalld.service avahi-daemon.service \
   cloud-init-local.service cloud-init.service cloud-config.service cloud-final.service \
   podman-auto-update.timer juniper-firstboot.service juniper-tailscale-join.service \
   juniper-lockdown.timer juniper-update.timer juniper-image-prune.timer juniper-reboot.timer juniper-healthcheck.service juniper-lan-ssh-status.service juniper-wifi-import.service \
-  juniper-firstboot-retry.service juniper-emergency-fallback.service
+  juniper-firstboot-retry.service juniper-emergency-fallback.service juniper-containers-policy.service
 systemctl --global enable podman-auto-update.timer
 systemctl mask bootc-fetch-apply-updates.timer
 
@@ -127,7 +132,7 @@ find /ctx/system_files -type f -printf '/%P\0' | tag juniper
 printf '%s\0' /usr/share/licenses/juniper/LICENSE /usr/share/licenses/juniper/THIRD_PARTY.md | tag juniper
 # Its own layer: changes only when its inputs do (dracut --reproducible).
 printf '%s\0' /usr/lib/modules/*/initramfs.img | tag initramfs
-printf '%s\0' /usr/lib/os-release /etc/containers/policy.json /etc/containers/registries.d/juniper.yaml \
+printf '%s\0' /usr/lib/os-release /etc/containers/policy.json /usr/share/juniper/containers/policy.json /etc/containers/registries.d/juniper.yaml \
   /etc/yum.repos.d/tailscale.repo /etc/pki/rpm-gpg/RPM-GPG-KEY-tailscale | tag juniper
 
 # --- cleanup: package scriptlets leave runtime-only content that bootc lint rejects ---

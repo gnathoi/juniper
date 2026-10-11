@@ -254,8 +254,18 @@ key on the device:
 
 From then on `bootc switch`, OS updates, podman pulls and `podman auto-update` refuse any image
 under that namespace without your signature. Run it before switching to a derived image and the
-first switch is verified too. It edits `/etc/containers/policy.json` (validated first, previous
-copy kept as `policy.json.bak`) and never changes Juniper's own entry. For workloads, sign and
+first switch is verified too.
+
+Where it lives: each trusted namespace is a small drop-in in `/etc/juniper/trusted-images.d/`,
+its key in `/etc/pki/containers/`, and its `use-sigstore-attachments` setting in
+`/etc/containers/registries.d/`. Juniper's own policy ships read-only in the image
+(`/usr/share/juniper/containers/policy.json`), so it updates with every image, key rotations
+included. At every boot, before anything pulls, `juniper-containers-policy.service` rebuilds
+`/etc/containers/policy.json` from that base plus the drop-ins (validated first, previous copy
+kept as `policy.json.bak`). A drop-in can never change Juniper's own namespace or an entry the
+image ships; one that tries, or is invalid, is skipped and logged
+(`journalctl -u juniper-containers-policy`). Don't edit `policy.json` by hand: it is rebuilt at
+boot. For workloads, sign and
 auto-update on a fleet, or pin by digest on a one-off: see
 [the appliance example](examples/appliance#workload-images-signed-or-pinned), which also covers
 keeping app data safe across a rollback.

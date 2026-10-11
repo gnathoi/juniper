@@ -34,6 +34,7 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ### Changed
 
+- `/etc/containers/policy.json` is now generated at every boot (`juniper-containers-policy.service`) from Juniper's base policy in `/usr/share/juniper/containers/policy.json`, which updates with the image, plus the `trust-images` drop-ins in `/etc/juniper/trusted-images.d`. Hand edits to `policy.json`, including ones a derived image baked in, are dropped and logged: use `trust-images` (on the device or in your Containerfile) instead
 - `ujust lan-ssh on` now allows SSH only from the networks the Pi is directly connected to
   (IPv4 and IPv6, link-local included), or from CIDRs you give it, instead of every source.
   New: `ujust lan-ssh for 2h` (temporary, gone on reboot), `ujust lan-ssh status`, and

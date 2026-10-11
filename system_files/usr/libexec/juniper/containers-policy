@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# Generate /etc/containers/policy.json from Juniper's base policy, which ships in the image and so
+# updates with it, plus one drop-in per trusted namespace in /etc/juniper/trusted-images.d
+# (written by `ujust trust-images`). Runs at every boot before anything pulls
+# (juniper-containers-policy.service), and after every trust-images change.
+#   containers-policy              regenerate; install atomically, previous kept as policy.json.bak
+#   containers-policy --check FILE exit 0 if drop-in FILE would be applied, else say why
+# A drop-in is {"NAMESPACE": [REQUIREMENT, ...]}: one namespace, every requirement sigstoreSigned
+# or signedBy. It can't touch a namespace the base policy sets, nor anything at or under Juniper's
+# own namespace. A drop-in that fails a check is skipped and logged: the result is the base plus
+# the drop-ins that pass, validated (jq, then skopeo's strict parser), never a broken policy.
+set -euo pipefail
+
+base=${JUNIPER_POLICY_BASE:-/usr/share/juniper/containers/policy.json}
+policy=${JUNIPER_POLICY:-/etc/containers/policy.json}
+dropdir=${JUNIPER_TRUST_DIR:-/etc/juniper/trusted-images.d}
+own_key=${JUNIPER_OWN_KEY:-/usr/share/pki/containers/juniper.pub}
+skopeo=${JUNIPER_SKOPEO:-skopeo}
+
+tmps=()
+trap 'rm -f "${tmps[@]}"' EXIT
+log() { echo "containers-policy: $*" >&2; }
+die() {
+  log "$*"
+  exit 1
+}
+
+# Same grammar as trust-images: a registry host and a lowercase path; no tag, digest or wildcard.
+label='[a-z0-9]([a-z0-9-]*[a-z0-9])?'
+ns_re="^(($label(\\.$label)+|localhost)(:[0-9]+)?|$label:[0-9]+)(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$"
+
+# Namespaces whose base entry uses Juniper's key.
+juniper_namespaces() {
+  jq -r --arg k "$own_key" '.transports.docker // {} | to_entries[]
+    | select(any(.value[]?; .keyPath? == $k)) | .key' "$base"
+}
+
+# valid_policy FILE: the shape podman needs, then skopeo's strict parse (it loads the policy
+# before it trips over the dummy image name).
+valid_policy() {
+  local out
+  jq -e '(.default | type == "array") and (.transports.docker | type == "object")' "$1" >/dev/null 2>&1 ||
+    return 1
+  command -v "$skopeo" >/dev/null || return 0
+  out=$("$skopeo" --policy "$1" copy juniper-policy-check: juniper-policy-check: 2>&1 || true)
+  [[ $out == *"Invalid source name"* ]] || {
+    log "skopeo: ${out##*msg=}"
+    return 1
+  }
+}
+
+# merge DROPIN...: the base with each drop-in's namespace added under transports.docker.
+merge() {
+  jq -s '.[0] as $base | reduce .[1:][] as $d ($base; .transports.docker += $d)' "$base" "$@"
+}
+
+# check_dropin FILE: print its namespace if it can be applied; otherwise log why and fail.
+check_dropin() {
+  local f=$1 ns j t
+  ns=$(jq -r 'if type == "object" and length == 1 then keys[0] else "" end' "$f" 2>/dev/null) || ns=
+  [[ -n $ns ]] || {
+    log "$f: not a JSON object with exactly one namespace; skipped."
+    return 1
+  }
+  [[ $ns =~ $ns_re ]] || {
+    log "$f: '$ns' is not a namespace (registry/path, lowercase, no tag); skipped."
+    return 1
+  }
+  while read -r j; do
+    if [[ -n $j && ($ns == "$j" || $ns == "$j"/*) ]]; then
+      log "$f: $ns is Juniper's own namespace ($j); a drop-in can't change it; skipped."
+      return 1
+    fi
+  done < <(juniper_namespaces)
+  if jq -e --arg ns "$ns" '.transports.docker // {} | has($ns)' "$base" >/dev/null; then
+    log "$f: $ns is set by the image's base policy; a drop-in can't replace it; skipped."
+    return 1
+  fi
+  jq -e --arg ns "$ns" '.[$ns] | type == "array" and length > 0
+    and all(.[]; type == "object" and (.type == "sigstoreSigned" or .type == "signedBy"))' "$f" >/dev/null || {
+    log "$f: every requirement must be sigstoreSigned or signedBy; skipped."
+    return 1
+  }
+  t=$(mktemp)
+  tmps+=("$t")
+  merge "$f" >"$t"
+  valid_policy "$t" || {
+    log "$f: the policy with it is invalid; skipped."
+    return 1
+  }
+  echo "$ns"
+}
+
+jq empty "$base" 2>/dev/null || die "The base policy $base is missing or invalid; $policy left as it is."
+
+if [[ ${1:-} == --check ]]; then
+  (($# == 2)) || die "usage: containers-policy [--check DROPIN]"
+  check_dropin "$2" >/dev/null
+  exit
+fi
+(($# == 0)) || die "usage: containers-policy [--check DROPIN]"
+
+good=() seen=" "
+for f in "$dropdir"/*.json; do
+  [[ -f $f ]] || continue
+  ns=$(check_dropin "$f") || continue
+  if [[ $seen == *" $ns "* ]]; then
+    log "$f: $ns is already trusted by another drop-in; skipped."
+    continue
+  fi
+  seen+="$ns "
+  good+=("$f")
+done
+
+new=$(mktemp "$policy.XXXXXX.tmp")
+tmps+=("$new")
+# The base alone is copied byte for byte, so a device without drop-ins matches a fresh one.
+if ((${#good[@]})); then merge "${good[@]}" >"$new"; else cat "$base" >"$new"; fi
+while read -r j; do # by construction; checked anyway, as this guards every update
+  [[ $(jq -cS --arg ns "$j" '.transports.docker[$ns]' "$base") == "$(jq -cS --arg ns "$j" '.transports.docker[$ns]' "$new")" ]] ||
+    die "The merge changed Juniper's own entry ($j); $policy left as it is."
+done < <(juniper_namespaces)
+if ! valid_policy "$new"; then
+  log "The merged policy is invalid; using the base policy alone."
+  cat "$base" >"$new"
+  valid_policy "$new" || die "The base policy $base is invalid; $policy left as it is."
+fi
+
+# Entries someone added to policy.json by hand (or a derived image baked in) are not kept.
+if jq empty "$policy" 2>/dev/null; then
+  while read -r j; do
+    log "dropping $j from $policy: it is in neither the base policy nor a drop-in (use ujust trust-images)."
+  done < <(jq -r --slurpfile n "$new" '.transports.docker // {} | keys[] | select(. as $k | $n[0].transports.docker | has($k) | not)' "$policy")
+fi
+
+if [[ -f $policy && $(<"$new") == "$(<"$policy")" ]]; then
+  exit 0
+fi
+chmod 0644 "$new"
+[[ ! -f $policy ]] || cp -p "$policy" "$policy.bak"
+mv -f "$new" "$policy"
+if command -v restorecon >/dev/null; then restorecon "$policy" 2>/dev/null || true; fi
+log "installed $policy: the base policy and ${#good[@]} trusted namespace(s)."
