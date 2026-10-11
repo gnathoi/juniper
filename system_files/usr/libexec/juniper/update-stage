@@ -15,20 +15,24 @@ repo=${JUNIPER_OSTREE_PATH:-/sysroot}
 marker=$state_dir/update-skipped-space
 
 min_free=2048
-from_conf=$(sed -n 's/^MIN_FREE_MB=["'\'']\{0,1\}\([0-9]\{1,9\}\)["'\'']\{0,1\}[[:space:]]*$/\1/p' "$conf" 2>/dev/null | tail -n1)
+from_conf=$(sed -n 's/^MIN_FREE_MB[[:space:]]*=[[:space:]]*["'\'']\{0,1\}\([0-9]\{1,9\}\)["'\'']\{0,1\}[[:space:]]*$/\1/p' "$conf" 2>/dev/null | tail -n1)
 [[ -z $from_conf ]] || min_free=$((10#$from_conf))
 if [[ ${JUNIPER_MIN_FREE_MB:-} =~ ^[0-9]{1,9}$ ]]; then min_free=$((10#$JUNIPER_MIN_FREE_MB)); fi
 
-free_mb() { df -Pm "$repo" | awk 'NR == 2 {print $4 + 0}'; }
+# Prints the free MiB, or nothing if df fails or its output is unusable.
+free_mb() { df -Pm "$repo" 2>/dev/null | awk 'NR == 2 && $4 ~ /^[0-9]+$/ {print $4}'; }
 
 free=$(free_mb)
-if ((free < min_free)); then
+if [[ -z $free ]]; then
+  # Fail open: a broken df must not stop updates forever.
+  echo "Could not determine free space under $repo; staging the update anyway." >&2
+elif ((free < min_free)); then
   echo "Only ${free} MiB free under $repo (need ${min_free}); pruning dangling podman images." >&2
   podman image prune -f >/dev/null 2>&1 || true
   free=$(free_mb)
 fi
 
-if ((free < min_free)); then
+if [[ -n $free ]] && ((free < min_free)); then
   mkdir -p "$state_dir"
   echo "update skipped on $(date +%F): ${free} MiB free, ${min_free} MiB needed" >"$marker"
   echo "Not enough free space to stage an update: ${free} MiB free under $repo, ${min_free} MiB needed. Skipping; the next run retries. Free space or set MIN_FREE_MB in $conf." >&2

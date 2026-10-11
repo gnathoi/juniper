@@ -8,7 +8,7 @@ pi-status:
     @if [ -e /var/lib/juniper/locked ]; then sudo /usr/libexec/juniper/lan-ssh legacy || true; fi
     @cat /var/lib/juniper/update-held 2>/dev/null || true
     @cat /var/lib/juniper/update-skipped-space 2>/dev/null || true
-    @df -Pm / | awk 'NR == 2 && ($4 * 10 < $2 || $4 < 1024) {print "Low disk space: " $4 " MiB free of " $2 " MiB on /; free some or move data to a USB disk"}'
+    @fs=/sysroot; [ -d "$fs" ] || fs=/; df -Pm "$fs" | awk -v fs="$fs" 'NR == 2 && ($4 * 10 < $2 || $4 < 1024) {print "Low disk space: " $4 " MiB free of " $2 " MiB on " fs "; free some or move data to a USB disk"}'
 
 # Bootloader EEPROM: show status, or `apply` to stage the latest default release for the next
 # reboot. Manual on purpose: EEPROM writes have no tryboot fallback.

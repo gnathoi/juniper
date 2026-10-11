@@ -2230,6 +2230,40 @@ test_update_stage_conf_is_not_sourced() {
   check "update-stage: junk value -> default threshold" called "bootc upgrade"
 }
 
+test_update_stage_df_failure_fails_open() {
+  stage_env
+  stub df 'exit 1'
+  check "update-stage: df fails -> exit 0" "$LIBEXEC/update-stage"
+  check "update-stage: df fails -> still upgrades" called "bootc upgrade --quiet"
+  check "update-stage: df fails -> warns" stderr_has "Could not determine free space" "$LIBEXEC/update-stage"
+  check "update-stage: df fails -> no marker" test ! -e "$JUNIPER_STATE_DIR/update-skipped-space"
+  stub df ''
+  check "update-stage: df prints nothing -> upgrades" "$LIBEXEC/update-stage"
+}
+
+test_update_stage_conf_tolerates_spaces_and_cr() {
+  stage_env
+  df_queue "30000 3000"
+  printf 'MIN_FREE_MB = 4096\r\n' >"$JUNIPER_UPDATE_CONF"
+  "$LIBEXEC/update-stage"
+  check "update-stage: spaces around = and CR parsed" not_called "bootc upgrade"
+  printf 'MIN_FREE_MB="1000"\r\n' >"$JUNIPER_UPDATE_CONF"
+  "$LIBEXEC/update-stage"
+  check "update-stage: quoted value with CR parsed" called "bootc upgrade --quiet"
+}
+
+test_motd_low_space_checks_sysroot() {
+  motd_env
+  df_queue "30000 20000"
+  mkdir "$T/sysroot"
+  JUNIPER_OSTREE_PATH=$T/sysroot "$LIBEXEC/motd" >/dev/null 2>&1
+  check "motd: df on the ostree path" called "df -Pm $T/sysroot"
+  : >"$CALLS"
+  JUNIPER_OSTREE_PATH=$T/missing "$LIBEXEC/motd" >/dev/null 2>&1
+  check "motd: missing ostree path falls back to /" called "df -Pm /"
+  check "motd: missing ostree path not queried" not_called "df -Pm $T/missing"
+}
+
 test_update_stage_env_overrides_conf() {
   stage_env
   df_queue "30000 3000"
@@ -2280,15 +2314,15 @@ test_motd_shows_update_skipped_for_space() {
 test_motd_warns_on_low_root_space() {
   motd_env
   df_queue "30000 20000"
-  check "motd: plenty free -> no warning" not_stdout_has "disk space" "$LIBEXEC/motd"
+  check "motd: plenty free -> no warning" not_stdout_has "Low disk space" "$LIBEXEC/motd"
   df_queue "30000 2500"
-  check "motd: under 10% free -> warning" stdout_has "disk space" "$LIBEXEC/motd"
+  check "motd: under 10% free -> warning" stdout_has "Low disk space" "$LIBEXEC/motd"
   df_queue "8000 900"
   check "motd: under 1 GiB free -> warning" stdout_has "900 MiB free" "$LIBEXEC/motd"
   df_queue "100000 5000"
-  check "motd: 5% but >1 GiB free -> still warns (under 10%)" stdout_has "disk space" "$LIBEXEC/motd"
+  check "motd: 5% but >1 GiB free -> still warns (under 10%)" stdout_has "Low disk space" "$LIBEXEC/motd"
   df_queue "8000 1100"
-  check "motd: 13% and over 1 GiB -> no warning" not_stdout_has "disk space" "$LIBEXEC/motd"
+  check "motd: 13% and over 1 GiB -> no warning" not_stdout_has "Low disk space" "$LIBEXEC/motd"
 }
 
 test_motd_runs_clean() {
