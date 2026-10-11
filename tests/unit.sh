@@ -18,7 +18,8 @@ setup() {
   # ...and the overrides fwkey/cryptroot tests export; a later test must never inherit them
   unset JUNIPER_SYSFS JUNIPER_VCIO JUNIPER_CMDLINE JUNIPER_BLOCK_SYSFS JUNIPER_CIDATA_MNT \
     JUNIPER_RUN_DIR JUNIPER_CPUINFO JUNIPER_TRYBOOT_FLAG JUNIPER_ROOT_WAIT \
-    JUNIPER_UNLOCK_FAIL_DELAY JUNIPER_FWKEY JUNIPER_CONSOLE JUNIPER_CRYPTSETUP_LOCKDIR FAKE_PASS
+    JUNIPER_UNLOCK_FAIL_DELAY JUNIPER_FWKEY JUNIPER_CONSOLE JUNIPER_CRYPTSETUP_LOCKDIR FAKE_PASS \
+    JUNIPER_DT JUNIPER_FWKEY_WEDGED JUNIPER_FWKEY_DEADLINE
   T=$(mktemp -d)
   export CALLS=$T/calls JUNIPER_STATE_DIR=$T/state
   mkdir -p "$T/bin" "$JUNIPER_STATE_DIR"
@@ -3107,20 +3108,40 @@ test_metrics_timer_defaults() {
 }
 
 # --- fwkey: the OTP device key through the firmware (issue #50) ---
-# Stub rpi-fw-crypto driven by $T/fw.mode (ok|not-set|locked|gen-fails|nolock|otp-error).
-# hmac copies stdin to $T/hmac.in and prints an HMAC of it under a test key.
+# Stub rpi-fw-crypto driven by $T/fw.mode (ok|not-set|locked|gen-fails|nolock|otp-error|invalid).
+# pubkey answers the key presence; hmac copies stdin to $T/hmac.in and prints an HMAC of it
+# under a test key. The device tree says Pi 5 with a fixed bootloader (fw_build to change it).
+fw_build() { # fw_build N: the bootloader build-timestamp, a big-endian u32
+  local n=$1
+  mkdir -p "$JUNIPER_DT/chosen/bootloader"
+  # shellcheck disable=SC2059 # the format is the bytes
+  printf "$(printf '\\%03o\\%03o\\%03o\\%03o' $((n >> 24 & 255)) $((n >> 16 & 255)) $((n >> 8 & 255)) $((n & 255)))" \
+    >"$JUNIPER_DT/chosen/bootloader/build-timestamp"
+}
 fwkey_env() {
-  export T JUNIPER_SYSFS=$T/sys JUNIPER_VCIO=$T/vcio TMPDIR=$T/tmp
-  mkdir -p "$TMPDIR" "$T/sys/block/mmcblk0/device"
+  export T JUNIPER_SYSFS=$T/sys JUNIPER_VCIO=$T/vcio TMPDIR=$T/tmp JUNIPER_DT=$T/dt \
+    JUNIPER_FWKEY_WEDGED=$T/run/fwkey-wedged
+  mkdir -p "$TMPDIR" "$T/sys/block/mmcblk0/device" "$JUNIPER_DT"
   : >"$JUNIPER_VCIO"
+  printf 'raspberrypi,5-model-b\0brcm,bcm2712\0' >"$JUNIPER_DT/compatible"
+  fw_build 1790000000 # after 2026-06-17 (fine-grained locks)
   echo 0353445344333247803a1b2c3d014e00 >"$T/sys/block/mmcblk0/device/cid"
   # shellcheck disable=SC2016 # expands inside the stub
   stub rpi-fw-crypto 'mode=$(cat "$T/fw.mode" 2>/dev/null || echo ok)
 case $1 in
+  pubkey)
+        case $mode in
+          ok|nolock) ;;
+          not-set|gen-fails) echo "Failed to get public key: x" >&2; echo "Last crypto error: 6 (Key not set (all zeros))" >&2; exit 250 ;;
+          invalid) echo "Last crypto error: 7 (Invalid key)" >&2; exit 249 ;;
+          locked) echo "Last crypto error: 4 (locked)" >&2; exit 252 ;;
+          otp-error) echo "Last crypto error: 5 (OTP error)" >&2; exit 251 ;;
+        esac ;;
   hmac) cat >"$T/hmac.in"
         case $mode in
           ok|nolock) openssl dgst -sha256 -mac HMAC -macopt key:juniper-test -r "$T/hmac.in" | cut -c1-64 | tr -d "\n" ;;
           not-set|gen-fails) echo "Last crypto error: 6 (Key is all zeros)" >&2; exit 250 ;;
+          invalid) echo "Last crypto error: 7 (Invalid key)" >&2; exit 249 ;;
           locked) echo "Last crypto error: 4 (locked)" >&2; exit 252 ;;
           otp-error) echo "Last crypto error: 5 (OTP error)" >&2; exit 251 ;;
         esac ;;
@@ -3130,6 +3151,7 @@ case $1 in
   get-key-status) [[ $mode == nolock ]] && echo "Key 1 status: 0x00000101 (x)" || echo "Key 1 status: 0x00001b01 (x)" ;;
 esac'
 }
+fw_calls() { grep -c '^rpi-fw-crypto' "$CALLS" || true; }
 
 test_fwkey_derive_exact_bytes() {
   fwkey_env
@@ -3197,13 +3219,17 @@ test_fwkey_card_id_missing_disk() {
 test_fwkey_probe_states() {
   fwkey_env
   check "fwkey: probe ok" test "$("$LIBEXEC/fwkey" probe)" = ok
-  check "fwkey: probe message" cmp -s "$T/hmac.in" <(printf 'juniper.probe.v1')
+  check "fwkey: probe asks for the public key" called "rpi-fw-crypto pubkey --key-id 1 --out /dev/null"
+  check "fwkey: probe never runs hmac" not_called "rpi-fw-crypto hmac"
+  check "fwkey: probe never trusts get-key-status" not_called "rpi-fw-crypto get-key-status"
   echo not-set >"$T/fw.mode"
-  check "fwkey: probe not-set" test "$("$LIBEXEC/fwkey" probe)" = not-set
+  check "fwkey: probe not-set (250)" test "$("$LIBEXEC/fwkey" probe)" = not-set
+  echo invalid >"$T/fw.mode"
+  check "fwkey: probe invalid key (249)" test "$("$LIBEXEC/fwkey" probe)" = unavailable:invalid-key
   echo locked >"$T/fw.mode"
-  check "fwkey: probe locked" test "$("$LIBEXEC/fwkey" probe)" = locked
+  check "fwkey: probe locked is unavailable" test "$("$LIBEXEC/fwkey" probe)" = "unavailable:firmware error 4 (exit 252)"
   echo otp-error >"$T/fw.mode"
-  check "fwkey: probe other error" test "$("$LIBEXEC/fwkey" probe)" = "unavailable:firmware error 5"
+  check "fwkey: probe other error" test "$("$LIBEXEC/fwkey" probe)" = "unavailable:firmware error 5 (exit 251)"
   rm -f "$JUNIPER_VCIO"
   check "fwkey: probe no vcio" test "$("$LIBEXEC/fwkey" probe)" = "unavailable:no $JUNIPER_VCIO"
   check "fwkey: probe never writes" not_called "rpi-fw-crypto genkey"
@@ -3211,7 +3237,82 @@ test_fwkey_probe_states() {
 
 test_fwkey_probe_without_cli() {
   fwkey_env
-  check "fwkey: probe without the CLI" test "$(RPI_FW_CRYPTO=$T/missing "$LIBEXEC/fwkey" probe)" = "unavailable:firmware error none"
+  check "fwkey: probe without the CLI" test "$(RPI_FW_CRYPTO=$T/missing "$LIBEXEC/fwkey" probe)" = "unavailable:firmware error none (exit 127)"
+}
+
+# Hardware finding: pre-2026-01-21 Pi 5 firmware wedges the mailbox on hmac. No call at all.
+test_fwkey_firmware_too_old_makes_no_calls() {
+  local n
+  for n in 1762364238 1769002726 missing short; do # 2025-11-05 (the board), one below the fix
+    fwkey_env
+    echo not-set >"$T/fw.mode"
+    case $n in
+      missing) rm -f "$JUNIPER_DT/chosen/bootloader/build-timestamp" ;;
+      short) printf '\001\002' >"$JUNIPER_DT/chosen/bootloader/build-timestamp" ;;
+      *) fw_build "$n" ;;
+    esac
+    check "fwkey ($n): probe too old" test "$("$LIBEXEC/fwkey" probe)" = unavailable:firmware-too-old
+    check "fwkey ($n): ensure too old" test "$("$LIBEXEC/fwkey" ensure || true)" = unavailable:firmware-too-old
+    check "fwkey ($n): ensure fails" fails "$LIBEXEC/fwkey" ensure
+    check "fwkey ($n): derive fails" fails "$LIBEXEC/fwkey" derive mmcblk0
+    check "fwkey ($n): lock unavailable" test "$("$LIBEXEC/fwkey" lock)" = unavailable
+    check "fwkey ($n): no rpi-fw-crypto call" test "$(fw_calls)" = 0
+  done
+  fwkey_env
+  rm -f "$T/fw.mode"
+  fw_build 1769002727 # pieeprom-2026-01-21: the HMAC lock-up fix
+  check "fwkey: 2026-01-21 passes the gate" test "$("$LIBEXEC/fwkey" probe)" = ok
+}
+
+test_fwkey_pi4_unverified() {
+  fwkey_env
+  printf 'raspberrypi,4-model-b\0brcm,bcm2711\0' >"$JUNIPER_DT/compatible"
+  check "fwkey: pi4 probe" test "$("$LIBEXEC/fwkey" probe)" = unavailable:pi4-unverified
+  check "fwkey: pi4 ensure fails" fails "$LIBEXEC/fwkey" ensure
+  check "fwkey: pi4 derive fails" fails "$LIBEXEC/fwkey" derive mmcblk0
+  check "fwkey: pi4 lock unavailable" test "$("$LIBEXEC/fwkey" lock)" = unavailable
+  check "fwkey: pi4 no rpi-fw-crypto call" test "$(fw_calls)" = 0
+  printf 'brcm,bcm2837\0' >"$JUNIPER_DT/compatible"
+  check "fwkey: other board" test "$("$LIBEXEC/fwkey" probe)" = unavailable:unsupported-board
+  rm -f "$JUNIPER_DT/compatible"
+  check "fwkey: no compatible" test "$("$LIBEXEC/fwkey" probe)" = unavailable:unsupported-board
+  check "fwkey: still no call" test "$(fw_calls)" = 0
+}
+
+# A call that never returns (D state) is left behind; the marker stops every later call.
+test_fwkey_hung_firmware_is_wedged() {
+  local start
+  fwkey_env
+  export JUNIPER_FWKEY_DEADLINE=1
+  stub rpi-fw-crypto 'sleep 4'
+  start=$SECONDS
+  "$LIBEXEC/fwkey" probe >"$T/out" 2>"$T/err"
+  check "fwkey: returns at the deadline" test $((SECONDS - start)) -le 3
+  check "fwkey: hung pubkey is wedged" test "$(cat "$T/out")" = unavailable:firmware-wedged
+  check "fwkey: wedged marker written" test -e "$JUNIPER_FWKEY_WEDGED"
+  check "fwkey: says why on stderr" grep -q "wedged until reboot" "$T/err"
+  start=$SECONDS
+  check "fwkey: ensure after wedge" test "$("$LIBEXEC/fwkey" ensure || true)" = unavailable:firmware-wedged
+  check "fwkey: derive after wedge fails" fails "$LIBEXEC/fwkey" derive mmcblk0
+  check "fwkey: lock after wedge" test "$("$LIBEXEC/fwkey" lock)" = unavailable
+  check "fwkey: after wedge, instant" test $((SECONDS - start)) -le 1
+  check "fwkey: no call after the wedge" test "$(fw_calls)" = 1
+  check "fwkey: no genkey" not_called "rpi-fw-crypto genkey"
+}
+
+test_fwkey_hung_genkey_and_hmac_are_wedged() {
+  fwkey_env
+  export JUNIPER_FWKEY_DEADLINE=1
+  echo not-set >"$T/fw.mode"
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub rpi-fw-crypto 'case $1 in pubkey) echo "Last crypto error: 6 (x)" >&2; exit 250 ;; *) sleep 4 ;; esac'
+  check "fwkey: hung genkey" test "$("$LIBEXEC/fwkey" ensure 2>/dev/null || true)" = unavailable:firmware-wedged
+  check "fwkey: genkey marker" test -e "$JUNIPER_FWKEY_WEDGED"
+  fwkey_env
+  export JUNIPER_FWKEY_DEADLINE=1
+  stub rpi-fw-crypto 'cat >/dev/null; sleep 4'
+  check "fwkey: hung hmac fails derive" test -z "$("$LIBEXEC/fwkey" derive mmcblk0 2>/dev/null || true)"
+  check "fwkey: hmac marker" test -e "$JUNIPER_FWKEY_WEDGED"
 }
 
 test_fwkey_genkey_only_when_not_set() {
@@ -3224,7 +3325,7 @@ test_fwkey_genkey_only_when_not_set() {
 }
 
 test_fwkey_never_writes_when_locked_or_no_vcio() {
-  for mode in locked novcio otp-error; do
+  for mode in locked novcio otp-error invalid; do
     fwkey_env
     echo "$mode" >"$T/fw.mode"
     [[ $mode == novcio ]] && rm -f "$JUNIPER_VCIO"
@@ -3265,12 +3366,29 @@ test_fwkey_lock_is_best_effort() { # ruling 4 (I3)
   check "fwkey: no vcio, unavailable, exit 0" test "$("$LIBEXEC/fwkey" lock)" = unavailable
 }
 
+# Before 2026-06-17 bit 8 was a global LOCKED bit and bits 9-12 don't exist: don't ask.
+test_fwkey_lock_skipped_before_fine_grained_locks() {
+  fwkey_env
+  fw_build 1778498402 # pieeprom-2026-05-11: HMAC fixed, no per-operation locks
+  check "fwkey: 2026-05-11 lock unavailable" test "$("$LIBEXEC/fwkey" lock)" = unavailable
+  check "fwkey: 2026-05-11 no set-key-status" not_called "set-key-status"
+  check "fwkey: 2026-05-11 still derives" stdout_has '^[0-9a-f]\{64\}$' "$LIBEXEC/fwkey" derive mmcblk0
+  fw_build 1781654813 # pieeprom-2026-06-17
+  check "fwkey: 2026-06-17 locks" test "$("$LIBEXEC/fwkey" lock)" = locked
+}
+
 test_fwkey_lock_checks_hmac_bit() {
   fwkey_env
   # set-key-status succeeds but the firmware ignores HMAC_LOCKED (bit 11 clear)
   # shellcheck disable=SC2016 # expands inside the stub
   stub rpi-fw-crypto 'case $1 in get-key-status) echo "Key 1 status: 0x00000301 (x)" ;; esac'
   check "fwkey: bit 11 clear is unavailable" test "$("$LIBEXEC/fwkey" lock)" = unavailable
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub rpi-fw-crypto 'case $1 in get-key-status) echo "Key 1 status: unknown" ;; esac'
+  check "fwkey: unparsable status is unavailable" test "$("$LIBEXEC/fwkey" lock)" = unavailable
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub rpi-fw-crypto 'case $1 in get-key-status) echo "Key 1 status: 0x00000801 (x)"; exit 1 ;; esac'
+  check "fwkey: failed get-key-status is unavailable" test "$("$LIBEXEC/fwkey" lock)" = unavailable
 }
 
 test_fwkey_derive_fails_closed() {
@@ -3291,7 +3409,7 @@ test_fwkey_long_error_output() {
   fwkey_env
   # shellcheck disable=SC2016 # expands inside the stub
   stub rpi-fw-crypto 'case $1 in
-  hmac) cat >/dev/null; for ((i = 0; i < 20000; i++)); do echo "Last crypto error: 6 (Key is all zeros)"; done >&2; exit 250 ;;
+  pubkey) for ((i = 0; i < 20000; i++)); do echo "Last crypto error: 6 (Key is all zeros)"; done >&2; exit 250 ;;
   get-key-status) for ((i = 0; i < 20000; i++)); do echo "Key 1 status: 0x00001b01 (x)"; done ;;
 esac'
   check "fwkey: long error output still parsed" test "$("$LIBEXEC/fwkey" probe)" = not-set
@@ -3305,13 +3423,13 @@ test_fwkey_ensure_garbage_never_generates() {
     '0123456789abcdef' '' 'bash: rpi-fw-crypto: command not found'; do
     fwkey_env
     # shellcheck disable=SC2016 # expands inside the stub
-    stub rpi-fw-crypto "case \$1 in hmac) cat >/dev/null; printf '%s\n' '$out' >&2; exit 127 ;; esac"
+    stub rpi-fw-crypto "case \$1 in pubkey) printf '%s\n' '$out' >&2; exit 127 ;; esac"
     check "fwkey ($out): ensure fails" fails "$LIBEXEC/fwkey" ensure
     check "fwkey ($out): unavailable" stdout_has '^unavailable:' "$LIBEXEC/fwkey" ensure
     check "fwkey ($out): no genkey" not_called "rpi-fw-crypto genkey"
   done
   fwkey_env
-  check "fwkey (no CLI): ensure unavailable" test "$(RPI_FW_CRYPTO=$T/missing "$LIBEXEC/fwkey" ensure || true)" = "unavailable:firmware error none"
+  check "fwkey (no CLI): ensure unavailable" test "$(RPI_FW_CRYPTO=$T/missing "$LIBEXEC/fwkey" ensure || true)" = "unavailable:firmware error none (exit 127)"
   check "fwkey (no CLI): no genkey" not_called "rpi-fw-crypto genkey"
 }
 
@@ -3326,6 +3444,8 @@ test_fwkey_usage() {
   fwkey_env
   check "fwkey: unknown command fails" fails "$LIBEXEC/fwkey" bogus
   check "fwkey: no command fails" fails "$LIBEXEC/fwkey"
+  check "fwkey: bad deadline falls back" test "$(JUNIPER_FWKEY_DEADLINE=abc "$LIBEXEC/fwkey" probe)" = ok
+  check "fwkey: zero deadline falls back" test "$(JUNIPER_FWKEY_DEADLINE=0 "$LIBEXEC/fwkey" probe)" = ok
 }
 
 # --- cryptroot: first-boot encryption and unlock (issue #50) ---
@@ -3746,6 +3866,27 @@ test_cryptroot_firmware_unavailable_fails_open() {
   check "prep: derive failure uses the probe" grep -qxF "not-encrypted:firmware key interface unavailable: derive failed (locked)" "$T/cidata/juniper-encrypt"
   check "prep: derive failure, no sfdisk" not_called sfdisk
   check "prep: derive failure, no cryptsetup" not_called cryptsetup
+}
+
+# Task 3b: fwkey's firmware gate reasons all fail open, recorded with the reason.
+test_cryptroot_firmware_gate_reasons_fail_open() {
+  local r
+  for r in firmware-too-old pi4-unverified unsupported-board firmware-wedged invalid-key; do
+    cryptroot_env plain on
+    echo "unavailable:$r" >"$T/fw.mode"
+    crt prepare 2>/dev/null
+    check "prep ($r): exit 0" test "$RC" = 0
+    check "prep ($r): recorded on CIDATA" grep -qxF "not-encrypted:firmware key interface unavailable: $r" "$T/cidata/juniper-encrypt"
+    check "prep ($r): recorded in /run" test "$(runf reason)" = "firmware key interface unavailable: $r"
+    check "prep ($r): no sfdisk" not_called sfdisk
+    check "prep ($r): no cryptsetup" not_called cryptsetup
+  done
+  cryptroot_env plain on
+  touch "$T/fw.derive-fail"
+  echo unavailable:firmware-wedged >"$T/fw.probe"
+  crt prepare 2>/dev/null
+  check "prep: wedged during derive fails open" grep -qxF "not-encrypted:firmware key interface unavailable: derive failed (firmware-wedged)" "$T/cidata/juniper-encrypt"
+  check "prep: wedged during derive, no cryptsetup" not_called cryptsetup
 }
 
 test_cryptroot_recipients_validated_by_age() { # C3

@@ -3,64 +3,161 @@
 # (issue #50). Never reads the raw key; generates one only when the slot is blank; never
 # writes key usage. Secrets go to stdout only; no temporary files.
 #
-#   fwkey probe          ok | not-set | locked | unavailable:<detail>          (exit 0)
+#   fwkey probe          ok | not-set | unavailable:<detail>                   (exit 0)
 #   fwkey ensure         ok | generated | unavailable:<detail>    (exit 0 if usable, else 1)
 #   fwkey card-id DISK   mmc:<cid> | nvme:<serial> | usb:<vid>:<pid>:<serial> | board:
 #   fwkey derive DISK    the passphrase: exactly 64 lowercase hex bytes, no newline
 #   fwkey lock           locked | unavailable                    (best-effort, always exit 0)
+#
+# Firmware gate, before any rpi-fw-crypto call (hardware finding, #50): firmware older than
+# pieeprom-2026-01-21 locks up the VideoCore mailbox on HMAC with a blank or invalid key, and
+# the next mailbox user then sleeps uninterruptibly (D state) for up to an hour; timeout(1)
+# can't kill it. So:
+#   - Pi 5 (BCM2712) only, with a running bootloader build >= 1769002727 (2026-01-21), read
+#     from the device tree (no mailbox): else unavailable:firmware-too-old. Pi 4 (BCM2711) is
+#     served by start4.elf and is unverified: unavailable:pi4-unverified.
+#   - Key presence is `pubkey`, never hmac or get-key-status (whose DEVICE bit says nothing
+#     about key material): exit 250 (KEY_NOT_SET) is the only answer that allows genkey.
+#   - Every call has a deadline. One that overruns is left behind (it can't be killed), the
+#     wedged marker is written, and no further mailbox call is made this boot. Recovery is a
+#     reboot: the hardware watchdog or a forced one (a plain reboot may block on the wedged
+#     mailbox; `echo b >/proc/sysrq-trigger` doesn't). Callers fail open.
+#   - Unknown answers mean "don't know", never "ok", "not-set" or "locked".
 set -euo pipefail
 sysfs=${JUNIPER_SYSFS:-/sys}
 vcio=${JUNIPER_VCIO:-/dev/vcio}
 fw=${RPI_FW_CRYPTO:-rpi-fw-crypto}
+dt=${JUNIPER_DT:-/proc/device-tree}
+wedged=${JUNIPER_FWKEY_WEDGED:-/run/juniper/fwkey-wedged}
+deadline=${JUNIPER_FWKEY_DEADLINE:-10}
+# A bad value would make `read -t` fail at once and the `wait` below block: fall back.
+[[ $deadline =~ ^[0-9]{1,3}(\.[0-9]+)?$ && ! $deadline =~ ^0+(\.0*)?$ ]] || deadline=10
 label='juniper.luks.root.v1'
+# Pi 5 bootloader BUILD_TIMESTAMPs (strings in the rpi-eeprom blobs).
+min_build=1769002727  # pieeprom-2026-01-21: "Fix bad hmac arguments lock-up"
+lock_build=1781654813 # pieeprom-2026-06-17: fine-grained locking (HMAC_LOCKED is bit 11)
 
-hmac() { "$fw" hmac --in /dev/stdin --key-id 1 --outform hex; }
 # first_line: the first line of $1. No `| head -1` (nor a quitting sed) on a pipe: the writer
 # can die of SIGPIPE under pipefail.
 first_line() { printf '%s' "${1%%$'\n'*}"; }
 fw_error() { first_line "$(printf '%s\n' "$1" | sed -n 's/^Last crypto error: \([0-9]*\).*/\1/p')"; }
 
+# --- the gate ---
+build=0
+why=
+# gate: 0 if rpi-fw-crypto may be called; else 1 with $why set. Reads files only.
+gate() {
+  local c ts
+  if [[ -e $wedged ]]; then
+    why=firmware-wedged
+    return 1
+  fi
+  if [[ ! -e $vcio ]]; then
+    why="no $vcio"
+    return 1
+  fi
+  c=$(tr '\0' ' ' <"$dt/compatible" 2>/dev/null) || c=
+  case " $c " in
+    *" brcm,bcm2712"*) ;;
+    *" brcm,bcm2711"*)
+      why=pi4-unverified
+      return 1
+      ;;
+    *)
+      why=unsupported-board
+      return 1
+      ;;
+  esac
+  # Big-endian u32, read like rpi-eeprom-update / the healthcheck's tryboot flag.
+  ts=$(od -An -tu4 --endian=big -N4 "$dt/chosen/bootloader/build-timestamp" 2>/dev/null | tr -d ' \n') || ts=
+  if [[ ! $ts =~ ^[0-9]{1,10}$ ]] || ((10#$ts < min_build)); then
+    why=firmware-too-old
+    return 1
+  fi
+  build=$((10#$ts))
+}
+
+# --- bounded calls ---
+fw_out=
+fw_rc=0
+no_input() { :; }
+msg_id=
+derive_input() { printf '%s\0%s' "$label" "$msg_id"; }
+
+# fw_call INPUT_FN ARGS...: rpi-fw-crypto ARGS, fed by INPUT_FN, as a background child that
+# holds none of our stdio (so a stuck child can't hold up a caller's $(...)). Sets fw_out
+# (stdout and stderr) and fw_rc. Returns 1, after writing the wedged marker, if it overran.
+fw_call() {
+  local input=$1 fd pid
+  shift
+  fw_out=
+  fw_rc=0
+  exec {fd}< <(
+    exec </dev/null 2>&1
+    "$input" | "$fw" "$@"
+  )
+  pid=$!
+  if IFS= read -r -d '' -t "$deadline" -u "$fd" fw_out || (($? <= 128)); then
+    exec {fd}<&-
+    wait "$pid" || fw_rc=$?
+    return 0
+  fi
+  exec {fd}<&-
+  fw_out=
+  mkdir -p "${wedged%/*}" 2>/dev/null || true
+  : >"$wedged" 2>/dev/null || true
+  echo "fwkey: rpi-fw-crypto $1 did not answer in ${deadline}s; firmware mailbox wedged until reboot" >&2
+  why=firmware-wedged
+  return 1
+}
+
+hmac_hex() { fw_call "$1" hmac --in /dev/stdin --key-id 1 --outform hex; }
+
 probe() {
-  [[ -e $vcio ]] || {
-    echo "unavailable:no $vcio"
+  local err
+  gate || {
+    echo "unavailable:$why"
     return
   }
-  local both err
-  both=$(printf 'juniper.probe.v1' | hmac 2>&1) || true
-  if printf '%s\n' "$both" | grep -Ex '[0-9a-f]{64}' >/dev/null; then
-    echo ok
+  fw_call no_input pubkey --key-id 1 --out /dev/null || {
+    echo "unavailable:$why"
     return
-  fi
-  err=$(fw_error "$both")
-  case $err in
-    6) echo not-set ;;
-    4) echo locked ;;
-    *) echo "unavailable:firmware error ${err:-none}" ;;
+  }
+  err=$(fw_error "$fw_out")
+  case $fw_rc in
+    0) echo ok ;;
+    250) echo not-set ;;
+    249) echo unavailable:invalid-key ;;
+    *) echo "unavailable:firmware error ${err:-none} (exit $fw_rc)" ;;
   esac
 }
 
-# genkey is an OTP write: only on KEY_NOT_SET, never on any other probe result.
+# genkey is an OTP write: only when pubkey said KEY_NOT_SET, never on any other answer.
 ensure() {
-  local state out
+  local state err
   state=$(probe)
   case $state in
     ok)
       echo ok
       return
       ;;
-    locked)
-      echo "unavailable:key locked"
-      return 1
-      ;;
     not-set) ;;
-    *)
+    unavailable:*)
       echo "$state"
       return 1
       ;;
+    *)
+      echo "unavailable:unexpected probe answer"
+      return 1
+      ;;
   esac
-  if ! out=$("$fw" genkey --key-id 1 --alg ec 2>&1); then
-    out=$(fw_error "$out")
-    echo "unavailable:genkey failed (firmware error ${out:-none})"
+  fw_call no_input genkey --key-id 1 --alg ec || {
+    echo "unavailable:$why"
+    return 1
+  }
+  if ((fw_rc != 0)); then
+    err=$(fw_error "$fw_out")
+    echo "unavailable:genkey failed (firmware error ${err:-none})"
     return 1
   fi
   state=$(probe)
@@ -107,21 +204,25 @@ card_id() {
 }
 
 derive() {
-  local id out
-  id=$(card_id "$1") || return 1
-  out=$(printf '%s\0%s' "$label" "$id" | hmac 2>/dev/null) || return 1
-  [[ $out =~ ^[0-9a-f]{64}$ ]] || return 1
-  printf '%s' "$out"
+  msg_id=$(card_id "$1") || return 1
+  gate || return 1
+  hmac_hex derive_input || return 1
+  ((fw_rc == 0)) || return 1
+  [[ $fw_out =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s' "$fw_out"
+  fw_out=
 }
 
-# Ruling 4: the per-operation lock needs newer firmware; `unavailable` is expected today and
-# never an error. SIGN stays unlocked for Raspberry Pi Connect. HMAC_LOCKED is bit 11.
+# Ruling 4: best-effort, never an error, and `unavailable` is expected today. The per-operation
+# flags only exist from pieeprom-2026-06-17; before that bit 8 was a global LOCKED bit and the
+# others are unknown to the firmware, so older firmware isn't asked at all. SIGN stays
+# unlocked for Raspberry Pi Connect. `locked` only when the firmware reports HMAC_LOCKED.
 lock() {
-  local st hex
-  if [[ -e $vcio ]] &&
-    "$fw" set-key-status 1 READ_LOCKED GEN_LOCKED HMAC_LOCKED USAGE_LOCKED >/dev/null 2>&1 &&
-    st=$("$fw" get-key-status 1 2>/dev/null); then
-    hex=$(first_line "$(printf '%s\n' "$st" | sed -n 's/^Key 1 status: 0x\([0-9a-fA-F]\{1,8\}\).*/\1/p')")
+  local hex
+  if gate && ((build >= lock_build)) &&
+    fw_call no_input set-key-status 1 READ_LOCKED GEN_LOCKED HMAC_LOCKED USAGE_LOCKED &&
+    ((fw_rc == 0)) && fw_call no_input get-key-status 1 && ((fw_rc == 0)); then
+    hex=$(first_line "$(printf '%s\n' "$fw_out" | sed -n 's/^Key 1 status: 0x\([0-9a-fA-F]\{1,8\}\).*/\1/p')")
     if [[ -n $hex ]] && ((16#$hex & 0x800)); then
       echo locked
       return 0
