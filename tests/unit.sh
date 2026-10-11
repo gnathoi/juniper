@@ -2363,6 +2363,7 @@ test_pi_status_shows_storage_warnings() {
 test_pi_status_kernel_age() {
   local j=$ROOT/system_files/usr/share/juniper/just/pi.just
   # Run the recipe's kernel line itself, with uname and rpm stubbed.
+  # shellcheck disable=SC2016 # literal text of the recipe line
   grep -F '@k=$(uname -r)' "$j" | sed 's/^    @//' >"$T/kline.sh"
   check "pi-status: kernel line present" test -s "$T/kline.sh"
   stub uname 'echo 6.12.0-55.el10.aarch64'
