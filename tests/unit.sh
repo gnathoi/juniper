@@ -2105,6 +2105,52 @@ test_pi_status_shows_gave_up_legacy_and_held() {
   check "pi-status: held line kept" grep -q 'update-held' "$j"
 }
 
+# --- tests/repo-audit.sh (the image smoke test's repo-key check) ---
+repo_dir() { # NAME CONTENT: a one-file repo dir under $T/repos-NAME
+  mkdir -p "$T/repos-$1"
+  printf '%b' "$2" >"$T/repos-$1/x.repo"
+}
+audit() { "$ROOT/tests/repo-audit.sh" "$@"; }
+test_repo_audit() {
+  local k=file:///etc/pki/rpm-gpg/K good
+  good="[a]\nname=a\nenabled=1\ngpgcheck=1\ngpgkey=$k\n"
+  repo_dir good "$good"
+  check "repo-audit: a clean repo passes" audit "$T/repos-good"
+  repo_dir truthy "[a]\ngpgcheck=Yes\ngpgkey=$k\n[b]\ngpgcheck=TRUE\ngpgkey=$k\n[c]\ngpgcheck=on\ngpgkey=$k\n"
+  check "repo-audit: dnf truthy forms pass" audit "$T/repos-truthy"
+  repo_dir cont "[a]\ngpgcheck=1\ngpgkey=$k\n    $k.2\n"
+  check "repo-audit: local continuation line passes" audit "$T/repos-cont"
+  repo_dir off "[a]\nenabled=0\ngpgcheck=0\ngpgkey=https://x/y\n"
+  check "repo-audit: a disabled repo is ignored" audit "$T/repos-off"
+  local name body
+  while IFS='|' read -r name body; do
+    repo_dir "$name" "$body"
+    check "repo-audit: refuses $name" not_ok audit "$T/repos-$name"
+  done <<EOF
+no-check|[a]\ngpgcheck=0\ngpgkey=$k\n
+false|[a]\ngpgcheck=False\ngpgkey=$k\n
+spaced-zero|[a]\ngpgcheck = 0\ngpgkey=$k\n
+unset|[a]\nname=a\ngpgkey=$k\n
+garbage|[a]\ngpgcheck=maybe\ngpgkey=$k\n
+https-key|[a]\ngpgcheck=1\ngpgkey=https://evil/key\n
+second-key|[a]\ngpgcheck=1\ngpgkey=$k https://evil/key\n
+comma-key|[a]\ngpgcheck=1\ngpgkey=$k,https://evil/key\n
+cont-key|[a]\ngpgcheck=1\ngpgkey=$k\n    https://evil/key\n
+other-dir|[a]\ngpgcheck=1\ngpgkey=file:///tmp/key\n
+no-key|[a]\ngpgcheck=1\n
+upper-key-name|[a]\nGPGCHECK=0\ngpgkey=$k\n
+dup-check|[a]\ngpgcheck=0\ngpgcheck=1\ngpgkey=$k\n
+second-repo|[a]\ngpgcheck=1\ngpgkey=$k\n[b]\nbaseurl=http://x\n
+enabled-garbage|[a]\nenabled=maybe\ngpgcheck=0\ngpgkey=$k\n
+EOF
+  check "repo-audit: -r wants the repo present" not_ok audit -r missing "$T/repos-good"
+  check "repo-audit: -r finds it" audit -r a "$T/repos-good"
+  check "repo-audit: -r wants it enabled" not_ok audit -r a "$T/repos-off"
+  mkdir "$T/empty"
+  check "repo-audit: no repo files is an error" not_ok audit "$T/empty"
+}
+not_ok() { ! "$@" 2>/dev/null; }
+
 # --- runner ---
 for t in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do
   setup
