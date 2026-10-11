@@ -8,7 +8,7 @@ Description=Example sensor: log the SoC temperature every minute
 #   skopeo inspect --raw docker://docker.io/library/alpine:3.20 | sha256sum
 Image=docker.io/library/alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
 # For a fleet, sign your own image and let it auto-update instead: on each device run
-# `ujust trust-images ghcr.io/you ~/cosign.pub` (or bake that policy into your image), then
+# `ujust trust-images ghcr.io/you ~/cosign.pub` (or ship a drop-in in your image, see README.md), then
 #   Image=ghcr.io/you/sensor:latest
 #   AutoUpdate=registry
 # podman auto-update then only pulls a new image that carries your signature.

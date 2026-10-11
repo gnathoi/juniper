@@ -5,13 +5,15 @@
 #   trust-images NAMESPACE PUBKEY_FILE    trust NAMESPACE (e.g. ghcr.io/you), or change its key
 #   trust-images --remove NAMESPACE       stop requiring a signature (ujust untrust-images)
 # Each trusted namespace is a drop-in in /etc/juniper/trusted-images.d (key in /etc/pki/containers);
-# containers-policy merges them into Juniper's base policy to make /etc/containers/policy.json, at
-# every boot and after each change here. Juniper's own namespace can't be changed or removed.
+# containers-policy merges them, after any the image ships in /usr/lib/juniper/trusted-images.d,
+# into Juniper's base policy to make /etc/containers/policy.json, at every boot and after each
+# change here. Scopes the base sets (Juniper's own namespace above all) can't be trusted here.
 set -euo pipefail
 
 policy=${JUNIPER_POLICY:-/etc/containers/policy.json}
 base=${JUNIPER_POLICY_BASE:-/usr/share/juniper/containers/policy.json}
 trustdir=${JUNIPER_TRUST_DIR:-/etc/juniper/trusted-images.d}
+usrdir=${JUNIPER_TRUST_DIR_USR:-/usr/lib/juniper/trusted-images.d}
 regd=${JUNIPER_REGISTRIES_D:-/etc/containers/registries.d}
 keydir=${JUNIPER_KEY_DIR:-/etc/pki/containers}
 own_key=${JUNIPER_OWN_KEY:-/usr/share/pki/containers/juniper.pub}
@@ -46,18 +48,24 @@ safe_name() {
   echo "${n//:/=}"
 }
 
-# Namespaces whose base entry uses Juniper's key; never touched here, nor anything under them.
-juniper_namespaces() {
-  jq -r --arg k "$own_key" '.transports.docker // {} | to_entries[]
-    | select(any(.value[]?; .keyPath? == $k)) | .key' "$base"
+# Scopes the base policy sets, and anything under them, are never touched here; the generator
+# owns that rule.
+refuse_protected() {
+  local why
+  why=$("$generate" --protected "$1") || return 0
+  die "$why; trust-images won't change it."
 }
-refuse_juniper() {
-  local j
-  while read -r j; do
-    [[ -n $j && ($1 == "$j" || $1 == "$j"/*) ]] &&
-      die "$1 is Juniper's own namespace ($j), signed with juniper.pub; trust-images won't change it."
-  done < <(juniper_namespaces)
-  return 0
+
+# The drop-in (the image's or a local one) other than file $2 that already sets namespace $1.
+covered_by() {
+  local f
+  for f in "$usrdir"/*.json "$trustdir"/*.json; do
+    [[ -f $f && $f != "$2" ]] || continue
+    if jq -e --arg ns "$1" 'type == "object" and keys == [$ns]' "$f" >/dev/null 2>&1; then
+      echo "$f"
+      return
+    fi
+  done
 }
 
 restore_label() { if command -v restorecon >/dev/null; then restorecon "$@" 2>/dev/null || true; fi; }
@@ -89,15 +97,19 @@ declared_in() {
 # What policy.json enforces (Juniper's and the image's entries marked), then any drop-in that
 # containers-policy skipped.
 list() {
-  local f
-  jq -r --arg k "$own_key" --slurpfile b "$base" '.transports.docker // {} | to_entries[]
+  local f u='[]' usr=()
+  for f in "$usrdir"/*.json; do [[ -f $f ]] && usr+=("$f"); done
+  if ((${#usr[@]})); then u=$(jq -cs 'map(keys[0]?)' "${usr[@]}" 2>/dev/null || echo '[]'); fi
+  jq -r --arg k "$own_key" --slurpfile b "$base" --argjson u "$u" '.transports.docker // {} | to_entries[]
     | .key as $ns | .value[]? | select(.type == "sigstoreSigned" or .type == "signedBy")
-    | "\($ns)\t\(.keyPath // .keyPaths // "inline key" | tostring)\(if .keyPath? == $k then " (Juniper)"
-        elif ($b[0].transports.docker // {} | has($ns)) then " (image)" else "" end)"' \
+    | "\($ns)\t\(.keyPath // .keyPaths // "inline key" | tostring)\(
+        if .keyPath? == $k or any((.keyPaths? // [])[]; . == $k) then " (Juniper)"
+        elif ($b[0].transports.docker // {} | has($ns)) then " (image)"
+        elif ($u | index($ns)) then " (image drop-in)" else "" end)"' \
     "$policy" | awk -F '\t' '{ printf "%-40s %s\n", $1, $2 }'
-  for f in "$trustdir"/*.json; do
+  for f in "$usrdir"/*.json "$trustdir"/*.json; do
     [[ -f $f ]] || continue
-    jq -r --slurpfile p "$policy" 'to_entries[0] | select(.key as $ns | $p[0].transports.docker | has($ns) | not)
+    jq -r --slurpfile p "$policy" 'to_entries[0] | select(.key != "default") | select(.key as $ns | $p[0].transports.docker | has($ns) | not)
       | "\(.key)\t\(.value[0].keyPath // "?") (not applied: journalctl -u juniper-containers-policy)"' \
       "$f" 2>/dev/null | awk -F '\t' '{ printf "%-40s %s\n", $1, $2 }'
   done
@@ -106,9 +118,7 @@ list() {
 trust() { # NAMESPACE PUBKEY_FILE
   local ns=$1 src=$2 key yaml dropin other pem new
   check_namespace "$ns"
-  refuse_juniper "$ns"
-  ! jq -e --arg ns "$ns" '.transports.docker // {} | has($ns)' "$base" >/dev/null ||
-    die "$ns is set by the image's own policy; trust-images can't replace it."
+  refuse_protected "$ns"
   [[ -f $src && -r $src ]] || die "Can't read $src."
   ! grep -q 'PRIVATE KEY' "$src" || die "$src is a private key. Give the public one (cosign.pub)."
   pem=$(mktemp)
@@ -121,6 +131,8 @@ trust() { # NAMESPACE PUBKEY_FILE
   key=$keydir/$(safe_name "$ns").pub
   yaml=$regd/$(safe_name "$ns").yaml
   dropin=$trustdir/$(safe_name "$ns").json
+  other=$(covered_by "$ns" "$dropin")
+  [[ -z $other ]] || die "$ns is already trusted by $other; nothing changed."
   new=$(mktemp)
   tmps+=("$new")
   # shellcheck disable=SC2016 # jq variables
@@ -146,11 +158,15 @@ trust() { # NAMESPACE PUBKEY_FILE
 }
 
 untrust() { # NAMESPACE
-  local ns=$1 dropin key
+  local ns=$1 dropin key other
   check_namespace "$ns"
-  refuse_juniper "$ns"
+  refuse_protected "$ns"
   dropin=$trustdir/$(safe_name "$ns").json
-  [[ -f $dropin ]] || die "$ns is not trusted (see ujust trust-images)."
+  if [[ ! -f $dropin ]]; then
+    other=$(covered_by "$ns" "$dropin")
+    [[ -z $other ]] || die "$ns is trusted by $other, not by trust-images; remove that file to change it."
+    die "$ns is not trusted (see ujust trust-images)."
+  fi
   key=$(jq -r --arg ns "$ns" '.[$ns][0].keyPath? // ""' "$dropin" 2>/dev/null || true)
   rm -f "$dropin"
   "$generate" || die "Couldn't regenerate $policy (see above)."

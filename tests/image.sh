@@ -184,11 +184,13 @@ if /usr/libexec/juniper/trust-images "$juniper_ns" "$tdir/k.pub" 2>/dev/null; th
   echo "trust-images changed Juniper's namespace" >&2
   exit 1
 fi
-# A hand-written drop-in for Juniper's namespace is skipped by the generator.
+# Hand-written drop-ins for Juniper's namespace, or a repo under it, are skipped by the generator.
 printf '{"%s": [{"type": "sigstoreSigned", "keyPath": "%s"}]}\n' "$juniper_ns" "$tdir/k.pub" >"$tdir/trusted-images.d/evil.json"
+printf '{"%s/juniper-minimal": [{"type": "sigstoreSigned", "keyPath": "%s"}]}\n' "$juniper_ns" "$tdir/k.pub" >"$tdir/trusted-images.d/evil2.json"
 /usr/libexec/juniper/containers-policy 2>/dev/null
 [[ $(jq -cS --arg ns "$juniper_ns" '.transports.docker[$ns]' "$tdir/policy.json") == "$(jq -cS --arg ns "$juniper_ns" '.transports.docker[$ns]' "$base")" ]]
-rm "$tdir/trusted-images.d/evil.json"
+jq -e --arg ns "$juniper_ns/juniper-minimal" '.transports.docker | has($ns) | not' "$tdir/policy.json" >/dev/null
+rm "$tdir/trusted-images.d/evil.json" "$tdir/trusted-images.d/evil2.json"
 /usr/libexec/juniper/trust-images --remove ghcr.io/example >/dev/null 2>&1
 [[ $(<"$tdir/policy.json") == "$(<"$base")" ]]
 unset JUNIPER_POLICY JUNIPER_REGISTRIES_D JUNIPER_KEY_DIR JUNIPER_TRUST_DIR

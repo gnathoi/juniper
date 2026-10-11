@@ -31,15 +31,33 @@ Sign the way Juniper's CI does (cosign 2.x, `cosign sign --key ... IMAGE@DIGEST`
 the classic `.sig` signatures; with cosign 3 add `--new-bundle-format=false
 --use-signing-config=false`.
 
-To ship the trust in the image as well (for devices you switch without running it first), add
-to your Containerfile:
+To ship the trust in your image as well (so it updates with the image, and covers devices you
+switch without running `trust-images` first), put an image drop-in and its key under `/usr`:
 
-    COPY cosign.pub /tmp/cosign.pub
-    RUN /usr/libexec/juniper/trust-images ghcr.io/you /tmp/cosign.pub && rm /tmp/cosign.pub
+    COPY cosign.pub /usr/lib/juniper/trusted-images.d/keys/you.pub
+    COPY you.json /usr/lib/juniper/trusted-images.d/you.json
+    COPY you.yaml /etc/containers/registries.d/you.yaml
 
-That puts the same drop-in (`/etc/juniper/trusted-images.d/`) and key in your image. Don't edit
-`/etc/containers/policy.json` in your image directly: every boot rebuilds it from Juniper's base
-policy and the drop-ins, and logs and drops anything else.
+with `you.json`:
+
+    {"ghcr.io/you": [{"type": "sigstoreSigned",
+      "keyPath": "/usr/lib/juniper/trusted-images.d/keys/you.pub",
+      "signedIdentity": {"type": "matchRepository"}}]}
+
+and `you.yaml` (podman only reads registries.d from `/etc`; a file only the image ships still
+updates with it):
+
+    docker:
+      ghcr.io/you:
+        use-sigstore-attachments: true
+
+Every boot merges image drop-ins, then local ones (`ujust trust-images`, which wins for the same
+namespace and logs it), into Juniper's base policy. An image drop-in can also tighten the
+default with `{"default": [{"type": "reject"}]}`, never loosen it. Don't `RUN trust-images` in a
+Containerfile (it bakes `/etc` state the device then keeps as its own), and don't edit
+`/etc/containers/policy.json` in your image: it is rebuilt at every boot, and anything else in it
+is logged and dropped. No drop-in can touch a namespace Juniper's base policy sets, or anything
+under it.
 
 ## Workload images: signed or pinned
 

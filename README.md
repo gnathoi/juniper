@@ -300,10 +300,14 @@ its key in `/etc/pki/containers/`, and its `use-sigstore-attachments` setting in
 (`/usr/share/juniper/containers/policy.json`), so it updates with every image, key rotations
 included. At every boot, before anything pulls, `juniper-containers-policy.service` rebuilds
 `/etc/containers/policy.json` from that base plus the drop-ins (validated first, previous copy
-kept as `policy.json.bak`). A drop-in can never change Juniper's own namespace or an entry the
-image ships; one that tries, or is invalid, is skipped and logged
+kept as `policy.json.bak`). If that fails at boot, the previous policy stays in force (it fails
+closed). No drop-in can change a scope the base policy sets (Juniper's own namespace, vendor
+entries) or anything under one; one that tries, or is invalid, is skipped and logged
 (`journalctl -u juniper-containers-policy`). Don't edit `policy.json` by hand: it is rebuilt at
-boot. For workloads, sign and
+boot. A derived image ships its trust as files instead: drop-ins and keys under
+`/usr/lib/juniper/trusted-images.d/`, merged before the local ones (a local drop-in for the same
+namespace wins), never `RUN trust-images` in the Containerfile. See
+[the appliance example](examples/appliance#signatures). For workloads, sign and
 auto-update on a fleet, or pin by digest on a one-off: see
 [the appliance example](examples/appliance#workload-images-signed-or-pinned), which also covers
 keeping app data safe across a rollback.
