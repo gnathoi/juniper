@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# First boot (juniper-flatpak-setup.service) and `ujust flatpak-setup`: install Firefox and the
-# Bazaar app store from Flathub, system-wide. Marked done only on success, so a first boot
-# without internet retries on the next boot. --or-update makes reruns finish a partial install.
+# First boot (juniper-flatpak-setup.timer, a few minutes in) and `ujust flatpak-setup`: install
+# Firefox and the Bazaar app store from Flathub, system-wide. Marked done only on success; until
+# then the unit retries every 30 minutes and on each boot. --or-update finishes a partial install.
 set -euo pipefail
 state=${JUNIPER_STATE_DIR:-/var/lib/juniper}
 apps=(org.mozilla.firefox io.github.kolunmi.Bazaar)

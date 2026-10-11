@@ -1,0 +1,9 @@
+[Unit]
+Description=Install Firefox and Bazaar from Flathub a few minutes after boot, until done
+ConditionPathExists=!/var/lib/juniper/flatpak-setup.done
+
+[Timer]
+OnBootSec=3min
+
+[Install]
+WantedBy=timers.target

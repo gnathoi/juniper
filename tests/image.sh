@@ -184,8 +184,14 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
   # An update that doesn't bring greetd up is rolled back under tryboot (healthcheck hook).
   test -x /usr/lib/juniper/health.d/10-greetd
   grep -q '^GPGKey=' /etc/flatpak/remotes.d/flathub.flatpakrepo
-  need_enabled juniper-flatpak-setup.service juniper-flatpak-update.timer
-  systemd-analyze verify juniper-flatpak-setup.service juniper-flatpak-update.service
+  need_enabled juniper-flatpak-setup.timer juniper-flatpak-update.timer
+  systemd-analyze verify juniper-flatpak-setup.timer juniper-flatpak-setup.service juniper-flatpak-update.service
+  # The app download runs from its timer, outside the boot transaction: it must not delay
+  # multi-user.target (cloud-final, then the first-boot secret scrub, wait for it).
+  [[ $(systemctl is-enabled juniper-flatpak-setup.service) == static ]] || {
+    echo "juniper-flatpak-setup.service is wanted by a boot target"
+    exit 1
+  }
   # The reboot window waits for an idle desktop (checked by file: no running systemd in CI).
   test -e /usr/lib/systemd/system/juniper-reboot.service.d/10-desktop-idle.conf
   grep -q '^ExecCondition=/usr/libexec/juniper/desktop-idle$' \

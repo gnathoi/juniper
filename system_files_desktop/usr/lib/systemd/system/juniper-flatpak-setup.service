@@ -1,5 +1,7 @@
 [Unit]
 Description=Install Firefox and the Bazaar app store from Flathub (first boot)
+# Started by juniper-flatpak-setup.timer, never as part of the boot transaction: a slow or
+# offline download must not hold up multi-user.target (cloud-final and the secret scrub).
 Wants=network-online.target
 After=network-online.target
 ConditionPathExists=!/var/lib/juniper/flatpak-setup.done
@@ -8,6 +10,6 @@ ConditionPathExists=!/var/lib/juniper/flatpak-setup.done
 Type=oneshot
 ExecStart=/usr/libexec/juniper/flatpak-setup
 TimeoutStartSec=60min
-
-[Install]
-WantedBy=multi-user.target
+# Until it succeeds: every 30 minutes, and again on the next boot.
+Restart=on-failure
+RestartSec=30min
