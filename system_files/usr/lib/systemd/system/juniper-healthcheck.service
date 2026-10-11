@@ -2,6 +2,10 @@
 Description=Juniper boot health check (confirms or falls back from a tryboot update)
 After=network-online.target tailscaled.service
 Wants=network-online.target
+# If the check itself dies (killed at TimeoutStartSec, crashed, OOM) it can't fall back; this
+# does, under tryboot only. A normal failed check (exit 1 on a normal boot) starts it too; it
+# then does nothing.
+OnFailure=juniper-healthcheck-fallback.service
 
 [Service]
 Type=oneshot

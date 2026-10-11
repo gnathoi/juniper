@@ -52,6 +52,29 @@ in_tryboot() {
   [[ -r $tryboot_flag ]] && [[ $(od -An -tu4 --endian=big -N4 "$tryboot_flag" | tr -d ' ') == 1 ]]
 }
 
+# Under tryboot, reboot: the firmware then boots the previous (known-good) deployment. On a
+# normal boot do nothing, so a failing check can never reboot-loop.
+fall_back() {
+  in_tryboot || return 0
+  echo "Unhealthy update under tryboot; rebooting into the previous deployment." >&2
+  systemctl reboot
+}
+
+case ${1:-} in
+  "") ;;
+  # juniper-healthcheck-fallback.service, via OnFailure= of juniper-healthcheck.service: the
+  # check itself died (killed at TimeoutStartSec, crashed, OOM) before it could fall back.
+  --fallback)
+    echo "juniper-healthcheck failed before confirming this boot." >&2
+    fall_back
+    exit 0
+    ;;
+  *)
+    echo "usage: healthcheck [--fallback]" >&2
+    exit 2
+    ;;
+esac
+
 for ((i = 0; i < tries && SECONDS < deadline; i++)); do
   if healthy; then
     rpi-bootc-bootloader sync
@@ -62,8 +85,5 @@ for ((i = 0; i < tries && SECONDS < deadline; i++)); do
 done
 
 echo "Health check failed: no default route, (locked) Tailscale or SSH over it down, or an image health hook failed." >&2
-if in_tryboot; then
-  echo "Unhealthy update under tryboot; rebooting into the previous deployment." >&2
-  systemctl reboot
-fi
+fall_back
 exit 1

@@ -1,0 +1,9 @@
+[Unit]
+Description=Fall back from a tryboot update when the boot health check itself failed
+# Started by OnFailure= of juniper-healthcheck.service (killed at its timeout, crashed, OOM).
+# Reboots only when this boot is a tryboot: the firmware then boots the previous deployment.
+# On a normal boot it does nothing, so it can't cause a reboot loop.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/juniper/healthcheck --fallback

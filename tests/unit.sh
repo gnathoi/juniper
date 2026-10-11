@@ -530,6 +530,46 @@ test_healthcheck_hanging_systemctl_probe_still_falls_back() {
   check "health: hung systemctl probe under tryboot -> reboot" called "systemctl reboot"
 }
 
+# juniper-healthcheck.service failing for any reason (killed at TimeoutStartSec, crashed, OOM)
+# starts juniper-healthcheck-fallback.service: `healthcheck --fallback` reboots under tryboot
+# only, with no probes and no retries.
+test_healthcheck_fallback_mode_reboots_under_tryboot() {
+  health_env
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  "$LIBEXEC/healthcheck" --fallback 2>/dev/null
+  check "health fallback: tryboot -> reboot" called "systemctl reboot"
+  check "health fallback: no probes" not_called "ip "
+  check "health fallback: never confirms" not_called "rpi-bootc-bootloader sync"
+}
+
+test_healthcheck_fallback_mode_normal_boot_does_nothing() {
+  health_env
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  printf '\x00\x00\x00\x00' >"$JUNIPER_TRYBOOT_FLAG"
+  check "health fallback: normal boot exits 0" "$LIBEXEC/healthcheck" --fallback
+  check "health fallback: normal boot -> no reboot" not_called "systemctl reboot"
+  check "health fallback: normal boot -> no sync" not_called "rpi-bootc-bootloader sync"
+  rm -f "$JUNIPER_TRYBOOT_FLAG"
+  check "health fallback: no flag exits 0" "$LIBEXEC/healthcheck" --fallback
+  check "health fallback: no flag -> no reboot" not_called "systemctl reboot"
+}
+
+test_healthcheck_rejects_unknown_argument() {
+  health_env
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  check "health: unknown argument fails" fails "$LIBEXEC/healthcheck" --bogus
+  check "health: unknown argument -> no reboot" not_called "systemctl reboot"
+}
+
+test_healthcheck_unit_has_fallback_on_failure() {
+  local u=$ROOT/system_files/usr/lib/systemd/system
+  check "health unit: OnFailure= the fallback" \
+    grep -qx 'OnFailure=juniper-healthcheck-fallback.service' "$u/juniper-healthcheck.service"
+  check "fallback unit: runs healthcheck --fallback" \
+    grep -qx 'ExecStart=/usr/libexec/juniper/healthcheck --fallback' "$u/juniper-healthcheck-fallback.service"
+}
+
 test_healthcheck_probe_timeout_is_short() {
   local p
   # shellcheck disable=SC2016 # literal ${...} in the script's text
