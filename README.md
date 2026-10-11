@@ -144,7 +144,8 @@ Then edit `user-data` on the small FAT partition and, for Wi-Fi, add `network-co
 ## On the Pi
 
 Run `ujust` to list Juniper's commands (updates, reboot window, LAN SSH escape hatch,
-Tailscale, metrics, Pi status, and on `juniper` the dev box).
+Tailscale, metrics, Pi status, and on `juniper` the dev box). Press Tab after `ujust` to
+complete recipe names and their fixed arguments (`on`/`off`, ...) in bash.
 
 ### Lockdown and LAN SSH
 
