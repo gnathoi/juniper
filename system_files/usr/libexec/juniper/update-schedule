@@ -9,6 +9,7 @@ set -euo pipefail
 
 dropin_dir=${JUNIPER_DROPIN_DIR:-/etc/systemd/system/juniper-reboot.timer.d}
 conf=$dropin_dir/schedule.conf
+state_dir=${JUNIPER_STATE_DIR:-/var/lib/juniper}
 time_re='^([01][0-9]|2[0-3]):[0-5][0-9]$'
 
 usage() {
@@ -16,8 +17,14 @@ usage() {
   exit 2
 }
 
+# juniper-desktop records when it first deferred a reboot (desktop-idle). A new schedule starts
+# that count afresh, so a deferral from before `off` can't look past the 7-day cap after `on`.
+# Headless images never have these files.
+clear_deferral() { rm -f "$state_dir/reboot-deferred-since" "$state_dir/reboot-notified"; }
+
 set_window() { # DAY (Mon..Sun or daily) HH:MM
   local cal="*-*-* $2:00" tz
+  clear_deferral
   [[ $1 == daily ]] || cal="$1 $cal"
   mkdir -p "$dropin_dir"
   printf '[Timer]\nOnCalendar=\nOnCalendar=%s\n' "$cal" >"$conf"
@@ -52,6 +59,7 @@ case $# in
   1)
     if [[ $1 == off ]]; then
       systemctl disable --now juniper-reboot.timer
+      clear_deferral
       echo "Automatic update reboots are off. Apply updates with: ujust update"
     elif [[ $1 =~ $time_re ]]; then
       set_window "$(current_day)" "$1"

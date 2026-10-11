@@ -182,6 +182,21 @@ test_update_schedule_day_and_time() {
   check "schedule: names day, time, timezone" grep -q 'Wed.*03:30.*Europe/London' <<<"$out"
 }
 
+# A deferral recorded before `off` must not count after a later `on`: the hourly retry would
+# see it as past the 7-day cap and reboot an in-use desktop.
+test_update_schedule_change_clears_deferral() {
+  export JUNIPER_DROPIN_DIR=$T/dropin
+  for args in off "tue 04:00" "05:00"; do
+    echo 1999000000 >"$JUNIPER_STATE_DIR/reboot-deferred-since"
+    echo 1999000000 >"$JUNIPER_STATE_DIR/reboot-notified"
+    # shellcheck disable=SC2086 # split into DAY and TIME on purpose
+    sched $args >/dev/null
+    check "schedule '$args': deferral marker cleared" test ! -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
+    check "schedule '$args': notice marker cleared" test ! -e "$JUNIPER_STATE_DIR/reboot-notified"
+  done
+  check "schedule: no state dir is fine" env JUNIPER_STATE_DIR="$T/none" "$LIBEXEC/update-schedule" off
+}
+
 test_update_schedule_daily() {
   export JUNIPER_DROPIN_DIR=$T/dropin
   sched daily 03:30
