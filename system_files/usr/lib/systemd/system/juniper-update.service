@@ -5,7 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/bootc upgrade --quiet
+# Free-space check, then stages the image (update-stage).
+ExecStart=/usr/libexec/juniper/update-stage
 # Note in update-held (motd, `ujust pi-status`) when the staged image is one that failed its
 # health check before; never fails the download.
 ExecStartPost=-/usr/libexec/juniper/apply-update --check

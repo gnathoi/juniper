@@ -48,5 +48,14 @@ legacy_file=${JUNIPER_RUN_DIR:-/run/juniper}/lan-ssh-legacy
 if [[ -e $state_dir/locked && -s $legacy_file ]]; then
   row Warning "$(cat "$legacy_file")"
 fi
-row Tip "$(cat /usr/share/juniper/tips*.txt 2>/dev/null | shuf -n1)"
+# Written by update-stage when the disk was too full to stage an update.
+if [[ -s $state_dir/update-skipped-space ]]; then
+  row Warning "$(head -n1 "$state_dir/update-skipped-space" | tr -cd '[:print:]')"
+fi
+# Under 10% or 1 GiB free on /; df needs no root.
+read -r total avail < <(df -Pm / 2>/dev/null | awk 'NR == 2 {print $2, $4}') || true
+if [[ ${total:-0} =~ ^[0-9]+$ && ${avail:-} =~ ^[0-9]+$ ]] && ((total > 0 && (avail * 10 < total || avail < 1024))); then
+  row Warning "low disk space: ${avail} MiB free of ${total} MiB on /; free some or move data to a USB disk"
+fi
+row Tip"$(cat /usr/share/juniper/tips*.txt 2>/dev/null | shuf -n1)"
 printf '\n  ujust for commands · ujust toggle-motd to hide this\n\n'
