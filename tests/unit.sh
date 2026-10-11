@@ -425,6 +425,34 @@ test_healthcheck_hung_hook_times_out() {
   check "health: hung hook under tryboot -> reboot" called "systemctl reboot"
 }
 
+# A hook that hangs on every try (say a wedged D-Bus) must still reach the tryboot fallback
+# before juniper-healthcheck.service's TimeoutStartSec kills the check. The hook ignores
+# SIGTERM, so only timeout's -k gets rid of it.
+test_healthcheck_always_hanging_hook_still_falls_back() {
+  health_env
+  export JUNIPER_HEALTH_D=$T/health.d JUNIPER_HEALTH_TRIES=1000 JUNIPER_HEALTH_HOOK_TIMEOUT=1 \
+    JUNIPER_HEALTH_HOOK_KILL=1 JUNIPER_HEALTH_DEADLINE=3
+  mkdir -p "$JUNIPER_HEALTH_D"
+  printf '#!/bin/bash\ntrap "" TERM\nsleep 30\n' >"$JUNIPER_HEALTH_D/10-hang" && chmod +x "$JUNIPER_HEALTH_D/10-hang"
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  local start=$SECONDS
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "health: always-hanging hook -> deadline reached in time" test $((SECONDS - start)) -lt 15
+  check "health: always-hanging hook under tryboot -> reboot" called "systemctl reboot"
+}
+
+test_healthcheck_deadline_below_unit_timeout() {
+  local unit=$ROOT/system_files/usr/lib/systemd/system/juniper-healthcheck.service
+  local t d k
+  t=$(sed -n 's/^TimeoutStartSec=\([0-9]*\)min$/\1/p' "$unit")
+  d=$(sed -n 's/^deadline=${JUNIPER_HEALTH_DEADLINE:-\([0-9]*\)}$/\1/p' "$LIBEXEC/healthcheck")
+  k=$(sed -n 's/^hook_timeout=${JUNIPER_HEALTH_HOOK_TIMEOUT:-\([0-9]*\)}$/\1/p' "$LIBEXEC/healthcheck")
+  check "health: per-hook timeout at most 15s" test "${k:-99}" -le 15
+  # One more try can start just before the deadline: leave it a minute and more.
+  check "health: deadline well below TimeoutStartSec" test $((${d:-9999} + 90)) -le $((${t:-0} * 60))
+}
+
 test_healthcheck_passing_hook_and_no_hooks() {
   health_env
   export JUNIPER_HEALTH_D=$T/health.d

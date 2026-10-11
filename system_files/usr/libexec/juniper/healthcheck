@@ -11,7 +11,11 @@ tries=${JUNIPER_HEALTH_TRIES:-20}
 interval=${JUNIPER_HEALTH_INTERVAL:-15}
 tryboot_flag=${JUNIPER_TRYBOOT_FLAG:-/proc/device-tree/chosen/bootloader/tryboot}
 health_d=${JUNIPER_HEALTH_D:-/usr/lib/juniper/health.d}
-hook_timeout=${JUNIPER_HEALTH_HOOK_TIMEOUT:-60}
+hook_timeout=${JUNIPER_HEALTH_HOOK_TIMEOUT:-15}
+hook_kill=${JUNIPER_HEALTH_HOOK_KILL:-5}
+# Stop retrying after this many seconds, so the tryboot fallback below always runs well before
+# juniper-healthcheck.service's TimeoutStartSec=10min kills the check (which would skip it).
+deadline=${JUNIPER_HEALTH_DEADLINE:-420}
 
 healthy() {
   [[ -n $(ip route show default) || -n $(ip -6 route show default) ]] || return 1
@@ -23,11 +27,11 @@ healthy() {
       [[ $(systemctl is-active sshd.service 2>/dev/null) == active ]] || return 1
   fi
   # Image-specific checks (juniper-desktop: greetd must be running). None on headless images.
-  # Each is bounded, so a hung hook can't outlast the unit's timeout (which skips the fallback).
+  # Each is bounded (SIGKILL if it ignores SIGTERM), so a hung hook can't stall a try.
   local hook
   for hook in "$health_d"/*; do
     [[ -x $hook ]] || continue
-    timeout "$hook_timeout" "$hook" || {
+    timeout -k "$hook_kill" "$hook_timeout" "$hook" || {
       echo "health hook ${hook##*/} failed" >&2
       return 1
     }
@@ -40,11 +44,12 @@ in_tryboot() {
   [[ -r $tryboot_flag ]] && [[ $(od -An -tu4 --endian=big -N4 "$tryboot_flag" | tr -d ' ') == 1 ]]
 }
 
-for ((i = 0; i < tries; i++)); do
+for ((i = 0; i < tries && SECONDS < deadline; i++)); do
   if healthy; then
     rpi-bootc-bootloader sync
     exit 0
   fi
+  ((SECONDS + interval < deadline)) || break
   sleep "$interval"
 done
 
