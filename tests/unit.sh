@@ -15,6 +15,8 @@ fails=0
 setup() {
   # a test may export TMPDIR into its own (now deleted) $T
   if [[ -n $ORIG_TMPDIR ]]; then export TMPDIR=$ORIG_TMPDIR; else unset TMPDIR; fi
+  # ...and the overrides fwkey/cryptroot tests export; a later test must never inherit them
+  unset JUNIPER_SYSFS JUNIPER_VCIO
   T=$(mktemp -d)
   export CALLS=$T/calls JUNIPER_STATE_DIR=$T/state
   mkdir -p "$T/bin" "$JUNIPER_STATE_DIR"
@@ -3192,6 +3194,42 @@ test_fwkey_derive_fails_closed() {
   check "fwkey: derive rejects non-hex output" test -z "$("$LIBEXEC/fwkey" derive mmcblk0 2>/dev/null || true)"
 }
 
+# M1: many matching lines must not kill the parser with SIGPIPE under pipefail.
+test_fwkey_long_error_output() {
+  fwkey_env
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub rpi-fw-crypto 'case $1 in
+  hmac) cat >/dev/null; for ((i = 0; i < 20000; i++)); do echo "Last crypto error: 6 (Key is all zeros)"; done >&2; exit 250 ;;
+  get-key-status) for ((i = 0; i < 20000; i++)); do echo "Key 1 status: 0x00001b01 (x)"; done ;;
+esac'
+  check "fwkey: long error output still parsed" test "$("$LIBEXEC/fwkey" probe)" = not-set
+  check "fwkey: long status output still parsed" test "$("$LIBEXEC/fwkey" lock)" = locked
+}
+
+# M3: only an exact KEY_NOT_SET may reach genkey; garbage or a missing CLI never does.
+test_fwkey_ensure_garbage_never_generates() {
+  local out
+  for out in 'Last crypto error: 66 (x)' 'Last crypto error:  6' 'Last crypto error: (x)' 'error 6' \
+    '0123456789abcdef' '' 'bash: rpi-fw-crypto: command not found'; do
+    fwkey_env
+    # shellcheck disable=SC2016 # expands inside the stub
+    stub rpi-fw-crypto "case \$1 in hmac) cat >/dev/null; printf '%s\n' '$out' >&2; exit 127 ;; esac"
+    check "fwkey ($out): ensure fails" fails "$LIBEXEC/fwkey" ensure
+    check "fwkey ($out): unavailable" stdout_has '^unavailable:' "$LIBEXEC/fwkey" ensure
+    check "fwkey ($out): no genkey" not_called "rpi-fw-crypto genkey"
+  done
+  fwkey_env
+  check "fwkey (no CLI): ensure unavailable" test "$(RPI_FW_CRYPTO=$T/missing "$LIBEXEC/fwkey" ensure || true)" = "unavailable:firmware error none"
+  check "fwkey (no CLI): no genkey" not_called "rpi-fw-crypto genkey"
+}
+
+# M2: setup() drops the overrides fwkey_env exports.
+test_fwkey_overrides_not_inherited_a() { fwkey_env; }
+test_fwkey_overrides_not_inherited_b() {
+  check "setup: JUNIPER_SYSFS unset" test -z "${JUNIPER_SYSFS+x}"
+  check "setup: JUNIPER_VCIO unset" test -z "${JUNIPER_VCIO+x}"
+}
+
 test_fwkey_usage() {
   fwkey_env
   check "fwkey: unknown command fails" fails "$LIBEXEC/fwkey" bogus
@@ -3199,7 +3237,8 @@ test_fwkey_usage() {
 }
 
 # --- runner ---
-for t in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do
+# UNIT_FILTER=REGEX runs only the matching tests (e.g. UNIT_FILTER=cryptroot tests/unit.sh).
+for t in $(declare -F | awk -v f="${UNIT_FILTER:-.}" '$3 ~ /^test_/ && $3 ~ f {print $3}'); do
   setup
   "$t"
   rm -rf "$T"

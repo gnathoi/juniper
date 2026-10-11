@@ -15,7 +15,10 @@ fw=${RPI_FW_CRYPTO:-rpi-fw-crypto}
 label='juniper.luks.root.v1'
 
 hmac() { "$fw" hmac --in /dev/stdin --key-id 1 --outform hex; }
-fw_error() { printf '%s\n' "$1" | sed -n 's/^Last crypto error: \([0-9]*\).*/\1/p' | head -1; }
+# first_line: the first line of $1. No `| head -1` (nor a quitting sed) on a pipe: the writer
+# can die of SIGPIPE under pipefail.
+first_line() { printf '%s' "${1%%$'\n'*}"; }
+fw_error() { first_line "$(printf '%s\n' "$1" | sed -n 's/^Last crypto error: \([0-9]*\).*/\1/p')"; }
 
 probe() {
   [[ -e $vcio ]] || {
@@ -24,7 +27,7 @@ probe() {
   }
   local both err
   both=$(printf 'juniper.probe.v1' | hmac 2>&1) || true
-  if printf '%s\n' "$both" | grep -Eqx '[0-9a-f]{64}'; then
+  if printf '%s\n' "$both" | grep -Ex '[0-9a-f]{64}' >/dev/null; then
     echo ok
     return
   fi
@@ -118,7 +121,7 @@ lock() {
   if [[ -e $vcio ]] &&
     "$fw" set-key-status 1 READ_LOCKED GEN_LOCKED HMAC_LOCKED USAGE_LOCKED >/dev/null 2>&1 &&
     st=$("$fw" get-key-status 1 2>/dev/null); then
-    hex=$(printf '%s\n' "$st" | sed -n 's/^Key 1 status: 0x\([0-9a-fA-F]\{1,8\}\).*/\1/p' | head -1)
+    hex=$(first_line "$(printf '%s\n' "$st" | sed -n 's/^Key 1 status: 0x\([0-9a-fA-F]\{1,8\}\).*/\1/p')")
     if [[ -n $hex ]] && ((16#$hex & 0x800)); then
       echo locked
       return 0
