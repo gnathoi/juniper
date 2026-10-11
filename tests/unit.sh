@@ -720,6 +720,12 @@ test_wifi_import_rejects_bad_interface() {
 
 # fails CMD...: CMD exits non-zero (stderr hidden). stderr_has PATTERN CMD...: CMD's stderr matches.
 fails() { ! "$@" 2>/dev/null; }
+stdout_has() {
+  local out
+  out=$("${@:2}" 2>/dev/null)
+  grep -q -- "$1" <<<"$out"
+}
+not_stdout_has() { ! stdout_has "$@"; }
 stderr_has() { { "${@:2}" 2>&1 >/dev/null || true; } | grep -q -- "$1"; }
 
 # yq-free YAML lookups for the flash tests: yget FILE PYTHON-EXPR (d is the parsed document)
@@ -1177,6 +1183,128 @@ test_switch_headless_needs_no_password() {
   "$LIBEXEC/switch-image" ghcr.io/gnathoi/juniper-minimal:latest >/dev/null
   check "switch: headless -> no password check" not_called "passwd -S"
   check "switch: headless switched" called "bootc switch ghcr.io/gnathoi/juniper-minimal:latest"
+}
+
+ts_join_env() {
+  export JUNIPER_TAILSCALE_KEY=$T/authkey JUNIPER_NOW=2000000000 JUNIPER_NTP_SYNCED=yes
+  echo "tskey-auth-secret" >"$JUNIPER_TAILSCALE_KEY"
+  # A Pi without an RTC stamps files with a bogus clock; the key's mtime must not matter.
+  touch -d @0 "$JUNIPER_TAILSCALE_KEY"
+}
+ts_since() { echo "$1" >"$JUNIPER_STATE_DIR/tailscale-join-since"; }
+
+test_tailscale_join_success_shreds_key() {
+  ts_join_env
+  : >"$JUNIPER_STATE_DIR/tailscale-join-gave-up"
+  ts_since 1999999000
+  check "ts join: success exits 0" "$LIBEXEC/tailscale-join"
+  check "ts join: joins with ssh and the key file" called "tailscale up --ssh --auth-key=file:$JUNIPER_TAILSCALE_KEY --timeout=120s"
+  check "ts join: success shreds the key" test ! -e "$JUNIPER_TAILSCALE_KEY"
+  check "ts join: success clears a stale marker" test ! -e "$JUNIPER_STATE_DIR/tailscale-join-gave-up"
+  check "ts join: success clears the since file" test ! -e "$JUNIPER_STATE_DIR/tailscale-join-since"
+}
+
+test_tailscale_join_network_failure_keeps_key() {
+  ts_join_env
+  stub tailscale 'echo "timeout waiting for the backend" >&2; exit 1'
+  check "ts join: network failure exits non-zero (systemd retries)" fails "$LIBEXEC/tailscale-join"
+  check "ts join: network failure keeps the key" test -e "$JUNIPER_TAILSCALE_KEY"
+  check "ts join: network failure writes no marker" test ! -e "$JUNIPER_STATE_DIR/tailscale-join-gave-up"
+}
+
+test_tailscale_join_rejected_key_gives_up() {
+  local msg
+  for msg in "invalid key: API key does not exist" \
+    "invalid key: API key tskey-abc not valid" \
+    "backend error: invalid key: unable to validate API key" \
+    "backend error: invalid key: invalid API token"; do
+    ts_join_env
+    stub tailscale "echo '$msg' >&2; exit 1"
+    check "ts join: '$msg' exits 0 (no retry)" "$LIBEXEC/tailscale-join"
+    check "ts join: '$msg' shreds the key" test ! -e "$JUNIPER_TAILSCALE_KEY"
+    check "ts join: '$msg' writes marker" grep -q rejected "$JUNIPER_STATE_DIR/tailscale-join-gave-up"
+    rm -f "$JUNIPER_STATE_DIR/tailscale-join-gave-up"
+  done
+}
+
+test_tailscale_join_loose_words_in_network_error_keep_key() {
+  ts_join_env
+  stub tailscale 'echo "x509: invalid certificate; key exchange timed out" >&2; exit 1'
+  check "ts join: loose 'invalid'/'key' words in a network error fail" fails "$LIBEXEC/tailscale-join"
+  check "ts join: ... and keep the key" test -e "$JUNIPER_TAILSCALE_KEY"
+}
+
+test_tailscale_join_unsynced_clock_never_expires() {
+  ts_join_env
+  export JUNIPER_NTP_SYNCED=no
+  ts_since 1
+  stub tailscale 'echo "no route to host" >&2; exit 1'
+  check "ts join: unsynced clock + old since fails (retry)" fails "$LIBEXEC/tailscale-join"
+  check "ts join: unsynced clock keeps the key" test -e "$JUNIPER_TAILSCALE_KEY"
+  check "ts join: unsynced clock gives no marker" test ! -e "$JUNIPER_STATE_DIR/tailscale-join-gave-up"
+  unset JUNIPER_NTP_SYNCED
+}
+
+test_tailscale_join_synced_clock_records_then_expires() {
+  ts_join_env
+  stub tailscale 'echo "no route to host" >&2; exit 1'
+  fails "$LIBEXEC/tailscale-join" || true
+  check "ts join: first synced attempt records the time" test "$(cat "$JUNIPER_STATE_DIR/tailscale-join-since")" = 2000000000
+  check "ts join: first attempt keeps the key (mtime 1970 irrelevant)" test -e "$JUNIPER_TAILSCALE_KEY"
+  check "ts join: 15 days later gives up" env JUNIPER_NOW=$((2000000000 + 15 * 86400)) "$LIBEXEC/tailscale-join"
+  check "ts join: old key shredded" test ! -e "$JUNIPER_TAILSCALE_KEY"
+  check "ts join: marker has the reason" grep -q "older than 14 days" "$JUNIPER_STATE_DIR/tailscale-join-gave-up"
+  check "ts join: give-up clears the since file" test ! -e "$JUNIPER_STATE_DIR/tailscale-join-since"
+}
+
+test_tailscale_join_13_days_keeps_key() {
+  ts_join_env
+  ts_since $((2000000000 - 13 * 86400))
+  stub tailscale 'echo "no route to host" >&2; exit 1'
+  check "ts join: 13 days + network failure fails" fails "$LIBEXEC/tailscale-join"
+  check "ts join: 13 days keeps the key" test -e "$JUNIPER_TAILSCALE_KEY"
+}
+
+test_tailscale_join_future_since_rewritten() {
+  ts_join_env
+  ts_since 2999999999
+  stub tailscale 'exit 1'
+  fails "$LIBEXEC/tailscale-join" || true
+  check "ts join: future since is rewritten" test "$(cat "$JUNIPER_STATE_DIR/tailscale-join-since")" = 2000000000
+  check "ts join: future since keeps the key" test -e "$JUNIPER_TAILSCALE_KEY"
+}
+
+test_tailscale_join_max_days_override() {
+  ts_join_env
+  ts_since 1999999999
+  check "ts join: max days override gives up" env JUNIPER_TAILSCALE_KEY_MAX_DAYS=0 "$LIBEXEC/tailscale-join"
+  check "ts join: override shreds" test ! -e "$JUNIPER_TAILSCALE_KEY"
+}
+
+test_tailscale_join_undeletable_key_retries() {
+  ts_join_env
+  ts_since 1
+  stub shred 'exit 1'
+  stub rm 'exit 1'
+  check "ts join: key that cannot be deleted exits non-zero" fails "$LIBEXEC/tailscale-join"
+  check "ts join: no 'deleted' marker while the key survives" test ! -e "$JUNIPER_STATE_DIR/tailscale-join-gave-up"
+  /usr/bin/rm -f "$T/bin/rm" # the runner cleanup needs the real rm
+}
+
+test_tailscale_join_shred_failure_falls_back_to_rm() {
+  ts_join_env
+  stub shred 'exit 1'
+  check "ts join: shred failure still succeeds via rm" "$LIBEXEC/tailscale-join"
+  check "ts join: key removed by the fallback" test ! -e "$JUNIPER_TAILSCALE_KEY"
+}
+
+test_motd_shows_tailscale_gave_up_only_when_disconnected() {
+  echo "key rejected on 2033-05-18" >"$JUNIPER_STATE_DIR/tailscale-join-gave-up"
+  stub tailscale 'exit 1'
+  check "motd: gave-up shown with recovery" stdout_has "ujust tailscale-up" "$LIBEXEC/motd"
+  check "motd: gave-up reason shown" stdout_has "key rejected on 2033-05-18" "$LIBEXEC/motd"
+  stub tailscale 'echo 100.64.0.1'
+  check "motd: connected hides the stale marker" not_stdout_has "not joined" "$LIBEXEC/motd"
 }
 
 # --- runner ---

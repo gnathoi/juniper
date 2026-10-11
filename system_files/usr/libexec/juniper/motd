@@ -20,6 +20,10 @@ if [[ -n $exp ]]; then
   ts+=" - key expires ${exp%%T*}; disable key expiry for this machine in the Tailscale admin console"
 fi
 
+if [[ $ts == "not connected"* && -e $state_dir/tailscale-join-gave-up ]]; then
+  ts="not joined: $(cat "$state_dir/tailscale-join-gave-up"); the key was deleted. Run: ujust tailscale-up"
+fi
+
 if systemctl -q is-failed juniper-update.service; then
   upd="update failed - see: journalctl -u juniper-update"
 elif [[ -e /run/ostree/staged-deployment ]]; then

@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Join the tailnet with the auth key cloud-init wrote at first boot, then delete the key.
+# A key that never works must not sit on disk forever (a stolen card could use it), so give
+# up and delete it when Tailscale rejects it or it is older than 14 days. Giving up exits 0
+# so systemd stops retrying; the key file's absence then skips this unit on later boots.
+set -uo pipefail
+
+key=${JUNIPER_TAILSCALE_KEY:-/etc/tailscale/authkey}
+state_dir=${JUNIPER_STATE_DIR:-/var/lib/juniper}
+max_days=${JUNIPER_TAILSCALE_KEY_MAX_DAYS:-14}
+now=${JUNIPER_NOW:-$(date +%s)}
+synced=${JUNIPER_NTP_SYNCED:-$(timedatectl show -p NTPSynchronized --value 2>/dev/null)}
+since_file=$state_dir/tailscale-join-since
+marker=$state_dir/tailscale-join-gave-up
+
+# Delete the key for good; if it survives, the caller fails so systemd retries.
+remove_key() {
+  shred -u "$key" 2>/dev/null || rm -f "$key"
+  [[ ! -e $key ]]
+}
+
+give_up() {
+  remove_key || {
+    echo "Could not delete the Tailscale auth key $key" >&2
+    exit 1
+  }
+  mkdir -p "$state_dir"
+  echo "$1 on $(date -d "@$now" +%F)" >"$marker"
+  rm -f "$since_file"
+  echo "Tailscale join given up, auth key deleted: $1. Recover: ujust tailscale-up (or sudo tailscale up --ssh with a new key)." >&2
+  exit 0
+}
+
+# A Pi has no RTC, so the key file's mtime and the clock before NTP are meaningless. Count
+# the key's age from the first attempt made with a synced clock, kept in a state file.
+if [[ $synced == yes ]]; then
+  since=$(cat "$since_file" 2>/dev/null || true)
+  if [[ ! $since =~ ^[0-9]+$ ]] || ((since > now)); then
+    mkdir -p "$state_dir"
+    echo "$now" >"$since_file"
+  elif ((now - since > max_days * 86400)); then
+    give_up "auth key older than $max_days days"
+  fi
+fi
+
+# Rejection wording from the control server (e.g. "invalid key: API key does not exist");
+# deliberately narrow so a network error (timeouts, DNS, TLS) never matches and just retries.
+rejected='(backend error: )?invalid key:'
+
+out=$(tailscale up --ssh --auth-key="file:$key" --timeout=120s 2>&1)
+rc=$?
+[[ -n $out ]] && echo "$out" >&2
+if ((rc == 0)); then
+  remove_key || exit 1
+  rm -f "$since_file" "$marker"
+  exit 0
+fi
+if grep -qE "$rejected" <<<"$out"; then
+  give_up "auth key rejected by Tailscale"
+fi
+exit "$rc"
