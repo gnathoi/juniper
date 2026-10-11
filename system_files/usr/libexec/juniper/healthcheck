@@ -11,6 +11,8 @@ tries=${JUNIPER_HEALTH_TRIES:-20}
 interval=${JUNIPER_HEALTH_INTERVAL:-15}
 tryboot_flag=${JUNIPER_TRYBOOT_FLAG:-/proc/device-tree/chosen/bootloader/tryboot}
 health_d=${JUNIPER_HEALTH_D:-/usr/lib/juniper/health.d}
+health_local_d=${JUNIPER_HEALTH_LOCAL_D:-/etc/juniper/health.d}
+local_owner=${JUNIPER_HEALTH_LOCAL_OWNER:-0}
 hook_timeout=${JUNIPER_HEALTH_HOOK_TIMEOUT:-15}
 hook_kill=${JUNIPER_HEALTH_HOOK_KILL:-5}
 # Stop retrying after this many seconds, so the tryboot fallback below always runs well before
@@ -41,10 +43,36 @@ healthy() {
       [[ $(probe systemctl is-active sshd.service 2>/dev/null) == active ]] || return 1
   fi
   # Image-specific checks (juniper-desktop: greetd must be running). None on headless images.
-  # Each is bounded (SIGKILL if it ignores SIGTERM), so a hung hook can't stall a try.
+  run_hooks "$health_d" || return 1
+  # Local checks for appliances run from quadlets without a custom image ("a sample was
+  # stored in the last 10 minutes"). /etc is writable, so only root-controlled ones run.
+  if [[ -d $health_local_d ]]; then
+    if root_controlled "$health_local_d"; then
+      run_hooks "$health_local_d" local || return 1
+    else
+      echo "skipping local health hooks: $health_local_d is not root-owned or is group/world-writable" >&2
+    fi
+  fi
+}
+
+# Owned by root (uid $local_owner) and not group- or world-writable (symlinks followed).
+root_controlled() {
+  local uid mode
+  read -r uid mode < <(stat -L -c '%u %a' -- "$1" 2>/dev/null) || return 1
+  [[ $uid == "$local_owner" ]] && ((!(8#$mode & 8#022)))
+}
+
+# run_hooks DIR [local]: run each executable in DIR, sorted; any failure fails the try. Each is
+# bounded (SIGKILL if it ignores SIGTERM), so a hung hook can't stall a try. Local hooks that
+# aren't root-controlled are skipped and logged.
+run_hooks() {
   local hook
-  for hook in "$health_d"/*; do
-    [[ -x $hook ]] || continue
+  for hook in "$1"/*; do
+    [[ -x $hook && ! -d $hook ]] || continue
+    if [[ ${2:-} == local ]] && ! root_controlled "$hook"; then
+      echo "skipping local health hook ${hook##*/}: not root-owned or group/world-writable" >&2
+      continue
+    fi
     timeout -k "$hook_kill" "$hook_timeout" "$hook" || {
       echo "health hook ${hook##*/} failed" >&2
       return 1

@@ -530,6 +530,98 @@ test_healthcheck_hanging_systemctl_probe_still_falls_back() {
   check "health: hung systemctl probe under tryboot -> reboot" called "systemctl reboot"
 }
 
+# Local hooks (/etc/juniper/health.d) for quadlet users who don't build images. Only files
+# owned by root (JUNIPER_HEALTH_LOCAL_OWNER here, so a non-root test run can own them) and not
+# group- or world-writable run; anything else is skipped and logged.
+local_hook() { # NAME BODY [MODE]
+  mkdir -p "$JUNIPER_HEALTH_LOCAL_D"
+  chmod 755 "$JUNIPER_HEALTH_LOCAL_D"
+  printf '#!/bin/sh\n%s\n' "$2" >"$JUNIPER_HEALTH_LOCAL_D/$1"
+  chmod "${3:-755}" "$JUNIPER_HEALTH_LOCAL_D/$1"
+}
+local_env() {
+  health_env
+  export JUNIPER_HEALTH_LOCAL_OWNER
+  JUNIPER_HEALTH_LOCAL_OWNER=$(id -u)
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+}
+
+test_healthcheck_local_hook_failure_falls_back() {
+  local_env
+  local_hook 50-sensor 'exit 1'
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "health: failing local hook under tryboot -> reboot" called "systemctl reboot"
+  check "health: failing local hook named" stderr_has "health hook 50-sensor failed" "$LIBEXEC/healthcheck"
+  check "health: failing local hook -> no sync" not_called "rpi-bootc-bootloader sync"
+}
+
+test_healthcheck_local_hook_pass_is_healthy() {
+  local_env
+  local_hook 50-sensor 'exit 0'
+  "$LIBEXEC/healthcheck"
+  check "health: passing local hook ran" test -x "$JUNIPER_HEALTH_LOCAL_D/50-sensor"
+  check "health: passing local hook -> sync" called "rpi-bootc-bootloader sync"
+}
+
+test_healthcheck_local_hooks_run_sorted() {
+  local_env
+  local_hook 20-b "echo b >>$T/order"
+  local_hook 10-a "echo a >>$T/order"
+  "$LIBEXEC/healthcheck"
+  check "health: local hooks run in sorted order" test "$(tr -d '\n' <"$T/order")" = ab
+}
+
+test_healthcheck_local_hook_world_writable_skipped() {
+  local_env
+  local_hook 50-unsafe 'exit 1' 777
+  check "health: world-writable local hook logged" stderr_has "skipping local health hook 50-unsafe" "$LIBEXEC/healthcheck"
+  check "health: world-writable local hook skipped -> healthy" called "rpi-bootc-bootloader sync"
+  check "health: world-writable local hook skipped -> no reboot" not_called "systemctl reboot"
+}
+
+test_healthcheck_local_hook_group_writable_skipped() {
+  local_env
+  local_hook 50-unsafe 'exit 1' 775
+  "$LIBEXEC/healthcheck" 2>/dev/null
+  check "health: group-writable local hook skipped -> healthy" called "rpi-bootc-bootloader sync"
+}
+
+test_healthcheck_local_hook_wrong_owner_skipped() {
+  local_env
+  # Files and the directory share one ownership check; a non-root run can't chown a single file,
+  # so the whole directory (and its hook) is owned by "someone else" here.
+  JUNIPER_HEALTH_LOCAL_OWNER=$(($(id -u) + 1))
+  local_hook 50-notroot 'exit 1'
+  check "health: wrong-owner local hooks logged" stderr_has "skipping local health hook" "$LIBEXEC/healthcheck"
+  check "health: wrong-owner local hook skipped -> healthy" called "rpi-bootc-bootloader sync"
+}
+
+test_healthcheck_local_hook_unsafe_dir_skipped() {
+  local_env
+  local_hook 50-sensor 'exit 1'
+  chmod 777 "$JUNIPER_HEALTH_LOCAL_D"
+  check "health: unsafe local hook dir logged" stderr_has "skipping local health hooks" "$LIBEXEC/healthcheck"
+  check "health: unsafe local hook dir skipped -> healthy" called "rpi-bootc-bootloader sync"
+}
+
+test_healthcheck_local_hook_timeout() {
+  local_env
+  export JUNIPER_HEALTH_HOOK_TIMEOUT=1 JUNIPER_HEALTH_HOOK_KILL=1
+  local_hook 50-hang 'trap "" TERM; sleep 30'
+  local start=$SECONDS
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "health: hung local hook killed after the hook timeout" test $((SECONDS - start)) -lt 10
+  check "health: hung local hook under tryboot -> reboot" called "systemctl reboot"
+  unset JUNIPER_HEALTH_HOOK_TIMEOUT JUNIPER_HEALTH_HOOK_KILL
+}
+
+test_example_appliance_health_hook() {
+  local h=$ROOT/examples/appliance/health.d/50-sensor-sample
+  check "example: appliance health hook is executable" test -x "$h"
+  check "example: appliance health hook documented in README" grep -q '/etc/juniper/health.d' "$ROOT/README.md"
+}
+
 # Locked: Tailscale must also be connected to its control plane (.Self.Online), or the update
 # falls back (the decided offline policy).
 locked_ts_env() {
