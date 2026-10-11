@@ -1,0 +1,11 @@
+[Unit]
+Description=Record whether SSH is open to every network (legacy ujust lan-ssh), for the login banner
+After=firewalld.service
+Wants=firewalld.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/juniper/lan-ssh refresh
+
+[Install]
+WantedBy=multi-user.target

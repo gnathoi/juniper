@@ -163,8 +163,12 @@ If Tailscale ever goes away, re-open SSH without exposing it to the internet:
 
 By default `on` and `for` allow the on-link prefixes of every non-Tailscale interface (IPv4
 and IPv6, including link-local and your router-advertised global /64), never the internet.
+Container and VM bridges (`podman*`, `docker*`, `veth*`, `cni*`, `cali*`, `flannel*`,
+`virbr*`) are skipped: local containers don't need the Pi's sshd.
 Sources are fixed at the moment you run it: re-run it after moving the Pi to another
-network. CIDRs broader than /8 (IPv4) or /16 (IPv6), including `0.0.0.0/0` and `::/0`, are
+network. `for` needs a unit (`30s`, `30m`, `2h`); `on` and `off` cancel an active `for`
+window (a network that is already open keeps its original expiry if you run `for` again).
+CIDRs broader than /8 (IPv4) or /16 (IPv6), including `0.0.0.0/0` and `::/0`, are
 refused unless you add `--force`. Older images' `ujust lan-ssh on` opened SSH to every
 network; the login banner and `ujust pi-status` warn while that rule is still there, and
 `ujust lan-ssh on` or `off` removes it. Nothing changes it automatically on update.

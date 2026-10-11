@@ -1,7 +1,7 @@
 # SSH from the local network after Tailscale lockdown: status | on [CIDR...] | for 2h [CIDR...] | off
 [positional-arguments]
 lan-ssh *args:
-    sudo /usr/libexec/juniper/lan-ssh "$@"
+    @sudo /usr/libexec/juniper/lan-ssh "$@"
 
 # Log in to Tailscale (prints a login URL), then lock the firewall down to it
 tailscale-up:

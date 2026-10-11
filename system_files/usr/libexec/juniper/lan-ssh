@@ -6,11 +6,14 @@
 #   lan-ssh off                               remove every lan-ssh rule and the legacy open rule
 #   lan-ssh status                            (default)
 #   lan-ssh legacy                            prints the warning, exits 0 if SSH is open to all
+#   lan-ssh refresh                           (root: boot, and after on/off) write $run_dir/lan-ssh-legacy
+#                                             for the login banner, which cannot query firewalld
 # tailscale0 is in the trusted zone and is never touched here.
 set -euo pipefail
 
 state_dir=${JUNIPER_STATE_DIR:-/var/lib/juniper}
 zone=drop
+run_dir=${JUNIPER_RUN_DIR:-/run/juniper}
 # shellcheck disable=SC2016 # literal backticks
 legacy_msg='LAN SSH is open to every network; run `ujust lan-ssh on` to scope it.'
 rule_re='^rule family="ipv[46]" source address="([^"]+)" service name="ssh" accept$'
@@ -49,6 +52,8 @@ mode, force = sys.argv[1], sys.argv[2] == "1"
 LIMIT = {4: 8, 6: 16}
 
 def check(net):
+    if net == ipaddress.ip_network("fe80::/10"):
+        return None
     if net.prefixlen == 0 or net.prefixlen < LIMIT[net.version]:
         return f"{net} is too broad (limit /{LIMIT[net.version]} for IPv{net.version}); use --force to allow it"
     return None
@@ -65,13 +70,16 @@ if mode == "validate":
         out.append(net)
 else:
     skip = {"lo", "tailscale0"}
+    # Local containers and VMs don't need the host's sshd.
+    virt = ("podman", "docker", "veth", "cni", "cali", "flannel", "virbr")
     for raw in sys.argv[3:5]:
         try:
             routes = json.loads(raw or "[]")
         except ValueError:
             sys.exit("lan-ssh: could not parse `ip -j` output")
         for r in routes:
-            if r.get("dev") in skip or r.get("gateway") or r.get("nexthops"):
+            dev = r.get("dev") or ""
+            if dev in skip or dev.startswith(virt) or r.get("gateway") or r.get("nexthops"):
                 continue
             if r.get("type", "unicast") != "unicast" or r.get("dst") in (None, "default"):
                 continue
@@ -107,6 +115,12 @@ sources() {
   fi
 }
 
+# The banner runs as the login user, who can't query firewalld: root leaves a file for it.
+refresh() {
+  mkdir -p "$run_dir"
+  if has_legacy; then echo "$legacy_msg" >"$run_dir/lan-ssh-legacy"; else rm -f "$run_dir/lan-ssh-legacy"; fi
+}
+
 remove_legacy() {
   fw --permanent --remove-service=ssh >/dev/null 2>&1 || true
   fw --remove-service=ssh >/dev/null 2>&1 || true
@@ -120,7 +134,10 @@ case $cmd in
     mapfile -t srcs < <(sources "$@")
     ((${#srcs[@]})) || exit 1
     # Add the new rules first, then drop stale ones and the legacy open rule: no gap.
-    for s in "${srcs[@]}"; do fw --permanent --add-rich-rule="$(rule_for "$s")" >/dev/null; done
+    have=$(lan_rules --permanent)
+    for s in "${srcs[@]}"; do
+      grep -qxF -- "$(rule_for "$s")" <<<"$have" || fw --permanent --add-rich-rule="$(rule_for "$s")" >/dev/null
+    done
     while IFS= read -r r; do
       [[ -n $r ]] || continue
       keep=0
@@ -129,23 +146,35 @@ case $cmd in
     done < <(lan_rules --permanent)
     remove_legacy
     firewall-cmd --reload >/dev/null
+    refresh
     echo "SSH allowed from (permanent; fixed now, so re-run after moving to another network):"
     printf '  %s\n' "${srcs[@]}"
     ;;
   for)
     dur=${1:-}
-    [[ $dur =~ ^[1-9][0-9]*[smh]?$ ]] || die "duration like 30m or 2h required"
+    [[ $dur =~ ^[1-9][0-9]*[smh]$ ]] || die "duration with a unit required, like 30s, 30m or 2h"
     shift
     mapfile -t srcs < <(sources "$@")
     ((${#srcs[@]})) || exit 1
     live=$(lan_rules)
+    perm=$(lan_rules --permanent)
+    added=()
     for s in "${srcs[@]}"; do
       r=$(rule_for "$s")
-      # A rule that is already live (e.g. permanent) must not get a timeout.
-      grep -qxF -- "$r" <<<"$live" || fw --add-rich-rule="$r" --timeout="$dur" >/dev/null
+      # A rule that is already live must not get a (new) timeout.
+      if grep -qxF -- "$r" <<<"$perm"; then
+        echo "$s: already allowed permanently, unchanged"
+      elif grep -qxF -- "$r" <<<"$live"; then
+        echo "$s: already open temporarily, keeping its existing expiry (lan-ssh off first to reset it)"
+      else
+        fw --add-rich-rule="$r" --timeout="$dur" >/dev/null
+        added+=("$s")
+      fi
     done
-    echo "SSH allowed from, until it expires in $dur or the next reboot:"
-    printf '  %s\n' "${srcs[@]}"
+    if ((${#added[@]})); then
+      echo "SSH allowed from, until it expires in $dur or the next reboot:"
+      printf '  %s\n' "${added[@]}"
+    fi
     ;;
   off)
     for p in --permanent ""; do
@@ -155,8 +184,10 @@ case $cmd in
     done
     remove_legacy
     firewall-cmd --reload >/dev/null
+    refresh
     echo "LAN SSH off."
     ;;
+  refresh) refresh ;;
   legacy)
     has_legacy && {
       echo "$legacy_msg"
