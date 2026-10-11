@@ -1,0 +1,15 @@
+[Unit]
+Description=Juniper encrypted root: unlock with this Pi's key
+DefaultDependencies=no
+After=systemd-udev-trigger.service systemd-udevd.service juniper-cryptroot-prepare.service
+Before=initrd-root-device.target cryptsetup.target sysroot.mount
+OnFailure=emergency.target
+OnFailureJobMode=replace-irreversibly
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/juniper/cryptroot unlock
+TimeoutStartSec=5min
+StandardOutput=journal+console
+StandardError=journal+console

@@ -1,0 +1,16 @@
+[Unit]
+Description=Juniper encrypted root: first-boot encryption, resume, recovery sealing
+DefaultDependencies=no
+# Before udev: on first boot the root filesystem disappears and reappears as LUKS; doing it
+# before any device unit exists keeps systemd's root-device handling out of it.
+After=systemd-modules-load.service
+Before=systemd-udevd.service systemd-udev-trigger.service dracut-pre-udev.service sysinit.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=-/usr/sbin/modprobe -a dm_mod dm_crypt
+ExecStart=/usr/libexec/juniper/cryptroot prepare
+TimeoutStartSec=infinity
+StandardOutput=journal+console
+StandardError=journal+console

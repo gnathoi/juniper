@@ -3528,6 +3528,7 @@ test_cryptroot_off_or_missing_does_nothing() { # I1, ruling 2
     check "prep ($m): no cryptsetup" not_called cryptsetup
     check "prep ($m): no CIDATA write" not_called "remount,rw"
     check "prep ($m): plain" test "$(runf state)" = not-encrypted
+    check "prep ($m): no wait" not_called sleep
   done
   cryptroot_env plain off
   crt prepare
@@ -3942,6 +3943,7 @@ test_cryptroot_unlock_plain_is_noop() {
   check "unlock plain: state" test "$(runf state)" = not-encrypted
   check "unlock plain: one state line" test "$(grep -c '^state=' "$T/run/cryptroot")" = 1
   check "unlock plain: keeps prepare's reason" test "$(runf reason)" = "encrypt: false"
+  check "plain boot: prepare and unlock never sleep" not_called sleep
 }
 
 test_cryptroot_unlock_tries_each_candidate() {

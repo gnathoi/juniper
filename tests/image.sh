@@ -121,6 +121,7 @@ grep -qx 'OnCalendar=Tue \*-\*-\* 04:00:00' /usr/lib/systemd/system/juniper-rebo
   exit 1
 }
 systemd-analyze verify /usr/lib/systemd/system/juniper-*.service /usr/lib/systemd/system/juniper-*.timer
+systemd-analyze verify /usr/lib/dracut/modules.d/90juniper-cryptroot/juniper-cryptroot-*.service
 # Ordering cycles only show up in a whole boot transaction (and verify still exits 0).
 # cloud-init's generator adds cloud-init.target on first boot; cloud-final runs after
 # multi-user.target, so nothing multi-user.target pulls in may order itself after it.
@@ -134,14 +135,46 @@ need_cmds rpi-eeprom-update lspci strings
 # Trimmed initramfs (90-juniper.conf): ostree and crypt in, network root/VM/RAID/TPM out.
 for img in /usr/lib/modules/*/initramfs.img; do
   mods=$(lsinitrd "$img" | sed -n '/^dracut modules:/,/^=/p')
-  for m in ostree crypt systemd-initrd rootfs-block; do grep -qx "$m" <<<"$mods"; done
+  for m in ostree crypt systemd-initrd rootfs-block juniper-cryptroot; do grep -qx "$m" <<<"$mods"; done
   for m in nfs network-manager qemu lvm clevis fips btrfs; do
     if grep -qx "$m" <<<"$mods"; then
       echo "initramfs still has $m"
       exit 1
     fi
   done
-  (($(stat -c %s "$img") < 35 * 1024 * 1024))
+  echo "initramfs size: $(stat -c %s "$img") bytes ($img)"
+  (($(stat -c %s "$img") < 40 * 1024 * 1024))
+  # Encrypted root (issue #50): the juniper-cryptroot module, its tools, units and modules.
+  lsinitrd "$img" >"$tmp/inv"
+  for f in usr/sbin/cryptsetup usr/bin/rpi-fw-crypto usr/bin/age usr/sbin/sfdisk usr/sbin/partx usr/sbin/blkid \
+    usr/libexec/juniper/cryptroot usr/libexec/juniper/fwkey \
+    usr/lib/systemd/system/juniper-cryptroot-prepare.service usr/lib/systemd/system/juniper-cryptroot-unlock.service \
+    sysinit.target.wants/juniper-cryptroot-prepare.service initrd.target.wants/juniper-cryptroot-unlock.service \
+    kernel/drivers/md/dm-crypt.ko kernel/drivers/md/dm-mod.ko kernel/crypto/adiantum.ko kernel/crypto/algif_skcipher.ko \
+    arch/arm64/crypto/aes-ce-blk.ko; do
+    grep -q "$f" "$tmp/inv" || {
+      echo "initramfs lacks $f"
+      exit 1
+    }
+  done
+  # Every command cryptroot/fwkey call resolves inside the unpacked initramfs (env: their
+  # shebang). /usr/sbin is not merged into /usr/bin on EL10, so either directory will do.
+  rm -rf "$tmp/ir"
+  mkdir "$tmp/ir"
+  (cd "$tmp/ir" && lsinitrd --unpack "$img" >/dev/null)
+  bash -n "$tmp/ir/usr/libexec/juniper/cryptroot"
+  bash -n "$tmp/ir/usr/libexec/juniper/fwkey"
+  for c in cryptsetup rpi-fw-crypto age sfdisk partx blkid mount umount mkdir cat grep sed head tr od cut readlink sync mv sleep basename modprobe env bash; do
+    found=0
+    for p in "$tmp/ir/usr/bin/$c" "$tmp/ir/usr/sbin/$c"; do
+      if [[ -e $p || -L $p ]]; then found=1; fi
+    done
+    ((found)) || {
+      echo "initramfs lacks command $c"
+      exit 1
+    }
+  done
+  rm -rf "$tmp/ir"
 done
 # rpi-eeprom ships only the tools; the bootloader images are in rpi-eeprom-firmware.
 ls /usr/lib/firmware/raspberrypi/bootloader-2712/default/pieeprom-*.bin >/dev/null
