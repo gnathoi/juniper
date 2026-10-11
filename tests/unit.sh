@@ -605,6 +605,15 @@ test_healthcheck_local_hook_unsafe_dir_skipped() {
   check "health: unsafe local hook dir skipped -> healthy" called "rpi-bootc-bootloader sync"
 }
 
+test_healthcheck_local_hook_symlink_skipped() {
+  local_env
+  printf '#!/bin/sh\nexit 1\n' >"$T/elsewhere" && chmod 755 "$T/elsewhere"
+  mkdir -p "$JUNIPER_HEALTH_LOCAL_D" && chmod 755 "$JUNIPER_HEALTH_LOCAL_D"
+  ln -s "$T/elsewhere" "$JUNIPER_HEALTH_LOCAL_D/50-link"
+  check "health: symlinked local hook logged" stderr_has "skipping local health hook 50-link" "$LIBEXEC/healthcheck"
+  check "health: symlinked local hook skipped -> healthy" called "rpi-bootc-bootloader sync"
+}
+
 test_healthcheck_local_hook_timeout() {
   local_env
   export JUNIPER_HEALTH_HOOK_TIMEOUT=1 JUNIPER_HEALTH_HOOK_KILL=1
@@ -754,6 +763,51 @@ test_healthcheck_normal_boot_records_nothing() {
   "$LIBEXEC/healthcheck" 2>/dev/null || true
   fail_boot boot-1
   check "strikes: normal boot records nothing" test ! -e "$JUNIPER_STATE_DIR/bad-digests"
+}
+
+# A full /var (the rewrite fails) must not wipe the strike history.
+test_healthcheck_failed_strike_write_keeps_history() {
+  strike_env
+  echo "$NEW 1 boot-0" >"$JUNIPER_STATE_DIR/bad-digests"
+  stub tail 'exit 1'
+  fail_boot boot-1
+  check "strikes: failed write keeps the old list" test "$(cat "$JUNIPER_STATE_DIR/bad-digests")" = "$NEW 1 boot-0"
+  check "strikes: failed write still reboots" called "systemctl reboot"
+}
+
+# A failed `rpi-bootc-bootloader sync` on a normal boot fails the unit; the OnFailure= fallback
+# must still leave a normal boot alone.
+test_healthcheck_failed_sync_normal_boot_no_reboot() {
+  strike_env
+  printf '\x00\x00\x00\x00' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  stub rpi-bootc-bootloader 'exit 1'
+  check "health: failed sync fails the check" fails "$LIBEXEC/healthcheck"
+  fail_boot boot-1
+  check "health: failed sync + fallback on a normal boot -> no reboot" not_called "systemctl reboot"
+  check "health: failed sync on a normal boot -> no strike" test ! -e "$JUNIPER_STATE_DIR/bad-digests"
+}
+
+test_healthcheck_fallback_unit_has_timeout() {
+  check "fallback unit: explicit TimeoutStartSec" grep -qx 'TimeoutStartSec=2min' \
+    "$ROOT/system_files/usr/lib/systemd/system/juniper-healthcheck-fallback.service"
+}
+
+# Never hold on data we can't trust: a malformed staged digest or a corrupt list proceeds.
+test_apply_update_malformed_digest_proceeds() {
+  printf 'sha256:zz 2 boot-1\n' >"$JUNIPER_STATE_DIR/bad-digests"
+  staged_digest 'sha256:zz'
+  "$LIBEXEC/apply-update" >/dev/null
+  check "apply-update: malformed staged digest -> proceeds" called "rpi-bootc-bootloader tryreboot"
+  check "apply-update: malformed staged digest -> not held" test ! -e "$JUNIPER_STATE_DIR/update-held"
+}
+
+test_apply_update_corrupt_list_proceeds() {
+  printf '\x00\xff garbage\n%s lots boot-1\n\n' "$BAD" >"$JUNIPER_STATE_DIR/bad-digests"
+  staged_digest "$BAD"
+  "$LIBEXEC/apply-update" >/dev/null
+  check "apply-update: corrupt bad-digests -> proceeds" called "rpi-bootc-bootloader tryreboot"
+  check "apply-update: corrupt bad-digests -> not held" test ! -e "$JUNIPER_STATE_DIR/update-held"
 }
 
 test_healthcheck_quarantine_is_bounded() {
@@ -2000,6 +2054,30 @@ test_just_recipe_wraps_script() {
   check "recipe: thin wrapper" grep -q 'sudo /usr/libexec/juniper/lan-ssh' "$ROOT/system_files/usr/share/juniper/just/network.just"
   check "recipe: not echoed by just" grep -q '^    @sudo /usr/libexec/juniper/lan-ssh' "$ROOT/system_files/usr/share/juniper/just/network.just"
   check "recipe: no inline firewall-cmd" not_grep_dir 'firewall-cmd' "$ROOT/system_files/usr/share/juniper/just/network.just"
+}
+
+test_motd_shows_gave_up_and_held_together() {
+  stub fastfetch ''
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub systemctl '[[ $* != *is-failed* ]]'
+  stub tailscale 'exit 1'
+  echo "key rejected on 2033-05-18" >"$JUNIPER_STATE_DIR/tailscale-join-gave-up"
+  echo "update $BAD failed its health check twice; waiting for a newer image" >"$JUNIPER_STATE_DIR/update-held"
+  export JUNIPER_RUN_DIR=$T/run
+  mkdir -p "$JUNIPER_RUN_DIR"
+  touch "$JUNIPER_STATE_DIR/locked"
+  echo "SSH is open to every network (old lan-ssh rule)" >"$JUNIPER_RUN_DIR/lan-ssh-legacy"
+  check "motd: all warnings -> gave-up in the Tailscale row" stdout_has "not joined: key rejected on 2033-05-18" "$LIBEXEC/motd"
+  check "motd: all warnings -> held in the Update row" stdout_has "update $BAD failed its health check twice" "$LIBEXEC/motd"
+  check "motd: all warnings -> lan-ssh legacy warning" stdout_has "SSH is open to every network (old lan-ssh rule)" "$LIBEXEC/motd"
+  unset JUNIPER_RUN_DIR
+}
+
+test_pi_status_shows_gave_up_legacy_and_held() {
+  local j=$ROOT/system_files/usr/share/juniper/just/pi.just
+  check "pi-status: gave-up line kept" grep -q 'tailscale-join-gave-up' "$j"
+  check "pi-status: lan-ssh legacy line kept" grep -q 'lan-ssh legacy' "$j"
+  check "pi-status: held line kept" grep -q 'update-held' "$j"
 }
 
 # --- runner ---

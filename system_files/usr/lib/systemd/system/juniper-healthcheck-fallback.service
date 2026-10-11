@@ -6,4 +6,6 @@ Description=Fall back from a tryboot update when the boot health check itself fa
 
 [Service]
 Type=oneshot
+# Its own bootc call is bounded (15 s); this only guards against anything else hanging.
+TimeoutStartSec=2min
 ExecStart=/usr/libexec/juniper/healthcheck --fallback

@@ -71,6 +71,10 @@ run_hooks() {
   local hook
   for hook in "$1"/*; do
     [[ -x $hook && ! -d $hook ]] || continue
+    if [[ ${2:-} == local && -L $hook ]]; then
+      echo "skipping local health hook ${hook##*/}: symlink" >&2
+      continue
+    fi
     if [[ ${2:-} == local ]] && ! root_controlled "$hook"; then
       echo "skipping local health hook ${hook##*/}: not root-owned or group/world-writable" >&2
       continue
@@ -124,12 +128,18 @@ quarantine() {
     echo "First failure of $digest: it will be retried at the next update window." >&2
   fi
   mkdir -p "$state_dir"
-  # Newest last, each digest once, the last 10 only.
-  {
+  # Newest last, each digest once, the last 10 only. Replace the list only if the new one was
+  # written in full, so a full /var can't wipe the strike history.
+  if {
     awk -v d="$digest" '$1 != d' "$list" 2>/dev/null || true
     echo "$digest $count $boot"
-  } | tail -n 10 >"$list.tmp"
-  mv -f "$list.tmp" "$list"
+  } | tail -n 10 >"$list.tmp"; then
+    mv -f "$list.tmp" "$list"
+  else
+    rm -f "$list.tmp"
+    echo "Could not record the strike for $digest." >&2
+    return 1
+  fi
 }
 
 case ${1:-} in
