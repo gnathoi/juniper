@@ -9,6 +9,12 @@ Before=systemd-udevd.service systemd-udev-trigger.service dracut-pre-udev.servic
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+# systemd-udevd-control.socket (sockets.target) already exists here, so libdevmapper would
+# take udev for running and wait for it on any dm device cryptsetup creates (e.g. its
+# temporary dm-crypt fallback in offline reencryption). udevd is ordered after this unit,
+# so that wait never ends. Without udev, libdevmapper creates the /dev/mapper nodes itself.
+# unlock runs after udevd and must keep udev sync (dm rules, by-uuid link for sysroot).
+Environment=DM_DISABLE_UDEV=1
 ExecStartPre=-/usr/sbin/modprobe -a dm_mod dm_crypt
 ExecStart=/usr/libexec/juniper/cryptroot prepare
 TimeoutStartSec=infinity

@@ -122,6 +122,13 @@ grep -qx 'OnCalendar=Tue \*-\*-\* 04:00:00' /usr/lib/systemd/system/juniper-rebo
 }
 systemd-analyze verify /usr/lib/systemd/system/juniper-*.service /usr/lib/systemd/system/juniper-*.timer
 systemd-analyze verify /usr/lib/dracut/modules.d/90juniper-cryptroot/juniper-cryptroot-*.service
+# prepare runs while udevd-control.socket exists but udevd doesn't: libdevmapper must not
+# wait for udev there; unlock (after udevd) must keep udev sync.
+grep -qx 'Environment=DM_DISABLE_UDEV=1' /usr/lib/dracut/modules.d/90juniper-cryptroot/juniper-cryptroot-prepare.service
+if grep -q DM_DISABLE_UDEV /usr/lib/dracut/modules.d/90juniper-cryptroot/juniper-cryptroot-unlock.service; then
+  echo "unlock must keep udev sync (no DM_DISABLE_UDEV)"
+  exit 1
+fi
 # Ordering cycles only show up in a whole boot transaction (and verify still exits 0).
 # cloud-init's generator adds cloud-init.target on first boot; cloud-final runs after
 # multi-user.target, so nothing multi-user.target pulls in may order itself after it.
@@ -151,7 +158,8 @@ for img in /usr/lib/modules/*/initramfs.img; do
     usr/lib/systemd/system/juniper-cryptroot-prepare.service usr/lib/systemd/system/juniper-cryptroot-unlock.service \
     sysinit.target.wants/juniper-cryptroot-prepare.service initrd.target.wants/juniper-cryptroot-unlock.service \
     kernel/drivers/md/dm-crypt.ko kernel/drivers/md/dm-mod.ko kernel/crypto/adiantum.ko kernel/crypto/algif_skcipher.ko \
-    arch/arm64/crypto/aes-ce-blk.ko; do
+    arch/arm64/crypto/aes-ce-blk.ko usr/sbin/dmsetup usr/lib/udev/rules.d/10-dm.rules \
+    usr/lib/udev/rules.d/13-dm-disk.rules usr/lib/udev/rules.d/95-dm-notify.rules; do
     grep -q "$f" "$tmp/inv" || {
       echo "initramfs lacks $f"
       exit 1
