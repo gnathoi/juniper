@@ -78,8 +78,9 @@ even if everything just worked.
 ## Install
 
 1. Create a **tagged**, one-off, pre-approved auth key at
-   <https://login.tailscale.com/admin/settings/keys>. Tagged devices never expire, so the
-   lockdown can't lock you out later. The key turns on Tailscale SSH, so your
+   <https://login.tailscale.com/admin/settings/keys>. Pick a short expiry that matches when you
+   will deploy; the device deletes an unused key after 14 days or as soon as Tailscale rejects
+   it. Tagged devices never expire, so the lockdown can't lock you out later. The key turns on Tailscale SSH, so your
    [tailnet policy](https://tailscale.com/kb/1337/policy-syntax) needs to let you in to that
    tag. Keep it narrow: an admin group, SSH as your login user only (no root: use `sudo`),
    and only the ports you use, in place of the default allow-all rule. For example

@@ -7,9 +7,9 @@ ConditionPathExists=/etc/tailscale/authkey
 
 [Service]
 Type=exec
-# The key is deleted only after a successful join, so failures retry (every minute, and
-# again on every boot) until it works.
-ExecStart=/bin/sh -c 'tailscale up --ssh --auth-key=file:/etc/tailscale/authkey --timeout=120s && shred -u /etc/tailscale/authkey'
+# The script deletes the key after a successful join, or gives up (and deletes it) when
+# Tailscale rejects it or it is over 14 days old. Other failures retry every minute and on boot.
+ExecStart=/usr/libexec/juniper/tailscale-join
 Restart=on-failure
 RestartSec=60
 

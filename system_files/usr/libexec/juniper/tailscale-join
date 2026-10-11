@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Join the tailnet with the auth key cloud-init wrote at first boot, then delete the key.
+# A key that never works must not sit on disk forever (a stolen card could use it), so give
+# up and delete it when Tailscale rejects it or it is older than 14 days. Giving up exits 0
+# so systemd stops retrying; the key file's absence then skips this unit on later boots.
+set -uo pipefail
+
+key=${JUNIPER_TAILSCALE_KEY:-/etc/tailscale/authkey}
+state_dir=${JUNIPER_STATE_DIR:-/var/lib/juniper}
+max_days=${JUNIPER_TAILSCALE_KEY_MAX_DAYS:-14}
+now=${JUNIPER_NOW:-$(date +%s)}
+
+give_up() {
+  shred -u "$key"
+  mkdir -p "$state_dir"
+  echo "$1 on $(date -d "@$now" +%F)" >"$state_dir/tailscale-join-gave-up"
+  echo "Tailscale join given up, auth key deleted: $1. Recover: ujust tailscale-up (or sudo tailscale up --ssh with a new key)." >&2
+  exit 0
+}
+
+mtime=$(stat -c %Y "$key") || exit 1
+if ((now - mtime > max_days * 86400)); then
+  give_up "auth key older than $max_days days"
+fi
+
+# Rejection wording from the control server; deliberately narrow so a network error
+# (timeouts, DNS, TLS) never matches and just retries.
+rejected='invalid key|key (is |was )?(expired|revoked|already used)|auth ?key.*(expired|revoked|already used|invalid)'
+
+out=$(tailscale up --ssh --auth-key="file:$key" --timeout=120s 2>&1)
+rc=$?
+[[ -n $out ]] && echo "$out" >&2
+if ((rc == 0)); then
+  shred -u "$key"
+  exit 0
+fi
+if grep -qiE "$rejected" <<<"$out"; then
+  give_up "auth key rejected by Tailscale"
+fi
+exit "$rc"
