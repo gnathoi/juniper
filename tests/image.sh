@@ -49,6 +49,19 @@ for k in rootflags=noatime panic=10 rd.shell=0 rd.emergency=reboot; do
   grep -q "$k" /usr/lib/bootc/kargs.d/10-juniper.toml
 done
 
+# Key-only SSH on every image, whatever cloud-init writes later (40-juniper.conf comes first,
+# and sshd keeps the first value). sshd -T needs a host key: use a throwaway one.
+t=$(mktemp -d)
+ssh-keygen -q -t ed25519 -N '' -f "$t/hostkey"
+sshd_eff=$(sshd -T -h "$t/hostkey")
+rm -rf "$t"
+for opt in passwordauthentication kbdinteractiveauthentication; do
+  grep -qx "$opt no" <<<"$sshd_eff" || {
+    echo "sshd: $opt is not off"
+    exit 1
+  }
+done
+
 need_enabled juniper-firstboot.service juniper-tailscale-join.service
 need_enabled juniper-update.timer juniper-reboot.timer juniper-healthcheck.service
 need_cmds rpi-bootc-bootloader
