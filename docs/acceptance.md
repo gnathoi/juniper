@@ -121,6 +121,6 @@ DNS was up and failed; it retries daily.
 
 ### Firmware findings
 
-- `rpi-fw-crypto hmac` locks up on EEPROM 2025-11-05; updating to 2026-05-11 (`ujust pi-eeprom apply`) fixed it.
+- `rpi-fw-crypto hmac` locks up on EEPROM 2025-11-05 (a known bug, fixed in pieeprom-2026-01-21); after updating to 2026-05-11 with `sudo rpi-eeprom-update -a`, hmac works (the encrypted card unlocks with it on every boot). fwkey refuses firmware older than 2026-01-21.
 - `lock_device_private_key=1` blocks genkey on firmware before 2026-06-17, because it is the old global lock; per-operation locks (`set-key-status`) exist only from that release. The config lock is therefore no longer set (#86).
 - Thermals (Pi 5): idle 44 C; the fan starts at the 50 C trip point; peak 59.5 C under full load; never throttled.
