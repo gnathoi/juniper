@@ -114,6 +114,7 @@ jobs:
       - name: Check for a newer Pi kernel than the base ships
         if: matrix.image == 'juniper-minimal'
         continue-on-error: true
+        timeout-minutes: 5
         env:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
         run: |
@@ -121,27 +122,33 @@ jobs:
           # shellcheck disable=SC2016,SC2024 # expands inside the image; the file stays runner-owned
           sudo podman run --rm --pull=never "$IMAGE_REF:latest" bash -c '
             pkg=raspberrypi2-kernel4
-            echo "have=$(rpm -q --qf "%{evr}" $pkg)"
-            echo "have_ts=$(rpm -q --qf "%{buildtime}" $pkg)"
-            newest=$(dnf -q repoquery --disablerepo=tailscale-stable --latest-limit 1 \
-              --qf "%{evr}|%{buildtime}" $pkg 2>/dev/null | tail -1)
-            echo "want=${newest%%|*}"
-            echo "want_ts=${newest#*|}"' >kernel-info/kernel.env
+            if have=$(rpm -q --qf "%{evr}" $pkg 2>/dev/null); then
+              echo "have=$have"
+              echo "have_ts=$(rpm -q --qf "%{buildtime}" $pkg 2>/dev/null)"
+            fi
+            # checked=1 only when the repo query worked, so a failure is not "nothing newer"
+            if newest=$(timeout 120 dnf -q repoquery --disablerepo=tailscale-stable --latest-limit 1 \
+              --qf "%{evr}|%{buildtime}" $pkg 2>/dev/null | tail -1) && [ -n "$newest" ]; then
+              echo "checked=1"
+              echo "want=${newest%%|*}"
+              echo "want_ts=${newest#*|}"
+            fi' >kernel-info/kernel.env || true
           # dnf may print the build time as a date rather than epoch seconds
           ts=$(sed -n 's/^want_ts=//p' kernel-info/kernel.env)
           if [ -n "$ts" ] && ! [[ $ts =~ ^[0-9]+$ ]]; then
             sed -i "s/^want_ts=.*/want_ts=$(date -u -d "$ts" +%s 2>/dev/null)/" kernel-info/kernel.env
           fi
           cat kernel-info/kernel.env
-          # A repo that is not newer: no want. (The base ships the newest = the same EVR.)
           .github/scripts/kernel-age.sh report kernel-info/kernel.env | tee -a "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && env.PUBLISH == 'true' && matrix.image == 'juniper-minimal'
+        continue-on-error: true
         with:
           name: kernel-info
           path: kernel-info/kernel.env
           if-no-files-found: ignore
+          overwrite: true
           retention-days: 3
 
       - name: Log in to registry
@@ -451,7 +458,7 @@ jobs:
       - name: Pi kernel line in the release notes
         run: |
           echo "" >>notes.md
-          .github/scripts/kernel-age.sh note kernel-info/kernel.env >>notes.md
+          .github/scripts/kernel-age.sh note kernel-info/kernel.env >>notes.md || echo "Pi kernel: unknown." >>notes.md
       - name: Merge OS lists and checksum
         run: |
           jq -s '{os_list: [.[].os_list[]]}' os-list-juniper.json os-list-juniper-minimal.json >os-list.json

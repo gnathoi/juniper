@@ -2397,10 +2397,18 @@ test_pi_status_kernel_age() {
 
 test_kernel_age_script() {
   local k=$ROOT/.github/scripts/kernel-age.sh now=1760000000 day=86400
-  printf 'have=6.12.0-55\nhave_ts=%s\nwant=\nwant_ts=\n' $((now - 41 * day)) >"$T/same.env"
-  printf 'have=6.12.0-55\nhave_ts=%s\nwant=6.12.1-60\nwant_ts=%s\n' $((now - 41 * day)) $((now - 3 * day)) >"$T/new.env"
-  printf 'have=6.12.0-55\nhave_ts=%s\nwant=6.12.1-60\nwant_ts=%s\n' $((now - 41 * day)) $((now - 20 * day)) >"$T/old.env"
+  printf 'have=6.12.0-55\nhave_ts=%s\nchecked=1\nwant=6.12.0-55\nwant_ts=\n' $((now - 41 * day)) >"$T/same.env"
+  printf 'have=6.12.0-55\nhave_ts=%s\nchecked=1\nwant=6.12.1-60\nwant_ts=%s\n' $((now - 41 * day)) $((now - 3 * day)) >"$T/new.env"
+  printf 'have=6.12.0-55\nhave_ts=%s\nchecked=1\nwant=6.12.1-60\nwant_ts=%s\n' $((now - 41 * day)) $((now - 20 * day)) >"$T/old.env"
+  printf 'have=6.12.0-55\nhave_ts=%s\n' $((now - 41 * day)) >"$T/failed.env"
+  printf 'have=package raspberrypi2-kernel4 is not installed\nhave_ts=1\nchecked=1\n' >"$T/notinst.env"
+  printf 'have=6.12.0-55\nhave_ts=1\nchecked=1\nwant=1 ::error::x\nwant_ts=1\n' >"$T/evil.env"
   export NOW=$now
+  check "kernel-age: repo check failed summary" stdout_has "repo check failed" "$k" report "$T/failed.env"
+  check "kernel-age: repo check failed is not 'nothing newer'" not_stdout_has "nothing newer" "$k" report "$T/failed.env"
+  check "kernel-age: repo check failed note" stdout_has "repo check failed" "$k" note "$T/failed.env"
+  check "kernel-age: not installed -> unknown" stdout_has "Pi kernel: unknown" "$k" report "$T/notinst.env"
+  check "kernel-age: bad EVR never printed" not_stdout_has "error::x" "$k" report "$T/evil.env"
   check "kernel-age: up to date summary" stdout_has "Pi kernel: 6.12.0-55 (built 2025-" "$k" report "$T/same.env"
   check "kernel-age: up to date, no warning" not_stdout_has "::warning::" "$k" report "$T/same.env"
   check "kernel-age: newer repo warns" stdout_has "::warning::AlmaLinux's Pi repo has kernel 6.12.1-60" "$k" report "$T/new.env"
