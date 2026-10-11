@@ -3358,6 +3358,37 @@ test_fwkey_hung_genkey_and_hmac_are_wedged() {
   check "fwkey: hmac marker" test -e "$JUNIPER_FWKEY_WEDGED"
 }
 
+# The config-lock status call hangs: never fall through to genkey on a wedged mailbox.
+test_fwkey_hung_status_never_genkeys() {
+  fwkey_env
+  fw_build 1781654812
+  export JUNIPER_FWKEY_DEADLINE=1
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub rpi-fw-crypto 'case $1 in pubkey) echo "Last crypto error: 6 (x)" >&2; exit 250 ;; get-key-status) sleep 4 ;; esac'
+  check "fwkey: hung status is wedged, not genkey" test "$("$LIBEXEC/fwkey" ensure 2>/dev/null || true)" = unavailable:firmware-wedged
+  check "fwkey: hung status writes the marker" test -e "$JUNIPER_FWKEY_WEDGED"
+  check "fwkey: hung status: no genkey" not_called "rpi-fw-crypto genkey"
+  # probe's error-4 path: the status call hangs too
+  fwkey_env
+  fw_build 1781654812
+  export JUNIPER_FWKEY_DEADLINE=1
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub rpi-fw-crypto 'case $1 in pubkey) echo "Last crypto error: 4 (x)" >&2; exit 252 ;; get-key-status) sleep 4 ;; esac'
+  check "fwkey: probe with hung status" test "$("$LIBEXEC/fwkey" probe 2>/dev/null)" = unavailable:firmware-wedged
+}
+
+# With the marker present, no command reaches rpi-fw-crypto (fw_call itself refuses).
+test_fwkey_marker_blocks_every_call() {
+  fwkey_env
+  mkdir -p "${JUNIPER_FWKEY_WEDGED%/*}"
+  : >"$JUNIPER_FWKEY_WEDGED"
+  check "fwkey: marker, probe" test "$("$LIBEXEC/fwkey" probe)" = unavailable:firmware-wedged
+  check "fwkey: marker, ensure" test "$("$LIBEXEC/fwkey" ensure || true)" = unavailable:firmware-wedged
+  check "fwkey: marker, derive" fails "$LIBEXEC/fwkey" derive mmcblk0
+  check "fwkey: marker, lock" test "$("$LIBEXEC/fwkey" lock)" = unavailable
+  check "fwkey: marker, no call" test "$(fw_calls)" = 0
+}
+
 test_fwkey_genkey_only_when_not_set() {
   fwkey_env
   echo not-set >"$T/fw.mode"

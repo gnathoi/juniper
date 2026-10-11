@@ -22,7 +22,7 @@ The logic is in two unit-tested bash scripts in `/usr/libexec/juniper/`: `fwkey`
 ## Critical path: an opt-in build the owner can flash today
 
 1. **Task 1**: already up as **PR #75** (separate `fix:` PR). It isn't needed for the first boot, but it must be merged before an encrypted card takes any update.
-2. **Task 2**: `rpi-fw-crypto`, `age`, `lock_device_private_key=1`, initramfs trims.
+2. **Task 2**: `rpi-fw-crypto`, `age`, `lock_device_private_key=1`, initramfs trims. **Superseded 2026-10-11 (config lock blocks genkey; see Hardware findings)**
 3. **Task 3**: `fwkey`.
 4. **Task 4**: `cryptroot`.
 5. **Task 5**: the dracut module and units, **including Step 4, the Pi 5 serial smoke test** (needs the owner's Pi 5).
@@ -53,7 +53,7 @@ These are repeated in each task brief where they apply.
   - `genkey --key-id 1 --alg ec` **only** on `KEY_NOT_SET` (error 6), and **only as the last first-boot precondition** (I7);
   - never `privkey`, `rpi-otp-private-key`, `vcmailbox 0x00030081` or `set-key-usage`;
   - after unlock, `set-key-status 1 READ_LOCKED GEN_LOCKED HMAC_LOCKED USAGE_LOCKED` **is best-effort** (ruling 4, I3): `unavailable` is expected, and it never fails the boot;
-  - `lock_device_private_key=1` in **both** per-deployment `rpi-config.txt` sources, `system_files` and `system_files_desktop` (I12); never `lock_device_key_write=1`.
+  - `lock_device_private_key=1` in **both** per-deployment `rpi-config.txt` sources, `system_files` and `system_files_desktop` (I12); never `lock_device_key_write=1`. **Superseded 2026-10-11 (config lock blocks genkey; see Hardware findings)**
 - **Derivation:**
   - `msg = "juniper.luks.root.v1" 0x00 "<type>:<id>"`.
   - The passphrase is **exactly 64 lowercase hex bytes, with no newline** (`printf '%s'`).
@@ -104,7 +104,7 @@ These are repeated in each task brief where they apply.
 |---|---|---|
 | `system_files/usr/libexec/juniper/bootloader`, `…/ostree-finalize-staged.service.d/zz-juniper.conf`, `healthcheck`, `apply-update` | `MNTDEV` wrapper | 1 (PR #75) |
 | `Containerfile`, `build_files/fwcrypto.lock`, `build_files/fwcrypto.sh`, `Justfile` (`bump-fwcrypto`), `build_files/build.sh` | build and install `rpi-fw-crypto`; install `age` | 2 |
-| `system_files/usr/share/juniper/rpi-config.txt`, `system_files_desktop/usr/share/juniper/rpi-config.txt` | `lock_device_private_key=1` | 2 |
+| `system_files/usr/share/juniper/rpi-config.txt`, `system_files_desktop/usr/share/juniper/rpi-config.txt` | `lock_device_private_key=1` | 2 | **Superseded 2026-10-11 (config lock blocks genkey; see Hardware findings)**
 | `system_files/usr/lib/dracut/dracut.conf.d/90-juniper.conf` | `early_microcode="no"` (2); `add_dracutmodules`, header comment (5) | 2, 5 |
 | `THIRD_PARTY.md` | raspberrypi/utils licence row | 2 |
 | `system_files/usr/libexec/juniper/fwkey` | firmware key | 3 |
@@ -173,7 +173,7 @@ Suggested PRs:
 **Interfaces produced:**
 - `/usr/bin/rpi-fw-crypto` and `/usr/lib64/librpifwcrypto.so.0*` in every image;
 - `/usr/bin/age`;
-- `lock_device_private_key=1` in every `/usr/lib/modules/*/rpi-config.txt` of all three images;
+- `lock_device_private_key=1` in every `/usr/lib/modules/*/rpi-config.txt` of all three images; **Superseded 2026-10-11 (config lock blocks genkey; see Hardware findings)**
 - `just bump-fwcrypto`.
 
 - [ ] **Step 1: Failing image tests** (shared section of `tests/image.sh`; pipefail-safe, per the review's minor items):
@@ -187,7 +187,7 @@ for sub in 'hmac --in' 'genkey' 'get-key-status' 'set-key-status'; do
 done
 test -s /usr/share/licenses/rpi-fw-crypto/LICENCE
 for kdir in /usr/lib/modules/*/; do
-  grep -qx 'lock_device_private_key=1' "$kdir/rpi-config.txt"
+  grep -qx 'lock_device_private_key=1' "$kdir/rpi-config.txt" # Superseded 2026-10-11 (config lock blocks genkey; see Hardware findings)
   if grep -q 'lock_device_key_write' "$kdir/rpi-config.txt"; then echo "lock_device_key_write breaks genkey"; exit 1; fi
 done
 for img in /usr/lib/modules/*/initramfs.img; do
@@ -243,7 +243,7 @@ and add `/usr/bin/rpi-fw-crypto /usr/lib64/librpifwcrypto.so*` to the `tag junip
 
 ```
 # The firmware refuses raw reads of the OTP device key (rpi-fw-crypto privkey); hmac and sign still work.
-lock_device_private_key=1
+lock_device_private_key=1 # Superseded 2026-10-11 (config lock blocks genkey; see Hardware findings)
 ```
 
 In `90-juniper.conf`, add `early_microcode="no"` with the comment `# else dracut puts x86 AMD microcode in the early cpio (0.3 MB)`. Add a `THIRD_PARTY.md` row: raspberrypi/utils rpifwcrypto, BSD-3-Clause, `https://github.com/raspberrypi/utils`, the pinned commit.
@@ -929,7 +929,7 @@ This is not part of the implementation PR. The spec's Recovery table says "not i
   - the alert `juniper_encrypted == 0 or juniper_encryption_recovery_sealed == 0`.
 - [ ] **CHANGELOG** (Unreleased):
   - Added: opt-in encryption at rest (`encrypt: true`), `just unlock-card`, encryption metrics.
-  - Changed: `lock_device_private_key=1`.
+  - Changed: `lock_device_private_key=1`. **Superseded 2026-10-11 (config lock blocks genkey; see Hardware findings)**
 
   Don't mention growpart: it is unchanged for plain cards.
 - [ ] **docs/upstream.md:**

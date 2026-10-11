@@ -18,6 +18,7 @@
 #     served by start4.elf and is unverified: unavailable:pi4-unverified.
 #   - Key presence is `pubkey`, never hmac or get-key-status (whose DEVICE bit says nothing
 #     about key material): exit 250 (KEY_NOT_SET) is the only answer that allows genkey.
+#     get-key-status is read only for the config-lock bit below, never for presence.
 #   - Every call has a deadline. One that overruns is left behind (it can't be killed), the
 #     wedged marker is written, and no further mailbox call is made this boot. Recovery is a
 #     reboot: the hardware watchdog or a forced one (a plain reboot may block on the wedged
@@ -94,10 +95,15 @@ derive_input() { printf '%s\0%s' "$label" "$msg_id"; }
 # fw_call INPUT_FN ARGS...: rpi-fw-crypto ARGS, fed by INPUT_FN, as a background child that
 # holds none of our stdio (so a stuck child can't hold up a caller's $(...)). Sets fw_out
 # (stdout and stderr) and fw_rc. Returns 1, after writing the wedged marker, if it overran.
+# Once the marker exists it returns 1 at once with why=firmware-wedged, calling nothing.
 fw_call() {
   local input=$1 fd pid rc=0
   shift
   fw_out=
+  if [[ -e $wedged ]]; then
+    why=firmware-wedged
+    return 1
+  fi
   fw_rc=0
   exec {fd}< <(
     exec </dev/null 2>&1
@@ -131,17 +137,19 @@ hmac_hex() { fw_call "$1" hmac --in /dev/stdin --key-id 1 --outform hex; }
 # config_locked: 0 if the key status has bit 8 set on firmware older than lock_build. There bit
 # 8 is the global lock that config.txt's lock_device_private_key=1 sets, and it also blocks
 # genkey (error 4, hardware finding): this boot can't provision a key. On newer firmware bit 8
-# is READ_LOCKED only and genkey still works. Reads status only; false on any doubt.
+# is READ_LOCKED only and genkey still works. Returns 0 locked, 1 not locked (or any doubt
+# short of a hang), 2 unknown: the call hung or the mailbox is wedged, so make no more calls.
 config_locked() {
   local hex
   ((build < lock_build)) || return 1
-  fw_call no_input get-key-status 1 && ((fw_rc == 0)) || return 1
+  fw_call no_input get-key-status 1 || return 2
+  ((fw_rc == 0)) || return 1
   hex=$(first_line "$(printf '%s\n' "$fw_out" | sed -n 's/^Key 1 status: 0x\([0-9a-fA-F]\{1,8\}\).*/\1/p')")
   [[ -n $hex ]] && ((16#$hex & 0x100))
 }
 
 probe() {
-  local err rc
+  local err rc cl
   gate || {
     echo "unavailable:$why"
     return
@@ -157,9 +165,19 @@ probe() {
     250) echo not-set ;;
     249) echo unavailable:invalid-key ;;
     *)
-      if [[ $err == 4 ]] && config_locked; then
-        echo unavailable:key-locked-by-config
-        return
+      if [[ $err == 4 ]]; then
+        cl=0
+        config_locked || cl=$?
+        case $cl in
+          0)
+            echo unavailable:key-locked-by-config
+            return
+            ;;
+          2)
+            echo unavailable:firmware-wedged
+            return
+            ;;
+        esac
       fi
       echo "unavailable:firmware error ${err:-none} (exit $rc)"
       ;;
@@ -168,7 +186,7 @@ probe() {
 
 # genkey is an OTP write: only when pubkey said KEY_NOT_SET, never on any other answer.
 ensure() {
-  local state err
+  local state err cl
   state=$(probe)
   case $state in
     ok)
@@ -176,10 +194,22 @@ ensure() {
       return
       ;;
     not-set)
-      gate && config_locked && {
-        echo "unavailable:key-locked-by-config"
+      gate || {
+        echo "unavailable:$why"
         return 1
       }
+      cl=0
+      config_locked || cl=$?
+      case $cl in
+        0)
+          echo "unavailable:key-locked-by-config"
+          return 1
+          ;;
+        2)
+          echo "unavailable:firmware-wedged"
+          return 1
+          ;;
+      esac
       ;;
     unavailable:*)
       echo "$state"
