@@ -9,9 +9,12 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 LIBEXEC=$ROOT/system_files/usr/libexec/juniper
 LIBEXEC_DESKTOP=$ROOT/system_files_desktop/usr/libexec/juniper
 ORIG_PATH=$PATH
+ORIG_TMPDIR=${TMPDIR-}
 fails=0
 
 setup() {
+  # a test may export TMPDIR into its own (now deleted) $T
+  if [[ -n $ORIG_TMPDIR ]]; then export TMPDIR=$ORIG_TMPDIR; else unset TMPDIR; fi
   T=$(mktemp -d)
   export CALLS=$T/calls JUNIPER_STATE_DIR=$T/state
   mkdir -p "$T/bin" "$JUNIPER_STATE_DIR"
@@ -3007,6 +3010,192 @@ test_metrics_timer_defaults() {
   check "metrics timer: first run 2 min after boot" grep -qx 'OnBootSec=2min' "$d/juniper-metrics.timer"
   check "metrics service: runs the script" grep -qx 'ExecStart=/usr/libexec/juniper/metrics' "$d/juniper-metrics.service"
   check "metrics: enabled in build.sh" grep -q 'juniper-metrics.timer' "$ROOT/build_files/build.sh"
+}
+
+# --- fwkey: the OTP device key through the firmware (issue #50) ---
+# Stub rpi-fw-crypto driven by $T/fw.mode (ok|not-set|locked|gen-fails|nolock|otp-error).
+# hmac copies stdin to $T/hmac.in and prints an HMAC of it under a test key.
+fwkey_env() {
+  export T JUNIPER_SYSFS=$T/sys JUNIPER_VCIO=$T/vcio TMPDIR=$T/tmp
+  mkdir -p "$TMPDIR" "$T/sys/block/mmcblk0/device"
+  : >"$JUNIPER_VCIO"
+  echo 0353445344333247803a1b2c3d014e00 >"$T/sys/block/mmcblk0/device/cid"
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub rpi-fw-crypto 'mode=$(cat "$T/fw.mode" 2>/dev/null || echo ok)
+case $1 in
+  hmac) cat >"$T/hmac.in"
+        case $mode in
+          ok|nolock) openssl dgst -sha256 -mac HMAC -macopt key:juniper-test -r "$T/hmac.in" | cut -c1-64 | tr -d "\n" ;;
+          not-set|gen-fails) echo "Last crypto error: 6 (Key is all zeros)" >&2; exit 250 ;;
+          locked) echo "Last crypto error: 4 (locked)" >&2; exit 252 ;;
+          otp-error) echo "Last crypto error: 5 (OTP error)" >&2; exit 251 ;;
+        esac ;;
+  genkey) [[ $mode == gen-fails ]] && { echo "Last crypto error: 10 (not blank)" >&2; exit 246; }
+          echo ok >"$T/fw.mode"; echo "Successfully generated ECDSA key in slot 1" ;;
+  set-key-status) [[ $mode == nolock ]] && { echo "Last crypto error: 2 (EINVAL)" >&2; exit 254; }; echo "Set key 1 status" ;;
+  get-key-status) [[ $mode == nolock ]] && echo "Key 1 status: 0x00000101 (x)" || echo "Key 1 status: 0x00001b01 (x)" ;;
+esac'
+}
+
+test_fwkey_derive_exact_bytes() {
+  fwkey_env
+  "$LIBEXEC/fwkey" derive mmcblk0 >"$T/out"
+  check "fwkey: exactly 64 hex bytes, no newline" test "$(wc -c <"$T/out")" = 64
+  check "fwkey: hex only" grep -Eqx '[0-9a-f]{64}' "$T/out"
+  check "fwkey: exact HMAC input" cmp -s "$T/hmac.in" <(printf 'juniper.luks.root.v1\0mmc:0353445344333247803a1b2c3d014e00')
+  check "fwkey: HMAC over key id 1, hex" called "rpi-fw-crypto hmac --in /dev/stdin --key-id 1 --outform hex"
+}
+
+test_fwkey_derive_is_stable() {
+  fwkey_env
+  check "fwkey: same card, same passphrase" test "$("$LIBEXEC/fwkey" derive mmcblk0)" = "$("$LIBEXEC/fwkey" derive mmcblk0)"
+  local a
+  a=$("$LIBEXEC/fwkey" derive mmcblk0)
+  echo 0353445344333247803a1b2c3d014e01 >"$T/sys/block/mmcblk0/device/cid"
+  check "fwkey: other card, other passphrase" test "$("$LIBEXEC/fwkey" derive mmcblk0)" != "$a"
+}
+
+test_fwkey_mmc_card_id() {
+  fwkey_env
+  check "fwkey: mmc id" test "$("$LIBEXEC/fwkey" card-id mmcblk0)" = "mmc:0353445344333247803a1b2c3d014e00"
+}
+
+test_fwkey_usb_without_serial_is_board_only() { # ruling 1 (I2)
+  fwkey_env
+  mkdir -p "$T/sys/devices/usb1/1-1/1-1:1.0/host0/target0/0:0:0:0" "$T/sys/block/sda"
+  echo 0781 >"$T/sys/devices/usb1/1-1/idVendor"
+  echo 5583 >"$T/sys/devices/usb1/1-1/idProduct"
+  ln -s "$T/sys/devices/usb1/1-1/1-1:1.0/host0/target0/0:0:0:0" "$T/sys/block/sda/device"
+  check "fwkey: board-only id" test "$("$LIBEXEC/fwkey" card-id sda)" = "board:"
+  echo 4C530001 >"$T/sys/devices/usb1/1-1/serial"
+  check "fwkey: usb id with serial" test "$("$LIBEXEC/fwkey" card-id sda)" = "usb:0781:5583:4C530001"
+  : >"$T/sys/devices/usb1/1-1/serial"
+  check "fwkey: empty usb serial is board-only" test "$("$LIBEXEC/fwkey" card-id sda)" = "board:"
+  "$LIBEXEC/fwkey" derive sda >/dev/null
+  check "fwkey: board-only HMAC input" cmp -s "$T/hmac.in" <(printf 'juniper.luks.root.v1\0board:')
+}
+
+test_fwkey_usb_walk_stays_in_sysfs() {
+  fwkey_env
+  mkdir -p "$T/outside/dev" "$T/sys/block/sdb"
+  echo 1234 >"$T/outside/idVendor"
+  echo 5678 >"$T/outside/idProduct"
+  echo LEAK >"$T/outside/serial"
+  ln -s "$T/outside/dev" "$T/sys/block/sdb/device"
+  check "fwkey: no ids outside sysfs" test "$("$LIBEXEC/fwkey" card-id sdb)" = "board:"
+}
+
+test_fwkey_nvme_serial_trimmed() {
+  fwkey_env
+  mkdir -p "$T/sys/block/nvme0n1/device"
+  echo "  S6X1NJ0R123456  " >"$T/sys/block/nvme0n1/device/serial"
+  check "fwkey: nvme id, whitespace removed" test "$("$LIBEXEC/fwkey" card-id nvme0n1)" = "nvme:S6X1NJ0R123456"
+}
+
+test_fwkey_card_id_missing_disk() {
+  fwkey_env
+  check "fwkey: unknown disk fails" fails "$LIBEXEC/fwkey" card-id sdz
+  check "fwkey: derive on unknown disk fails" fails "$LIBEXEC/fwkey" derive sdz
+  check "fwkey: derive on unknown disk prints nothing" test -z "$("$LIBEXEC/fwkey" derive sdz 2>/dev/null || true)"
+  check "fwkey: no HMAC for unknown disk" not_called "rpi-fw-crypto hmac"
+}
+
+test_fwkey_probe_states() {
+  fwkey_env
+  check "fwkey: probe ok" test "$("$LIBEXEC/fwkey" probe)" = ok
+  check "fwkey: probe message" cmp -s "$T/hmac.in" <(printf 'juniper.probe.v1')
+  echo not-set >"$T/fw.mode"
+  check "fwkey: probe not-set" test "$("$LIBEXEC/fwkey" probe)" = not-set
+  echo locked >"$T/fw.mode"
+  check "fwkey: probe locked" test "$("$LIBEXEC/fwkey" probe)" = locked
+  echo otp-error >"$T/fw.mode"
+  check "fwkey: probe other error" test "$("$LIBEXEC/fwkey" probe)" = "unavailable:firmware error 5"
+  rm -f "$JUNIPER_VCIO"
+  check "fwkey: probe no vcio" test "$("$LIBEXEC/fwkey" probe)" = "unavailable:no $JUNIPER_VCIO"
+  check "fwkey: probe never writes" not_called "rpi-fw-crypto genkey"
+}
+
+test_fwkey_probe_without_cli() {
+  fwkey_env
+  check "fwkey: probe without the CLI" test "$(RPI_FW_CRYPTO=$T/missing "$LIBEXEC/fwkey" probe)" = "unavailable:firmware error none"
+}
+
+test_fwkey_genkey_only_when_not_set() {
+  fwkey_env
+  echo not-set >"$T/fw.mode"
+  check "fwkey: generated" test "$("$LIBEXEC/fwkey" ensure)" = generated
+  check "fwkey: genkey once" test "$(grep -c '^rpi-fw-crypto genkey --key-id 1 --alg ec$' "$CALLS")" = 1
+  check "fwkey: then ok, no second genkey" test "$("$LIBEXEC/fwkey" ensure)" = ok
+  check "fwkey: still genkey once" test "$(grep -c '^rpi-fw-crypto genkey' "$CALLS")" = 1
+}
+
+test_fwkey_never_writes_when_locked_or_no_vcio() {
+  for mode in locked novcio otp-error; do
+    fwkey_env
+    echo "$mode" >"$T/fw.mode"
+    [[ $mode == novcio ]] && rm -f "$JUNIPER_VCIO"
+    check "fwkey ($mode): ensure fails" fails "$LIBEXEC/fwkey" ensure
+    check "fwkey ($mode): reports unavailable" stdout_has '^unavailable:' "$LIBEXEC/fwkey" ensure
+    check "fwkey ($mode): no genkey" not_called "rpi-fw-crypto genkey"
+  done
+}
+
+test_fwkey_ensure_fails_when_genkey_fails() {
+  fwkey_env
+  echo gen-fails >"$T/fw.mode"
+  check "fwkey: failed genkey fails ensure" fails "$LIBEXEC/fwkey" ensure
+  check "fwkey: failed genkey reported" stdout_has '^unavailable:' "$LIBEXEC/fwkey" ensure
+}
+
+test_fwkey_never_reads_raw_key() {
+  fwkey_env
+  echo not-set >"$T/fw.mode"
+  "$LIBEXEC/fwkey" ensure >/dev/null
+  "$LIBEXEC/fwkey" derive mmcblk0 >/dev/null
+  "$LIBEXEC/fwkey" lock >/dev/null
+  check "fwkey: no privkey" not_called "privkey"
+  check "fwkey: no key-usage write" not_called "set-key-usage"
+  check "fwkey: no vcmailbox" not_called "vcmailbox"
+  check "fwkey: no temp files" test -z "$(ls -A "$TMPDIR")"
+  check "fwkey: script never names privkey" not_grep_dir 'privkey\|rpi-otp-private-key\|vcmailbox\|set-key-usage' "$LIBEXEC/fwkey"
+}
+
+test_fwkey_lock_is_best_effort() { # ruling 4 (I3)
+  fwkey_env
+  check "fwkey: locked" test "$("$LIBEXEC/fwkey" lock)" = locked
+  check "fwkey: one call, four flags" called "rpi-fw-crypto set-key-status 1 READ_LOCKED GEN_LOCKED HMAC_LOCKED USAGE_LOCKED"
+  check "fwkey: SIGN stays unlocked" not_called "SIGN_LOCKED"
+  echo nolock >"$T/fw.mode"
+  check "fwkey: unavailable, exit 0" test "$("$LIBEXEC/fwkey" lock)" = unavailable
+  rm -f "$JUNIPER_VCIO"
+  check "fwkey: no vcio, unavailable, exit 0" test "$("$LIBEXEC/fwkey" lock)" = unavailable
+}
+
+test_fwkey_lock_checks_hmac_bit() {
+  fwkey_env
+  # set-key-status succeeds but the firmware ignores HMAC_LOCKED (bit 11 clear)
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub rpi-fw-crypto 'case $1 in get-key-status) echo "Key 1 status: 0x00000301 (x)" ;; esac'
+  check "fwkey: bit 11 clear is unavailable" test "$("$LIBEXEC/fwkey" lock)" = unavailable
+}
+
+test_fwkey_derive_fails_closed() {
+  fwkey_env
+  echo locked >"$T/fw.mode"
+  check "fwkey: derive fails when locked" fails "$LIBEXEC/fwkey" derive mmcblk0
+  check "fwkey: derive prints nothing when locked" test -z "$("$LIBEXEC/fwkey" derive mmcblk0 2>/dev/null || true)"
+  echo not-set >"$T/fw.mode"
+  check "fwkey: derive fails when not set" fails "$LIBEXEC/fwkey" derive mmcblk0
+  check "fwkey: derive never generates" not_called "rpi-fw-crypto genkey"
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub rpi-fw-crypto 'cat >/dev/null; printf "%s" ABCDEF'
+  check "fwkey: derive rejects non-hex output" test -z "$("$LIBEXEC/fwkey" derive mmcblk0 2>/dev/null || true)"
+}
+
+test_fwkey_usage() {
+  fwkey_env
+  check "fwkey: unknown command fails" fails "$LIBEXEC/fwkey" bogus
+  check "fwkey: no command fails" fails "$LIBEXEC/fwkey"
 }
 
 # --- runner ---

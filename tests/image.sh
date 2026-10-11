@@ -5,6 +5,8 @@
 set -euo pipefail
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
+# Name the failing check: most of them are silent greps.
+trap 'echo "image.sh:$LINENO: failed: $BASH_COMMAND" >&2' ERR
 
 # shellcheck source=/dev/null
 . /usr/lib/os-release
@@ -185,6 +187,16 @@ for img in /usr/lib/modules/*/initramfs.img; do
   fi
   echo "initramfs: $img: $(stat -c %s "$img") bytes"
 done
+# fwkey (issue #50): runs in the image without the firmware, and never touches it here.
+test -x /usr/libexec/juniper/fwkey || fail "fwkey missing or not executable"
+fwkey_probe=$(JUNIPER_VCIO=/nonexistent /usr/libexec/juniper/fwkey probe) ||
+  fail "fwkey probe failed"
+[[ $fwkey_probe == 'unavailable:no /nonexistent' ]] || fail "fwkey probe without vcio: $fwkey_probe"
+fwkey_lock=$(JUNIPER_VCIO=/nonexistent /usr/libexec/juniper/fwkey lock) || fail "fwkey lock failed"
+[[ $fwkey_lock == unavailable ]] || fail "fwkey lock without vcio: $fwkey_lock"
+if /usr/libexec/juniper/fwkey card-id nosuchdisk0 >/dev/null 2>&1; then
+  fail "fwkey card-id accepted a disk that is not in sysfs"
+fi
 # /dev/vcio stays root-only: it is the only barrier without the HMAC lock (ruling 4).
 if grep -rlE 'vcio.*MODE|vcio.*GROUP' /usr/lib/udev/rules.d /etc/udev/rules.d 2>/dev/null; then
   echo "a udev rule widens /dev/vcio"
