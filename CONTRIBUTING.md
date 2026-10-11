@@ -53,6 +53,14 @@ the maintainer reviews and merges them.
   [`examples/flash.yaml`](examples/flash.yaml) holds placeholders only. Use made-up values in
   tests.
 
+## Pinned keys
+
+The RPM signing keys in `build_files/keys/` (EPEL, Tailscale) and `build_files/copr-keys/`
+are trusted as committed. To refresh one, download the new key, check its fingerprint
+(`gpg --show-keys FILE`) against a source other than the server you got it from, and
+replace the file in a PR that says how you checked it. For `build_files/keys/`, also update
+the fingerprint and source in its README and the fingerprint in `tests/image.sh`.
+
 ## Building and testing locally
 
 See [Build](README.md#build). Images are arm64; build on an arm64 host or with

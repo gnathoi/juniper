@@ -62,6 +62,25 @@ for opt in passwordauthentication kbdinteractiveauthentication; do
   }
 done
 
+# Package repos trust only local keys (build_files/keys): no gpgkey= over HTTPS, signatures
+# on, and the EPEL and Tailscale keys are the pinned ones.
+if grep -H '^gpgkey=' /etc/yum.repos.d/*.repo | grep -v '=file:///etc/pki/rpm-gpg/'; then
+  echo "repo key not a local file"
+  exit 1
+fi
+if grep -H '^gpgcheck=0' /etc/yum.repos.d/*.repo; then
+  echo "repo with signature checks off"
+  exit 1
+fi
+for want in gpgcheck=1 repo_gpgcheck=1 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-tailscale; do
+  grep -qx "$want" /etc/yum.repos.d/tailscale.repo
+done
+# shellcheck disable=SC2016 # a literal dnf variable
+grep -qxF 'gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-$releasever_major' /etc/yum.repos.d/epel.repo
+key_fpr() { GNUPGHOME=$(mktemp -d) gpg --show-keys --with-colons "$1" | awk -F: '$1 == "fpr" {print $10; exit}'; }
+[[ $(key_fpr /etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-10) == 7D8D15CBFC4E62688591FB2633D98517E37ED158 ]]
+[[ $(key_fpr /etc/pki/rpm-gpg/RPM-GPG-KEY-tailscale) == 2596A99EAAB33821893C0A79458CA832957F5868 ]]
+
 need_enabled juniper-firstboot.service juniper-tailscale-join.service
 need_enabled juniper-update.timer juniper-reboot.timer juniper-healthcheck.service
 need_cmds rpi-bootc-bootloader

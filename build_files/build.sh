@@ -4,10 +4,20 @@ set -xeuo pipefail
 
 : "${IMAGE_REF:?}" "${IMAGE_NAME:?}" "${IMAGE_VERSION:?}"
 
-# --- repositories ---
-dnf -y install dnf-plugins-core https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
+# --- repositories: signing keys pinned in build_files/keys (see its README) ---
+# EPEL: dnf doesn't check a command-line package's signature, so verify epel-release against
+# the pinned key alone (own rpm database; _pkgverify_level all fails an unsigned package).
+# Its repo files point gpgkey= at the key it ships, which that signature covers.
+epel=$(mktemp -d)
+curl -fsSLo "$epel/epel-release.rpm" https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
+rpmkeys --dbpath "$epel/db" --import /ctx/build_files/keys/RPM-GPG-KEY-EPEL-10
+rpmkeys --dbpath "$epel/db" --define '_pkgverify_level all' -K "$epel/epel-release.rpm"
+[[ $(rpm -qp --nosignature --qf '%{NAME}' "$epel/epel-release.rpm") == epel-release ]]
+dnf -y install dnf-plugins-core "$epel/epel-release.rpm"
+rm -rf "$epel"
 dnf config-manager --set-enabled crb
-curl -fsSLo /etc/yum.repos.d/tailscale.repo https://pkgs.tailscale.com/stable/rhel/10/tailscale.repo
+install -m 0644 /ctx/build_files/keys/RPM-GPG-KEY-tailscale /etc/pki/rpm-gpg/RPM-GPG-KEY-tailscale
+install -m 0644 /ctx/build_files/tailscale.repo /etc/yum.repos.d/tailscale.repo
 
 # --- security updates ---
 # AlmaLinux rebuilds the base image only every 1-4 weeks; errata land in the repos in
@@ -111,7 +121,7 @@ printf '%s\0' /usr/share/licenses/juniper/LICENSE /usr/share/licenses/juniper/TH
 # Its own layer: changes only when its inputs do (dracut --reproducible).
 printf '%s\0' /usr/lib/modules/*/initramfs.img | tag initramfs
 printf '%s\0' /usr/lib/os-release /etc/containers/policy.json /etc/containers/registries.d/juniper.yaml \
-  /etc/yum.repos.d/tailscale.repo | tag juniper
+  /etc/yum.repos.d/tailscale.repo /etc/pki/rpm-gpg/RPM-GPG-KEY-tailscale | tag juniper
 
 # --- cleanup: package scriptlets leave runtime-only content that bootc lint rejects ---
 /ctx/build_files/clean-runtime-dirs.sh

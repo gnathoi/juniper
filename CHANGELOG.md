@@ -30,6 +30,10 @@ Unreleased as its release notes, then moves those entries under the release's ta
 - `wifi.country` must be a two-letter country code: `just flash` refuses anything else, and
   the image ignores (and logs) a malformed Wi-Fi regulatory domain or interface name in
   CIDATA instead of writing it into system configuration.
+- The EPEL and Tailscale package signing keys are pinned in the repository instead of
+  trusted from HTTPS at every build: `epel-release` is signature-checked before it's
+  installed, and `/etc/yum.repos.d/tailscale.repo` uses a local key
+  (`/etc/pki/rpm-gpg/RPM-GPG-KEY-tailscale`).
 
 ## build-20261010 (2026-10-10)
 
