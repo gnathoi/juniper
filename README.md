@@ -79,9 +79,33 @@ even if everything just worked.
 
 1. Create a **tagged**, one-off, pre-approved auth key at
    <https://login.tailscale.com/admin/settings/keys>. Tagged devices never expire, so the
-   lockdown can't lock you out later. The key turns on Tailscale SSH, so add an `ssh` rule to
-   your tailnet policy that lets you in to that tag, e.g.
-   `{"action": "accept", "src": ["autogroup:member"], "dst": ["tag:server"], "users": ["autogroup:nonroot", "root"]}`.
+   lockdown can't lock you out later. The key turns on Tailscale SSH, so your
+   [tailnet policy](https://tailscale.com/kb/1337/policy-syntax) needs to let you in to that
+   tag. Keep it narrow: an admin group, SSH as your login user only (no root: use `sudo`),
+   and only the ports you use, in place of the default allow-all rule. For example
+   (`you` is the `user` in your flash config):
+
+   ```json
+   {
+     "groups": {"group:admins": ["alice@example.com"]},
+     "tagOwners": {"tag:server": ["group:admins"], "tag:monitoring": ["group:admins"]},
+     "grants": [
+       {"src": ["group:admins"], "dst": ["tag:server"], "ip": ["tcp:22"]},
+       {"src": ["tag:monitoring"], "dst": ["tag:server"], "ip": ["tcp:9100"]}
+     ],
+     "ssh": [
+       {"action": "check", "src": ["group:admins"], "dst": ["tag:server"], "users": ["you"]}
+     ]
+   }
+   ```
+
+   `check` asks you to re-authenticate in the browser every 12 hours; use `accept` only for
+   automation (a tagged CI or backup device) with its own narrow rule.
+   `"users": ["autogroup:nonroot"]` also works, but lets the admin group log in as any
+   non-root account on the Pi. The second grant is for `ujust enable-metrics`
+   (node_exporter on :9100) from a monitoring host tagged `tag:monitoring`; drop it if you
+   don't use it. See [grants](https://tailscale.com/kb/1324/grants) and
+   [Tailscale SSH](https://tailscale.com/kb/1193/tailscale-ssh).
 2. Flash an SD card or USB disk: with `just flash` on Linux (below), or by hand on any OS.
 3. Boot. The Pi joins your tailnet; `ssh <user>@<hostname>` over Tailscale.
 
