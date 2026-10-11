@@ -18,3 +18,7 @@ trust-images namespace="" pubkey="":
 # Stop requiring a signature for NAMESPACE (not Juniper's own)
 untrust-images namespace:
     sudo /usr/libexec/juniper/trust-images --remove {{ quote(namespace) }}
+
+# Forget failed update attempts, so a held update is tried again (it may fail again)
+update-unhold:
+    sudo /usr/libexec/juniper/update-unhold

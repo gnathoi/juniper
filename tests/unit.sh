@@ -4264,6 +4264,96 @@ test_cryptroot_usage() {
   check "cryptroot: no set -x" not_grep_dir '^[[:space:]]*set -[a-zA-Z]*x' "$LIBEXEC/cryptroot"
 }
 
+# --- #81: hardware-run follow-ups ---
+test_second_strike_writes_update_held_at_once() {
+  strike_env
+  fail_boot boot-1
+  check "held at fallback: one strike -> no update-held" test ! -e "$JUNIPER_STATE_DIR/update-held"
+  fail_boot boot-2
+  check "held at fallback: second strike writes update-held" \
+    test "$(cat "$JUNIPER_STATE_DIR/update-held")" = "update $BAD failed its health check twice; waiting for a newer image"
+  stub fastfetch ''
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub systemctl '[[ $* != *is-failed* ]]'
+  check "held at fallback: motd shows it" stdout_has "failed its health check twice" "$LIBEXEC/motd"
+}
+
+test_update_unhold() {
+  check "update-unhold: nothing held" stdout_has "nothing held" "$LIBEXEC/update-unhold"
+  printf '%s 2 boot-2\n%s 1 boot-3\n' "$BAD" "$NEW" >"$JUNIPER_STATE_DIR/bad-digests"
+  echo "update $BAD failed its health check twice; waiting for a newer image" >"$JUNIPER_STATE_DIR/update-held"
+  check "update-unhold: names the first digest" stdout_has "$BAD" "$LIBEXEC/update-unhold"
+  printf '%s 2 boot-2\n%s 1 boot-3\n' "$BAD" "$NEW" >"$JUNIPER_STATE_DIR/bad-digests"
+  echo held >"$JUNIPER_STATE_DIR/update-held"
+  check "update-unhold: names the second digest" stdout_has "$NEW" "$LIBEXEC/update-unhold"
+  check "update-unhold: bad-digests removed" test ! -e "$JUNIPER_STATE_DIR/bad-digests"
+  check "update-unhold: update-held removed" test ! -e "$JUNIPER_STATE_DIR/update-held"
+  check "update-unhold: second run says nothing held" stdout_has "nothing held" "$LIBEXEC/update-unhold"
+  echo held >"$JUNIPER_STATE_DIR/update-held"
+  check "update-unhold: only a note -> cleared" stdout_has "Cleared" "$LIBEXEC/update-unhold"
+  check "update-unhold: note removed" test ! -e "$JUNIPER_STATE_DIR/update-held"
+  # End to end: after unhold a previously held digest is tried again.
+  strike_env
+  fail_boot boot-1
+  fail_boot boot-2
+  "$LIBEXEC/update-unhold" >/dev/null
+  staged_digest "$BAD"
+  "$LIBEXEC/apply-update" >/dev/null
+  check "update-unhold: the held digest goes ahead again" called "bootloader tryreboot"
+  local j=$ROOT/system_files/usr/share/juniper/just/update.just
+  check "update-unhold: recipe runs it with sudo" grep -qx '    sudo /usr/libexec/juniper/update-unhold' "$j"
+}
+
+test_pi_status_does_not_echo_recipe_lines() {
+  local j=$ROOT/system_files/usr/share/juniper/just/pi.just
+  check "pi-status: every recipe line is @-prefixed" \
+    test -z "$(sed -n '/^pi-status:/,/^$/p' "$j" | sed 1d | sed '/^$/d' | grep -v '^    @')"
+}
+
+test_lan_ssh_default_sources_skip_host_routes_and_covered_prefixes() {
+  fw_fake
+  stub ip 'case "$*" in
+  "-j route show scope link") echo "[{\"dst\":\"192.168.1.0/24\",\"dev\":\"eth0\"},{\"dst\":\"192.168.1.7\",\"dev\":\"eth0\"},{\"dst\":\"10.0.0.5/32\",\"dev\":\"eth0\"},{\"dst\":\"10.0.0.0/24\",\"dev\":\"eth0\"},{\"dst\":\"10.0.0.0/25\",\"dev\":\"eth0\"}]" ;;
+  "-j -6 route show") echo "[{\"dst\":\"fe80::/64\",\"dev\":\"eth0\"},{\"dst\":\"fe80::1/128\",\"dev\":\"eth0\"},{\"dst\":\"2001:db8:1::5/128\",\"dev\":\"eth0\"},{\"dst\":\"2001:db8:1::/64\",\"dev\":\"eth0\"}]" ;;
+esac'
+  "$LIBEXEC/lan-ssh" on >/dev/null 2>&1
+  check "lan-ssh default: network kept" perm_has ipv4 192.168.1.0/24
+  check "lan-ssh default: v6 network kept" perm_has ipv6 2001:db8:1::/64
+  check "lan-ssh default: fe80::/10 kept" perm_has ipv6 fe80::/10
+  check "lan-ssh default: v4 host route (bare) dropped" not_grep_dir 192.168.1.7 "$T/fw"
+  check "lan-ssh default: v4 /32 dropped" not_grep_dir 10.0.0.5 "$T/fw"
+  check "lan-ssh default: v6 /128 dropped" not_grep_dir 2001:db8:1::5 "$T/fw"
+  check "lan-ssh default: fe80::1/128 dropped" not_grep_dir 'fe80::1/' "$T/fw"
+  check "lan-ssh default: fe80::/64 covered by fe80::/10" not_grep_dir 'fe80::/64' "$T/fw"
+  check "lan-ssh default: /25 covered by /24" not_grep_dir '10.0.0.0/25' "$T/fw"
+  check "lan-ssh default: covering /24 kept" perm_has ipv4 10.0.0.0/24
+  # Explicit CIDRs are the user's choice: a host stays.
+  : >"$T/fw/perm_rich"
+  "$LIBEXEC/lan-ssh" on 192.168.5.7 >/dev/null
+  check "lan-ssh explicit: host kept as /32" perm_has ipv4 192.168.5.7/32
+}
+
+test_version_label_and_first_boot_reboot_guard() {
+  # shellcheck disable=SC2016 # literal $IMAGE_VERSION
+  check "Containerfile: image version label" \
+    grep -qx 'LABEL org.opencontainers.image.version=$IMAGE_VERSION' "$ROOT/Containerfile"
+  check "build.yml: version label checked" grep -q 'org.opencontainers.image.version' "$ROOT/.github/workflows/build.yml"
+  local f cond
+  for f in "$ROOT/system_files/usr/lib/systemd/system/juniper-reboot.service" \
+    "$ROOT/system_files_desktop/usr/lib/systemd/system/juniper-reboot-retry.service"; do
+    cond=$(grep -m1 "^ExecCondition=/usr/bin/awk" "$f" || true)
+    check "${f##*/}: skips the first 10 minutes after boot" test -n "$cond"
+    # Run the condition against a fake /proc/uptime ($$ is systemd's escape for $).
+    cond=${cond#ExecCondition=/usr/bin/awk }
+    cond=${cond//\$\$/\$}
+    cond=${cond//\/proc\/uptime/$T/uptime}
+    echo "120.5 400.1" >"$T/uptime"
+    check "${f##*/}: 2 minutes up -> skipped" fails eval "awk ${cond}"
+    echo "601.0 400.1" >"$T/uptime"
+    check "${f##*/}: 10+ minutes up -> runs" eval "awk ${cond}"
+  done
+}
+
 # --- runner ---
 # UNIT_FILTER=REGEX runs only the matching tests (e.g. UNIT_FILTER=cryptroot tests/unit.sh).
 for t in $(declare -F | awk -v f="${UNIT_FILTER:-.}" '$3 ~ /^test_/ && $3 ~ f {print $3}'); do
