@@ -4642,7 +4642,7 @@ else
 fi'
   stub udisksctl 'if [[ $1 == mount ]]; then echo "Mounted $3 at '"$T"'/media/CIDATA."; fi'
   stub age 'cat >/dev/null; echo "hunter2-""secret"'
-  stub run0 'exec "$@"'
+  stub run0 'exec "$@" </dev/null' # like run0: the caller's stdin does not reach the command
   stub cryptsetup 'case $1 in
   open) [[ $(cat) == "hunter2-""secret" ]] && echo "key-arrived-on-stdin" >>"$CALLS" ;;
   token) echo "{\"type\":\"juniper-recovery\",\"age\":\"CIPHERTEXT-TOKEN\"}" ;;
@@ -4653,12 +4653,26 @@ test_unlock_card_pipes_age_into_readonly_cryptsetup() {
   unlock_env
   check "unlock: runs" "$ROOT/disk/unlock-card" /dev/sdb
   check "unlock: age decrypts with the identity" called "age -d -i $T/home/.ssh/id_ed25519"
-  check "unlock: readonly open from stdin" called "run0 cryptsetup open --readonly --key-file - /dev/sdb3 juniper-recovered"
+  check "unlock: readonly open from stdin" called "cryptsetup open --readonly --key-file - /dev/sdb3 juniper-recovered"
   check "unlock: the key arrived on stdin" called "key-arrived-on-stdin"
-  check "unlock: age before cryptsetup" test "$(grep -n -m1 '^age ' "$CALLS" | cut -d: -f1)" -lt "$(grep -n -m1 '^cryptsetup open' "$CALLS" | cut -d: -f1)"
+  check "unlock: age ran before the key arrived" test "$(grep -n -m1 '^age ' "$CALLS" | cut -d: -f1)" -lt "$(grep -n -m1 '^key-arrived-on-stdin' "$CALLS" | cut -d: -f1)"
   check "unlock: mounts read-only" called "run0 mount -o ro /dev/mapper/juniper-recovered $T/media/juniper-recovered"
+  check "unlock: age and cryptsetup share one root shell" called "run0 bash -c"
   check "unlock: used the CIDATA copy, not the token" not_called "token export"
   check "unlock: passphrase nowhere under T" not_grep_dir "hunter2-secret" "$T"
+}
+
+test_unlock_card_needs_age() {
+  unlock_env
+  rm -f "$T/bin/age"
+  # shellcheck disable=SC2329 # called through check
+  no_age() { PATH="$T/bin:/usr/bin:/bin" "$ROOT/disk/unlock-card" /dev/sdb; }
+  if PATH=/usr/bin:/bin command -v age >/dev/null; then
+    echo "skip unlock: missing age (a system age is installed)"
+    return
+  fi
+  check "unlock: missing age is a clear error" stderr_has "age not found" no_age
+  check "unlock: nothing opened without age" not_called "cryptsetup open"
 }
 
 test_unlock_card_explicit_identity() {

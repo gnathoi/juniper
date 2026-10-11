@@ -84,9 +84,15 @@ if [[ -e /dev/mapper/$name ]]; then
   die "$name is already open; run: just unlock-card --close"
 fi
 
-# The only place the passphrase exists is this pipe.
-age -d -i "$ident" <<<"$ct" |
-  "${as_root[@]}" cryptsetup open --readonly --key-file - "$part" "$name" ||
+# age may live only in the user's PATH (Homebrew), so resolve it here, not as root.
+age=$(command -v age) || die "age not found; install it (it decrypts the recovery key)"
+
+# The only place the passphrase exists is the pipe inside one root shell. run0 does not forward
+# our stdin, so the (non-secret) ciphertext goes in as an argument, and age and cryptsetup are
+# piped together inside the root shell.
+# shellcheck disable=SC2016 # expands in the root shell, not here
+"${as_root[@]}" bash -c '"$1" -d -i "$2" <<<"$5" | cryptsetup open --readonly --key-file - "$3" "$4"' \
+  _ "$age" "$ident" "$part" "$name" "$ct" ||
   die "could not open the card (wrong SSH key, or not this card's recovery key)"
 "${as_root[@]}" mkdir -p "$dest"
 "${as_root[@]}" mount -o ro "/dev/mapper/$name" "$dest" || {
