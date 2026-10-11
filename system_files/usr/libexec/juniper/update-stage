@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Stage the latest image (juniper-update.service), unless the disk is too full to hold it.
+# A full root filesystem is what turns an unattended update into a dead device, so check the
+# free space on the filesystem holding the ostree repo first. If it is short, prune dangling
+# podman images (never volumes or containers) and look again; if still short, skip this run
+# and say so in update-skipped-space (motd, `ujust pi-status`) and the journal. That is not a
+# unit failure: the next timer run retries. A successful stage clears the note.
+# Threshold: MIN_FREE_MB=<MiB> in /etc/juniper/update.conf (one key, parsed, never sourced);
+# default 2048.
+set -uo pipefail
+
+state_dir=${JUNIPER_STATE_DIR:-/var/lib/juniper}
+conf=${JUNIPER_UPDATE_CONF:-/etc/juniper/update.conf}
+repo=${JUNIPER_OSTREE_PATH:-/sysroot}
+marker=$state_dir/update-skipped-space
+
+min_free=2048
+from_conf=$(sed -n 's/^MIN_FREE_MB[[:space:]]*=[[:space:]]*["'\'']\{0,1\}\([0-9]\{1,9\}\)["'\'']\{0,1\}[[:space:]]*$/\1/p' "$conf" 2>/dev/null | tail -n1)
+[[ -z $from_conf ]] || min_free=$((10#$from_conf))
+if [[ ${JUNIPER_MIN_FREE_MB:-} =~ ^[0-9]{1,9}$ ]]; then min_free=$((10#$JUNIPER_MIN_FREE_MB)); fi
+
+# Prints the free MiB, or nothing if df fails or its output is unusable.
+free_mb() { df -Pm "$repo" 2>/dev/null | awk 'NR == 2 && $4 ~ /^[0-9]+$/ {print $4}'; }
+
+free=$(free_mb)
+if [[ -z $free ]]; then
+  # Fail open: a broken df must not stop updates forever.
+  echo "Could not determine free space under $repo; staging the update anyway." >&2
+elif ((free < min_free)); then
+  echo "Only ${free} MiB free under $repo (need ${min_free}); pruning dangling podman images." >&2
+  podman image prune -f >/dev/null 2>&1 || true
+  free=$(free_mb)
+fi
+
+if [[ -n $free ]] && ((free < min_free)); then
+  mkdir -p "$state_dir"
+  echo "update skipped on $(date +%F): ${free} MiB free, ${min_free} MiB needed" >"$marker"
+  echo "Not enough free space to stage an update: ${free} MiB free under $repo, ${min_free} MiB needed. Skipping; the next run retries. Free space or set MIN_FREE_MB in $conf." >&2
+  exit 0
+fi
+
+bootc upgrade --quiet || exit $?
+rm -f "$marker"

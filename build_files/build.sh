@@ -109,7 +109,7 @@ EOT
 systemctl enable tailscaled.service firewalld.service avahi-daemon.service \
   cloud-init-local.service cloud-init.service cloud-config.service cloud-final.service \
   podman-auto-update.timer juniper-firstboot.service juniper-tailscale-join.service \
-  juniper-lockdown.timer juniper-update.timer juniper-reboot.timer juniper-healthcheck.service juniper-lan-ssh-status.service juniper-wifi-import.service \
+  juniper-lockdown.timer juniper-update.timer juniper-image-prune.timer juniper-reboot.timer juniper-healthcheck.service juniper-lan-ssh-status.service juniper-wifi-import.service \
   juniper-firstboot-retry.service juniper-emergency-fallback.service
 systemctl --global enable podman-auto-update.timer
 systemctl mask bootc-fetch-apply-updates.timer

@@ -2173,6 +2173,193 @@ EOF
 }
 not_ok() { ! "$@" 2>/dev/null; }
 
+# --- storage budgets (#54) ---
+# stub df: prints the next "total avail" (MiB) pair from $T/df-queue (the last one repeats).
+stage_env() {
+  export JUNIPER_UPDATE_CONF=$T/update.conf
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub df 'q=$T/df-queue; read -r total avail <"$q"; [[ $(wc -l <"$q") -le 1 ]] || sed -i 1d "$q"
+printf "Filesystem 1048576-blocks Used Available Capacity Mounted on\n/dev/x %s 0 %s 0%% /\n" "$total" "$avail"'
+  stub podman ''
+}
+df_queue() { printf '%s\n' "$@" >"$T/df-queue"; }
+
+test_update_stage_enough_space() {
+  stage_env
+  df_queue "30000 5000"
+  "$LIBEXEC/update-stage"
+  check "update-stage: enough space -> upgrade" called "bootc upgrade --quiet"
+  check "update-stage: enough space -> no prune" not_called "podman"
+  check "update-stage: checks the ostree filesystem" called "df"
+  check "update-stage: no marker" test ! -e "$JUNIPER_STATE_DIR/update-skipped-space"
+}
+
+test_update_stage_prunes_then_upgrades() {
+  stage_env
+  df_queue "30000 500" "30000 3000"
+  "$LIBEXEC/update-stage"
+  check "update-stage: short -> prunes dangling images only" called "podman image prune -f"
+  check "update-stage: never prunes volumes or containers" not_called "volume"
+  check "update-stage: recovered after prune -> upgrade" called "bootc upgrade --quiet"
+  check "update-stage: recovered -> no marker" test ! -e "$JUNIPER_STATE_DIR/update-skipped-space"
+}
+
+test_update_stage_still_short_skips() {
+  stage_env
+  df_queue "30000 500"
+  check "update-stage: still short -> exit 0" "$LIBEXEC/update-stage"
+  check "update-stage: still short -> no upgrade" not_called "bootc upgrade"
+  check "update-stage: marker has free, threshold, date" grep -Eq \
+    '[0-9]{4}-[0-9]{2}-[0-9]{2}: 500 MiB free, 2048 MiB needed' "$JUNIPER_STATE_DIR/update-skipped-space"
+  check "update-stage: says why in the journal" stderr_has "Not enough free space" "$LIBEXEC/update-stage"
+}
+
+test_update_stage_clears_marker_on_success() {
+  stage_env
+  echo "old" >"$JUNIPER_STATE_DIR/update-skipped-space"
+  df_queue "30000 5000"
+  "$LIBEXEC/update-stage"
+  check "update-stage: success clears the marker" test ! -e "$JUNIPER_STATE_DIR/update-skipped-space"
+}
+
+test_update_stage_failed_upgrade_keeps_marker_and_fails() {
+  stage_env
+  stub bootc 'exit 1'
+  echo "old" >"$JUNIPER_STATE_DIR/update-skipped-space"
+  df_queue "30000 5000"
+  check "update-stage: bootc failure fails the unit" fails "$LIBEXEC/update-stage"
+  check "update-stage: bootc failure keeps the marker" test -e "$JUNIPER_STATE_DIR/update-skipped-space"
+}
+
+test_update_stage_threshold_from_conf() {
+  stage_env
+  df_queue "30000 3000"
+  echo "MIN_FREE_MB=4096" >"$JUNIPER_UPDATE_CONF"
+  "$LIBEXEC/update-stage"
+  check "update-stage: conf raises the threshold" not_called "bootc upgrade"
+  echo "MIN_FREE_MB=1000" >"$JUNIPER_UPDATE_CONF"
+  "$LIBEXEC/update-stage"
+  check "update-stage: conf lowers the threshold" called "bootc upgrade --quiet"
+}
+
+test_update_stage_conf_is_not_sourced() {
+  stage_env
+  df_queue "30000 3000"
+  # shellcheck disable=SC2016 # the $( ) must stay literal in the conf file
+  printf 'touch %s/pwned\nMIN_FREE_MB="$(touch %s/pwned2)"\n' "$T" "$T" >"$JUNIPER_UPDATE_CONF"
+  "$LIBEXEC/update-stage"
+  check "update-stage: conf is parsed, not executed" test ! -e "$T/pwned" -a ! -e "$T/pwned2"
+  check "update-stage: junk value -> default threshold" called "bootc upgrade"
+}
+
+test_update_stage_df_failure_fails_open() {
+  stage_env
+  stub df 'exit 1'
+  check "update-stage: df fails -> exit 0" "$LIBEXEC/update-stage"
+  check "update-stage: df fails -> still upgrades" called "bootc upgrade --quiet"
+  check "update-stage: df fails -> warns" stderr_has "Could not determine free space" "$LIBEXEC/update-stage"
+  check "update-stage: df fails -> no marker" test ! -e "$JUNIPER_STATE_DIR/update-skipped-space"
+  stub df ''
+  check "update-stage: df prints nothing -> upgrades" "$LIBEXEC/update-stage"
+}
+
+test_update_stage_conf_tolerates_spaces_and_cr() {
+  stage_env
+  df_queue "30000 3000"
+  printf 'MIN_FREE_MB = 4096\r\n' >"$JUNIPER_UPDATE_CONF"
+  "$LIBEXEC/update-stage"
+  check "update-stage: spaces around = and CR parsed" not_called "bootc upgrade"
+  printf 'MIN_FREE_MB="1000"\r\n' >"$JUNIPER_UPDATE_CONF"
+  "$LIBEXEC/update-stage"
+  check "update-stage: quoted value with CR parsed" called "bootc upgrade --quiet"
+}
+
+test_motd_low_space_checks_sysroot() {
+  motd_env
+  df_queue "30000 20000"
+  mkdir "$T/sysroot"
+  JUNIPER_OSTREE_PATH=$T/sysroot "$LIBEXEC/motd" >/dev/null 2>&1
+  check "motd: df on the ostree path" called "df -Pm $T/sysroot"
+  : >"$CALLS"
+  JUNIPER_OSTREE_PATH=$T/missing "$LIBEXEC/motd" >/dev/null 2>&1
+  check "motd: missing ostree path falls back to /" called "df -Pm /"
+  check "motd: missing ostree path not queried" not_called "df -Pm $T/missing"
+}
+
+test_update_stage_env_overrides_conf() {
+  stage_env
+  df_queue "30000 3000"
+  echo "MIN_FREE_MB=1000" >"$JUNIPER_UPDATE_CONF"
+  JUNIPER_MIN_FREE_MB=4096 "$LIBEXEC/update-stage"
+  check "update-stage: JUNIPER_MIN_FREE_MB wins" not_called "bootc upgrade"
+}
+
+test_update_service_runs_update_stage() {
+  local u=$ROOT/system_files/usr/lib/systemd/system/juniper-update.service
+  check "juniper-update: runs update-stage" grep -qx 'ExecStart=/usr/libexec/juniper/update-stage' "$u"
+  check "juniper-update: no direct bootc upgrade" not_grep_dir 'bootc upgrade' "$u"
+}
+
+test_image_prune_timer() {
+  local d=$ROOT/system_files/usr/lib/systemd/system
+  check "prune timer: weekly" grep -qx 'OnCalendar=weekly' "$d/juniper-image-prune.timer"
+  check "prune timer: randomized" grep -q '^RandomizedDelaySec=' "$d/juniper-image-prune.timer"
+  check "prune timer: persistent" grep -qx 'Persistent=true' "$d/juniper-image-prune.timer"
+  check "prune service: dangling images only" grep -qx 'ExecStart=/usr/bin/podman image prune -f' "$d/juniper-image-prune.service"
+  check "prune service: never volumes or containers" not_grep_dir 'volume\|container\|--all' "$d/juniper-image-prune.service"
+  check "prune timer enabled in build.sh" grep -q 'juniper-image-prune.timer' "$ROOT/build_files/build.sh"
+}
+
+test_journal_keeps_free_space() {
+  local j=$ROOT/system_files/usr/lib/systemd/journald.conf.d/50-juniper.conf
+  check "journald: keeps 1G free" grep -qx 'SystemKeepFree=1G' "$j"
+  check "journald: 200M cap kept" grep -qx 'SystemMaxUse=200M' "$j"
+}
+
+motd_env() {
+  stub fastfetch ''
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub systemctl '[[ $* != *is-failed* ]]'
+  stub tailscale 'exit 1'
+  stage_env
+}
+
+test_motd_shows_update_skipped_for_space() {
+  motd_env
+  df_queue "30000 20000"
+  echo "update skipped on 2033-05-18: 500 MiB free, 2048 MiB needed" >"$JUNIPER_STATE_DIR/update-skipped-space"
+  check "motd: skipped-for-space shown" stdout_has "update skipped on 2033-05-18: 500 MiB free" "$LIBEXEC/motd"
+  rm "$JUNIPER_STATE_DIR/update-skipped-space"
+  check "motd: no marker, no line" not_stdout_has "update skipped" "$LIBEXEC/motd"
+}
+
+test_motd_warns_on_low_root_space() {
+  motd_env
+  df_queue "30000 20000"
+  check "motd: plenty free -> no warning" not_stdout_has "Low disk space" "$LIBEXEC/motd"
+  df_queue "30000 2500"
+  check "motd: under 10% free -> warning" stdout_has "Low disk space" "$LIBEXEC/motd"
+  df_queue "8000 900"
+  check "motd: under 1 GiB free -> warning" stdout_has "900 MiB free" "$LIBEXEC/motd"
+  df_queue "100000 5000"
+  check "motd: 5% but >1 GiB free -> still warns (under 10%)" stdout_has "Low disk space" "$LIBEXEC/motd"
+  df_queue "8000 1100"
+  check "motd: 13% and over 1 GiB -> no warning" not_stdout_has "Low disk space" "$LIBEXEC/motd"
+}
+
+test_motd_runs_clean() {
+  motd_env
+  df_queue "30000 20000"
+  check "motd: no shell errors" not_stderr_has "unbound\|syntax\|not found" "$LIBEXEC/motd"
+  check "motd: exits 0" "$LIBEXEC/motd"
+}
+
+test_pi_status_shows_storage_warnings() {
+  local j=$ROOT/system_files/usr/share/juniper/just/pi.just
+  check "pi-status: skipped-for-space line" grep -q 'update-skipped-space' "$j"
+  check "pi-status: low-space line" grep -q 'df ' "$j"
+}
+
 # --- runner ---
 for t in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do
   setup
