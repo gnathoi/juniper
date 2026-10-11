@@ -146,7 +146,7 @@ for r in update switch update-schedule lan-ssh tailscale-up tailscale-ssh toggle
   }
 done
 test -f /usr/share/bash-completion/completions/ujust
-bash -c 'source /usr/share/bash-completion/bash_completion && complete -p ujust' | grep -q _ujust
+bash -c 'source /usr/share/bash-completion/bash_completion && _completion_loader ujust; complete -p ujust' | grep -q _ujust
 # Capture first: `grep -q` exiting early would SIGPIPE motd under pipefail.
 motd=$(HOME=/tmp /usr/libexec/juniper/motd)
 grep -q 'Tailscale' <<<"$motd"
