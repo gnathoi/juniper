@@ -12,10 +12,12 @@ installkernel() {
   hostonly='' instmods dm_mod dm_crypt af_alg algif_skcipher adiantum chacha_generic chacha-neon \
     nhpoly1305 nhpoly1305-neon poly1305-neon aes-ce-blk aes-ce-cipher aes-neon-bs aes-arm64 aes_generic
 }
-# env: cryptroot and fwkey start with `#!/usr/bin/env bash`.
+# inst_multiple: every command cryptroot and fwkey can run (env bash: their shebang; wc: fwkey's
+# firmware gate), plus modprobe for the prepare unit. tests/unit.sh fails if a command the
+# scripts run (tests/script-commands.py) is missing here; tests/image.sh checks the initramfs.
 install() {
   inst_multiple cryptsetup rpi-fw-crypto age sfdisk partx blkid mount umount mkdir cat grep sed \
-    head tr od cut readlink sync mv sleep basename modprobe env
+    head tr od cut readlink sync mv sleep basename modprobe env bash wc
   inst_simple /usr/libexec/juniper/cryptroot
   inst_simple /usr/libexec/juniper/fwkey
   inst_simple "$moddir/juniper-cryptroot-prepare.service" "$systemdsystemunitdir/juniper-cryptroot-prepare.service"

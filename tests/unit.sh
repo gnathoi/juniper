@@ -4379,6 +4379,51 @@ test_version_label_and_first_boot_reboot_guard() {
 
 # --- runner ---
 # UNIT_FILTER=REGEX runs only the matching tests (e.g. UNIT_FILTER=cryptroot tests/unit.sh).
+# --- initramfs completeness (issue #50): the dracut module installs every command ---
+MODSETUP=$ROOT/system_files/usr/lib/dracut/modules.d/90juniper-cryptroot/module-setup.sh
+modsetup_cmds() { # the words of module-setup.sh's inst_multiple call (with its continuations)
+  sed -n '/^[[:space:]]*inst_multiple/,/[^\\]$/p' "$MODSETUP" | tr -d '\134' | tr -s ' \t' '\n' |
+    grep -v -e '^$' -e '^inst_multiple$' -e '^-o$'
+}
+
+refuses() { ! python3 "$ROOT/tests/script-commands.py" "$1" >/dev/null 2>&1; }
+test_script_commands_parser() { # the extractor itself, on the constructs the scripts use
+  local f=$T/s out
+  # shellcheck disable=SC2016 # a script under test, not expanded here
+  printf '%s\n' '#!/usr/bin/env bash' 'set -e' 'x=${FOO_BIN:-/usr/bin/foo}' 'f() { printf "%s" "$1" | a1; }' \
+    'v=$(b1 -x "$(b2 <"$f")" 2>/dev/null || true)' 'case $v in' '  one | two) c1 ;;' \
+    '  *" q,r"*)' '    c2 | c3' '    ;;' 'esac' 'if [[ $v =~ ^(a|b)[[:space:]]*$ && $(d1) == 4 ]]; then ((n++)); fi' \
+    'exec {fd}< <(exec </dev/null 2>&1; "$x" | e1)' 'while read -r l; do :; done < <(e2 a)' \
+    'with_key() { "$@"; }' 'with_key d g1 --opt' 'timeout -s KILL 5 g2' 'arr=("$(h1)" b)' \
+    'trap cleanup EXIT' 'cleanup() { i1; }' 'f "$(j1)" &&' '  k1' 'f x # l1 in a comment' \
+    "echo 'm1 in quotes' \"\$((1 + 2))\"" >"$f"
+  out=$(python3 "$ROOT/tests/script-commands.py" "$f" | tr '\n' ' ')
+  check "script-commands: every construct" test "$out" = \
+    '$@ /usr/bin/foo a1 b1 b2 bash c1 c2 c3 d1 e1 e2 env g1 g2 h1 i1 j1 k1 timeout '
+  printf '%s\n' 'cat <<EOF' 'x' 'EOF' >"$f"
+  check "script-commands: refuses a here-document" refuses "$f"
+  # shellcheck disable=SC2016
+  printf '%s\n' 'x=`date`' >"$f"
+  check "script-commands: refuses backticks" refuses "$f"
+}
+
+test_initramfs_installs_every_script_command() {
+  local c cmds have
+  cmds=$(python3 "$ROOT/tests/script-commands.py" "$LIBEXEC/cryptroot" "$LIBEXEC/fwkey")
+  have=$(modsetup_cmds)
+  check "initramfs: the extractor found cryptsetup and wc" test -n "$(grep -x cryptsetup <<<"$cmds")" -a -n "$(grep -x wc <<<"$cmds")"
+  for c in $cmds; do
+    # shellcheck disable=SC2016 # '$@' etc. are literal names, not expansions
+    case $c in
+      # with_key's "$@" (its commands are listed by name), fwkey's dispatch to its own functions
+      '$@' | '$cmd' | '$input') ;;
+      /*) check "initramfs: module-setup.sh installs $c" grep -Eq "inst_simple $c( |\$)" "$MODSETUP" ;;
+      '$'*) check "initramfs: unresolved command $c (resolve it or allowlist it here)" false ;;
+      *) check "initramfs: inst_multiple has $c" grep -qx -- "$c" <<<"$have" ;;
+    esac
+  done
+}
+
 for t in $(declare -F | awk -v f="${UNIT_FILTER:-.}" '$3 ~ /^test_/ && $3 ~ f {print $3}'); do
   setup
   "$t"

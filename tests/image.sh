@@ -165,16 +165,25 @@ for img in /usr/lib/modules/*/initramfs.img; do
       exit 1
     }
   done
-  # Every command cryptroot/fwkey call resolves inside the unpacked initramfs (env: their
-  # shebang). /usr/sbin is not merged into /usr/bin on EL10, so either directory will do.
+  # Every command cryptroot/fwkey can run resolves inside the unpacked initramfs. The list is
+  # derived from the initramfs's own copies of the scripts (tests/script-commands.py, which
+  # tests/unit.sh also checks against module-setup.sh), plus a fixed floor in case the
+  # extractor ever under-reports. /usr/sbin is not merged into /usr/bin on EL10.
   rm -rf "$tmp/ir"
   mkdir "$tmp/ir"
   (cd "$tmp/ir" && lsinitrd --unpack "$img" >/dev/null)
   bash -n "$tmp/ir/usr/libexec/juniper/cryptroot"
   bash -n "$tmp/ir/usr/libexec/juniper/fwkey"
-  for c in cryptsetup rpi-fw-crypto age sfdisk partx blkid mount umount mkdir cat grep sed head tr od cut readlink sync mv sleep basename modprobe env bash; do
+  derived=$(python3 "$(dirname "$0")/script-commands.py" "$tmp/ir/usr/libexec/juniper/cryptroot" "$tmp/ir/usr/libexec/juniper/fwkey")
+  grep -qx wc <<<"$derived" # the extractor works (fwkey's firmware gate uses wc)
+  for c in $derived cryptsetup rpi-fw-crypto age sfdisk partx blkid mount umount mkdir grep sed tr od readlink sync mv sleep modprobe env bash wc; do
+    case $c in
+      '$'*) continue ;; # function dispatch; tests/unit.sh allowlists these
+      /*) p=$tmp/ir$c ;;
+      *) p= ;;
+    esac
     found=0
-    for p in "$tmp/ir/usr/bin/$c" "$tmp/ir/usr/sbin/$c"; do
+    for p in ${p:+"$p"} "$tmp/ir/usr/bin/$c" "$tmp/ir/usr/sbin/$c"; do
       if [[ -e $p || -L $p ]]; then found=1; fi
     done
     ((found)) || {
