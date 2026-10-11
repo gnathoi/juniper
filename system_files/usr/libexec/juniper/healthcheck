@@ -11,6 +11,7 @@ tries=${JUNIPER_HEALTH_TRIES:-20}
 interval=${JUNIPER_HEALTH_INTERVAL:-15}
 tryboot_flag=${JUNIPER_TRYBOOT_FLAG:-/proc/device-tree/chosen/bootloader/tryboot}
 health_d=${JUNIPER_HEALTH_D:-/usr/lib/juniper/health.d}
+hook_timeout=${JUNIPER_HEALTH_HOOK_TIMEOUT:-60}
 
 healthy() {
   [[ -n $(ip route show default) || -n $(ip -6 route show default) ]] || return 1
@@ -22,10 +23,14 @@ healthy() {
       [[ $(systemctl is-active sshd.service 2>/dev/null) == active ]] || return 1
   fi
   # Image-specific checks (juniper-desktop: greetd must be running). None on headless images.
+  # Each is bounded, so a hung hook can't outlast the unit's timeout (which skips the fallback).
   local hook
   for hook in "$health_d"/*; do
     [[ -x $hook ]] || continue
-    "$hook" || return 1
+    timeout "$hook_timeout" "$hook" || {
+      echo "health hook ${hook##*/} failed" >&2
+      return 1
+    }
   done
 }
 
@@ -43,7 +48,7 @@ for ((i = 0; i < tries; i++)); do
   sleep "$interval"
 done
 
-echo "Health check failed: no default route, or (locked) Tailscale or SSH over it down." >&2
+echo "Health check failed: no default route, (locked) Tailscale or SSH over it down, or an image health hook failed." >&2
 if in_tryboot; then
   echo "Unhealthy update under tryboot; rebooting into the previous deployment." >&2
   systemctl reboot

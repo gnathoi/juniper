@@ -401,6 +401,30 @@ test_healthcheck_hook_failure_falls_back_under_tryboot() {
   check "health: failing hook under tryboot -> reboot" called "systemctl reboot"
 }
 
+test_healthcheck_names_failing_hook() {
+  health_env
+  export JUNIPER_HEALTH_D=$T/health.d
+  mkdir -p "$JUNIPER_HEALTH_D"
+  printf '#!/bin/sh\nexit 1\n' >"$JUNIPER_HEALTH_D/10-greetd" && chmod +x "$JUNIPER_HEALTH_D/10-greetd"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  check "health: failing hook named" stderr_has "health hook 10-greetd failed" "$LIBEXEC/healthcheck"
+  check "health: final message mentions image health hooks" stderr_has "image health hook" "$LIBEXEC/healthcheck"
+}
+
+# A hung hook must not stall the check past the unit's timeout (no fallback then).
+test_healthcheck_hung_hook_times_out() {
+  health_env
+  export JUNIPER_HEALTH_D=$T/health.d JUNIPER_HEALTH_HOOK_TIMEOUT=1
+  mkdir -p "$JUNIPER_HEALTH_D"
+  printf '#!/bin/sh\nexec sleep 30\n' >"$JUNIPER_HEALTH_D/10-hang" && chmod +x "$JUNIPER_HEALTH_D/10-hang"
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  local start=$SECONDS
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "health: hung hook killed after its timeout" test $((SECONDS - start)) -lt 10
+  check "health: hung hook under tryboot -> reboot" called "systemctl reboot"
+}
+
 test_healthcheck_passing_hook_and_no_hooks() {
   health_env
   export JUNIPER_HEALTH_D=$T/health.d
