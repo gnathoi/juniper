@@ -1,0 +1,3 @@
+# raspberrypi/utils (rpifwcrypto/ only). Bump with `just bump-fwcrypto`.
+commit=61371fa6d93463c5451131f7bb68ae145aaf1e7a
+sha256=403c5e034bfa984807fdec6ba1f9940de13d9038fef509be03f5037b8cf86a07

@@ -1,0 +1,645 @@
+#!/usr/bin/env bash
+# Juniper's LUKS2 root, bound to this Pi's OTP key and this card (issue #50). Runs in the
+# initramfs from the 90juniper-cryptroot dracut module.
+#
+#   cryptroot prepare   before udev: first-boot in-place encryption (CIDATA marker `on`),
+#                       resume, recovery sealing, grow, record. Exits 0 unless it can't run.
+#   cryptroot unlock    after udev: opens the root as /dev/mapper/juniper-root.
+#
+# The board passphrase (`fwkey derive`) and the recovery passphrase only move through pipes
+# and /dev/fd/N; they are never in argv, never written to a file, never printed. No `set -x`.
+# CIDATA is mounted read-only and remounted read-write only around each write.
+set -Eeuo pipefail
+
+cmdline_file=${JUNIPER_CMDLINE:-/proc/cmdline}
+bsys=${JUNIPER_BLOCK_SYSFS:-/sys}
+mnt=${JUNIPER_CIDATA_MNT:-/run/juniper/cidata}
+run_dir=${JUNIPER_RUN_DIR:-/run/juniper}
+cpuinfo=${JUNIPER_CPUINFO:-/proc/cpuinfo}
+tryboot_flag=${JUNIPER_TRYBOOT_FLAG:-/proc/device-tree/chosen/bootloader/tryboot}
+root_wait=${JUNIPER_ROOT_WAIT:-30}
+fail_delay=${JUNIPER_UNLOCK_FAIL_DELAY:-120}
+fwkey=${JUNIPER_FWKEY:-/usr/libexec/juniper/fwkey}
+console=${JUNIPER_CONSOLE:-/dev/console}
+lock_dir=${JUNIPER_CRYPTSETUP_LOCKDIR:-/run/cryptsetup}
+[[ $root_wait =~ ^[0-9]+$ ]] || root_wait=30
+[[ $fail_delay =~ ^[0-9]+$ ]] || fail_delay=120
+
+root_type=b921b045-1df0-41c3-af44-4c6f280d3fae # GPT root-arm64
+binding=juniper.luks.root.v1
+grow_sectors=131072 # 64 MiB: room for --reduce-device-size 32M
+slot1_re=$'(^|\n)[[:space:]]+1: luks2'
+
+log() { printf 'juniper-cryptroot: %s\n' "$*" >&2; }
+first_line() { printf '%s' "${1%%$'\n'*}"; }
+
+# --- kernel command line ---
+X=
+karg_off=0
+read_cmdline() {
+  local w words=()
+  [[ -r $cmdline_file ]] && read -r -a words <"$cmdline_file" || true
+  for w in "${words[@]}"; do
+    case $w in
+      root=UUID=*) X=${w#root=UUID=} ;;
+      juniper.encrypt=0) karg_off=1 ;;
+    esac
+  done
+  if [[ -n $X && ! $X =~ ^[A-Za-z0-9-]+$ ]]; then
+    log "ignoring malformed root=UUID=$X"
+    X=
+  fi
+}
+
+# Only an exact big-endian 1 counts (same check as emergency-fallback and healthcheck).
+is_tryboot() {
+  [[ -r $tryboot_flag ]] || return 1
+  [[ $(od -An -tu4 --endian=big -N4 "$tryboot_flag" 2>/dev/null | tr -d ' ') == 1 ]]
+}
+
+# --- blkid (-c /dev/null: the cache goes stale after repartitioning; one -t per call) ---
+bk_devices() { blkid -c /dev/null -t "$1" -o device 2>/dev/null || true; }
+bk_value() { first_line "$(blkid -c /dev/null -s "$1" -o value "$2" 2>/dev/null || true)"; }
+part_type() {
+  local t
+  t=$(first_line "$(blkid -p -s PART_ENTRY_TYPE -o value "$1" 2>/dev/null || true)")
+  printf '%s' "${t,,}"
+}
+
+# part_info DEV: sets part, disk, n from the real block sysfs (I14).
+part=
+disk=
+n=
+part_info() {
+  local p d
+  part=${1##*/}
+  [[ $part =~ ^[A-Za-z0-9]+$ ]] || return 1
+  p=$bsys/class/block/$part
+  [[ -r $p/partition ]] || return 1
+  n=$(<"$p/partition")
+  d=$(readlink -f "$p/..") || return 1
+  disk=${d##*/}
+  [[ $disk =~ ^[A-Za-z0-9]+$ && $n =~ ^[0-9]+$ ]]
+}
+
+# sizes: sets p_start, p_size, d_size (512-byte sectors) for the current part/disk.
+p_start=0
+p_size=0
+d_size=0
+sizes() {
+  p_start=$(<"$bsys/class/block/$part/start") || return 1
+  p_size=$(<"$bsys/class/block/$part/size") || return 1
+  d_size=$(<"$bsys/class/block/$disk/size") || return 1
+  [[ $p_start =~ ^[0-9]+$ && $p_size =~ ^[0-9]+$ && $d_size =~ ^[0-9]+$ ]]
+}
+free_after() { printf '%s' "$((d_size - (p_start + p_size + 34)))"; }
+
+# --- CIDATA: the partition labelled CIDATA on the given disk, mounted read-only ---
+cidata_disk=
+cidata_open() {
+  local want=$1 d found=() keep_part=$part keep_disk=$disk keep_n=$n
+  [[ $cidata_disk == "$want" ]] && return 0
+  cidata_close
+  for d in $(bk_devices LABEL=CIDATA); do
+    if part_info "$d" && [[ $disk == "$want" ]]; then found+=("$d"); fi
+  done
+  part=$keep_part disk=$keep_disk n=$keep_n
+  if ((${#found[@]} != 1)); then
+    log "expected one CIDATA partition on $want, found ${#found[@]}"
+    return 1
+  fi
+  mkdir -p "$mnt" || return 1
+  mount -o ro -t vfat "${found[0]}" "$mnt" || return 1
+  cidata_disk=$want
+}
+cidata_close() {
+  if [[ -n $cidata_disk ]]; then
+    umount "$mnt" || log "could not unmount CIDATA"
+    cidata_disk=
+  fi
+}
+cidata_rw() { mount -o remount,rw "$mnt"; }
+cidata_ro() { mount -o remount,ro "$mnt" || log "could not remount CIDATA read-only"; }
+
+# cidata_write NAME CONTENT: atomic replace (NAME.new, mv, sync) inside a read-write window.
+cidata_write() {
+  local rc=0
+  [[ -n $cidata_disk ]] || return 1
+  cidata_rw || return 1
+  { printf '%s\n' "$2" >"$mnt/$1.new" && mv -f "$mnt/$1.new" "$mnt/$1" && sync; } || rc=1
+  cidata_ro
+  return "$rc"
+}
+
+marker_read() {
+  local l=
+  [[ -n $cidata_disk && -r $mnt/juniper-encrypt ]] || return 0
+  IFS= read -r l <"$mnt/juniper-encrypt" || true
+  l=${l%$'\r'}
+  printf '%s' "${l%"${l##*[![:space:]]}"}"
+}
+
+# Recipient lines in juniper-recovery.txt (blank lines and comments don't count).
+count_recipients() {
+  local c=0 l
+  [[ -r $mnt/juniper-recovery.txt ]] || {
+    printf 0
+    return 0
+  }
+  while IFS= read -r l || [[ -n $l ]]; do
+    l=${l%$'\r'}
+    [[ $l =~ ^[[:space:]]*(#|$) ]] || c=$((c + 1))
+  done <"$mnt/juniper-recovery.txt"
+  printf '%s' "$c"
+}
+
+# --- the record: CIDATA marker (final decisions) and /run/juniper/cryptroot ---
+run_write() {
+  if ! { mkdir -p "$run_dir" && printf '%s\n' "$@" >"$run_dir/cryptroot.new" &&
+    mv -f "$run_dir/cryptroot.new" "$run_dir/cryptroot"; }; then
+    log "could not write $run_dir/cryptroot"
+  fi
+}
+
+# record MARKER: `encrypted` or `not-encrypted:<reason>`, on CIDATA and in /run.
+record() {
+  cidata_write juniper-encrypt "$1" || log "could not record '$1' on CIDATA"
+  case $1 in
+    not-encrypted:*) run_write state=not-encrypted "reason=${1#not-encrypted:}" ;;
+    *) run_write "state=$1" reason= ;;
+  esac
+}
+
+plain_reason() {
+  case $1 in
+    off) printf 'encrypt: false' ;;
+    not-encrypted:*) printf '%s' "${1#not-encrypted:}" ;;
+    on | converting) printf 'encryption deferred until a confirmed boot' ;;
+    encrypted) printf 'CIDATA says encrypted but the root is plain' ;;
+    *) printf 'not requested at flash time' ;;
+  esac
+}
+
+# --- keys and tokens ---
+# with_key DISK CMD...: CMD with the board passphrase on stdin. Fails, without running CMD,
+# unless fwkey derive gives exactly 64 hex characters.
+with_key() {
+  local d=$1 k
+  shift
+  k=$("$fwkey" derive "$d" 2>/dev/null) || k=
+  if [[ ! $k =~ ^[0-9a-f]{64}$ ]]; then
+    k=
+    log "fwkey derive failed for $d"
+    return 1
+  fi
+  printf '%s' "$k" | "$@"
+}
+
+json_field() {
+  first_line "$(printf '%s' "$1" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p")"
+}
+token_get() { cryptsetup token export --token-id "$2" "$1" 2>/dev/null || true; }
+token_read() { json_field "$(token_get "$1" 0)" "$2"; }
+
+# token_write DEV ID_TYPE RECOVERY RECIPIENTS [--token-replace]: token 0, all values strings.
+token_write() {
+  printf '{"type":"juniper","keyslots":[],"root_uuid":"%s","binding":"%s","id_type":"%s","recovery":"%s","recipients":"%s"}' \
+    "$X" "$binding" "$2" "$3" "$4" |
+    cryptsetup token import --token-id 0 "${@:5}" "$1"
+}
+
+# id_type of the disk: the part of `fwkey card-id` before ':' (mmc, nvme, usb, board).
+id_type_of() {
+  local id
+  id=$("$fwkey" card-id "$1" 2>/dev/null) || return 1
+  id=$(first_line "$id")
+  [[ $id =~ ^[a-z]+: ]] || return 1
+  printf '%s' "${id%%:*}"
+}
+
+# --- find ---
+plain=()
+luks=()
+c1=()
+find_plain() { mapfile -t plain < <(bk_devices "UUID=$X"); }
+
+# find_luks: luks = crypto_LUKS partitions labelled juniper-root whose token 0 has
+# root_uuid == X. c1 = those with no juniper token yet (C1: cryptsetup refuses `token import`
+# while a header is marked for reencryption, so the token only follows a finished
+# conversion): GPT root-arm64, on the CIDATA disk, marker `converting`.
+find_luks() {
+  local d j
+  luks=()
+  c1=()
+  for d in $(bk_devices LABEL=juniper-root); do
+    [[ $(bk_value TYPE "$d") == crypto_LUKS ]] || continue
+    j=$(token_get "$d" 0)
+    if [[ $(json_field "$j" type) == juniper ]]; then
+      if [[ $(json_field "$j" root_uuid) == "$X" ]]; then luks+=("$d"); fi
+    elif [[ $(part_type "$d") == "$root_type" ]] && part_info "$d" &&
+      cidata_open "$disk" && [[ $(marker_read) == converting ]]; then
+      c1+=("$d")
+    fi
+  done
+}
+
+wait_for_root() {
+  local i
+  for ((i = 0; ; i++)); do
+    find_plain
+    if ((${#plain[@]})) || [[ -n $(bk_devices LABEL=juniper-root) ]]; then return 0; fi
+    if ((i >= root_wait)); then return 0; fi
+    sleep 1
+  done
+}
+
+# --- first boot ---
+step=
+cleanup() { cidata_close; }
+guard_on() { trap guard_fire ERR EXIT; }
+guard_off() {
+  trap - ERR
+  trap cleanup EXIT
+}
+# C2: until the LUKS header exists, any error or exit records a final fail-open.
+guard_fire() {
+  # In a command substitution: just fail; the main shell decides.
+  if [[ $BASHPID != "$$" ]]; then exit 1; fi
+  trap - ERR EXIT
+  log "${step:-prepare} failed; continuing unencrypted"
+  record "not-encrypted:${step:-prepare} failed"
+  cleanup
+  exit 0
+}
+
+# A failed first boot is final for every disk carrying this root (one of them is mounted).
+fail_open() {
+  local d
+  guard_off
+  log "not encrypting: $1"
+  record "not-encrypted:$1"
+  for d in "${plain[@]:1}"; do
+    if part_info "$d" && cidata_open "$disk"; then
+      case $(marker_read) in on | converting) cidata_write juniper-encrypt "not-encrypted:$1" || true ;; esac
+    fi
+  done
+}
+
+why=
+precheck() {
+  local out k
+  if ((${#plain[@]} > 1)); then
+    why="two disks carry this root filesystem"
+    return 1
+  fi
+  if [[ $(part_type "/dev/$part") != "$root_type" || $cidata_disk != "$disk" ]]; then
+    why="root partition not on the boot disk"
+    return 1
+  fi
+  if ! sizes || (($(free_after) < grow_sectors)); then
+    why="no free space after the root partition"
+    return 1
+  fi
+  if ! age -R "$mnt/juniper-recovery.txt" -o /dev/null </dev/null >/dev/null 2>&1; then
+    why="no usable recovery recipient"
+    return 1
+  fi
+  if ! id_type_of "$disk" >/dev/null; then
+    why="disk not found in sysfs"
+    return 1
+  fi
+  # I7: last, because it may write the OTP key. Its stdout says why; the exit code doesn't.
+  out=$(first_line "$("$fwkey" ensure 2>/dev/null || true)")
+  case $out in
+    ok | generated) ;;
+    *)
+      out=${out#unavailable:}
+      why="firmware key interface unavailable: ${out:-no answer}"
+      return 1
+      ;;
+  esac
+  k=$("$fwkey" derive "$disk" 2>/dev/null) || k=
+  if [[ ! $k =~ ^[0-9a-f]{64}$ ]]; then
+    k=
+    out=$(first_line "$("$fwkey" probe 2>/dev/null || true)")
+    out=${out#unavailable:}
+    why="firmware key interface unavailable: derive failed (${out:-no answer})"
+    return 1
+  fi
+  k=
+}
+
+grow_abs() {
+  printf 'size=%s\n' "$1" | sfdisk -N "$n" --no-reread --no-tell-kernel "/dev/$disk" &&
+    partx -u -n "$n" "/dev/$disk"
+}
+grow_max() {
+  printf 'size=+\n' | sfdisk -N "$n" --no-reread --no-tell-kernel "/dev/$disk" &&
+    partx -u -n "$n" "/dev/$disk"
+}
+
+first_boot() {
+  local cur new cipher keysize fresh=1 dev=/dev/$part
+  if ((karg_off)); then
+    log "juniper.encrypt=0 on the kernel command line; not encrypting (final)"
+    record "not-encrypted:juniper.encrypt=0"
+    return 0
+  fi
+  step=preconditions
+  guard_on
+  if ! precheck; then
+    fail_open "$why"
+    return 0
+  fi
+  log "encrypting the root partition $dev in place; this takes a few minutes, don't cut power"
+
+  step=mark
+  if ! cidata_write juniper-encrypt converting; then
+    fail_open "could not write the CIDATA marker"
+    return 0
+  fi
+  step=relocate
+  if ! { mkdir -p "$lock_dir" && sfdisk --relocate gpt-bak-std "/dev/$disk"; }; then
+    fail_open "$step failed"
+    return 0
+  fi
+  # I15: an absolute size from the kernel's view, never sfdisk's relative +N. The kernel must
+  # see the new size: --reduce-device-size takes 32 MiB from the end of the partition.
+  step=grow
+  cur=$(<"$bsys/class/block/$part/size")
+  if [[ ! $cur =~ ^[0-9]+$ ]] || ! grow_abs "$((cur + grow_sectors))" || ! new=$(<"$bsys/class/block/$part/size") ||
+    ((new < cur + grow_sectors)); then
+    fail_open "$step failed"
+    return 0
+  fi
+
+  step=encrypt
+  if grep -Eq '^Features[[:space:]]*:(.*[[:space:]])?aes([[:space:]]|$)' "$cpuinfo" 2>/dev/null; then
+    cipher=aes-xts-plain64 keysize=512
+  else
+    cipher=xchacha12,aes-adiantum-plain64 keysize=256
+  fi
+  if with_key "$disk" cryptsetup reencrypt --batch-mode --encrypt --init-only --type luks2 \
+    --key-slot 0 --reduce-device-size 32M --cipher "$cipher" --key-size "$keysize" \
+    --sector-size 512 --pbkdf pbkdf2 --pbkdf-force-iterations 1000 --label juniper-root \
+    --key-file - "$dev"; then
+    :
+  elif cryptsetup isLuks "$dev" 2>/dev/null; then
+    # Never fail open over a header: the card would boot neither plain nor encrypted.
+    fresh=0
+    log "init-only failed after writing a header; continuing as an interrupted conversion"
+  else
+    fail_open "$step failed"
+    return 0
+  fi
+  # The header exists: from here a failure leaves `converting` and the next boot resumes.
+  # The token follows the finished conversion (luks_steps).
+  guard_off
+  step=
+  luks_steps "$dev" "$fresh" || unfinished "$dev"
+}
+
+unfinished() {
+  log "could not finish $1; the next boot retries"
+  run_write state=not-encrypted "reason=encryption unfinished; the next boot retries"
+}
+
+# --- resume, seal, grow, record (each skips itself when there is nothing to do) ---
+seal() {
+  local dev=$1 r rc=0 armor
+  if [[ $cidata_disk != "$disk" ]]; then
+    log "no CIDATA on $disk; the recovery key stays pending"
+    return 1
+  fi
+  r=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n') || r=
+  if [[ ! $r =~ ^[0-9a-f]{64}$ ]]; then
+    r=
+    return 1
+  fi
+  cidata_rw || {
+    r=
+    return 1
+  }
+  printf '%s' "$r" | age -R "$mnt/juniper-recovery.txt" -a -o "$mnt/juniper-recovery.age.new" || rc=1
+  cidata_ro
+  if ((rc)); then
+    r=
+    log "age could not seal the recovery key; it stays pending and the next boot retries"
+    return 0
+  fi
+  # I5: slot 1 is the recovery slot. A cut-short earlier try may have left one: replace it.
+  if [[ $(cryptsetup luksDump "$dev" 2>/dev/null || true) =~ $slot1_re ]]; then
+    with_key "$disk" cryptsetup luksKillSlot --batch-mode --key-file - "$dev" 1 || rc=1
+  fi
+  if ((rc == 0)); then
+    with_key "$disk" cryptsetup luksAddKey --batch-mode --key-slot 1 --pbkdf pbkdf2 \
+      --pbkdf-force-iterations 1000 --key-file - "$dev" /dev/fd/3 3< <(printf '%s' "$r") || rc=1
+  fi
+  r=
+  unset r
+  ((rc == 0)) || return 1
+  # I10: a second copy of the ciphertext in the header, JSON-escaped.
+  armor=$(<"$mnt/juniper-recovery.age.new") || return 1
+  armor=${armor//\\/\\\\}
+  armor=${armor//\"/\\\"}
+  armor=${armor//$'\n'/\\n}\\n
+  printf '{"type":"juniper-recovery","keyslots":[],"age":"%s"}' "$armor" |
+    cryptsetup token import --token-id 1 --token-replace "$dev" || return 1
+  cidata_rw || return 1
+  { mv -f "$mnt/juniper-recovery.age.new" "$mnt/juniper-recovery.age" && sync; } || rc=1
+  cidata_ro
+  ((rc == 0)) || return 1
+  token_write "$dev" "$(token_read "$dev" id_type)" sealed "$(count_recipients)" --token-replace
+}
+
+# adopt DEV: import token 0 (recovery pending) on a finished header that has none yet (C1).
+adopt() {
+  local it
+  [[ $(token_read "$1" type) == juniper ]] && return 0
+  part_info "$1" || return 1
+  log "importing the juniper token on $1"
+  it=$(id_type_of "$disk") || it=board
+  token_write "$1" "$it" pending "$(count_recipients)"
+}
+
+luks_steps() {
+  local dev=$1 fresh=$2 m dump it
+  part_info "$dev" || {
+    log "$dev not found in sysfs"
+    return 1
+  }
+  cidata_open "$disk" || log "no CIDATA on $disk"
+  m=$(marker_read)
+  dump=$(cryptsetup luksDump "$dev") || return 1
+  if [[ $dump == *online-reencrypt* ]]; then
+    # A killed run needs repair before --resume-only; right after --init-only it doesn't.
+    if ((fresh == 0)); then
+      log "resuming an interrupted encryption of $dev"
+      with_key "$disk" cryptsetup repair --batch-mode --key-file - "$dev" || return 1
+    fi
+    with_key "$disk" cryptsetup reencrypt --batch-mode --resume-only --progress-frequency 10 \
+      --key-file - "$dev" || return 1
+    dump=$(cryptsetup luksDump "$dev") || return 1
+    [[ $dump != *online-reencrypt* ]] || return 1
+    log "encryption of $dev finished"
+  fi
+  adopt "$dev" || return 1
+  if [[ $(token_read "$dev" recovery) == pending ]]; then
+    seal "$dev" || log "sealing the recovery key failed; it stays pending and the next boot retries"
+  fi
+  if [[ $m == converting ]]; then
+    # I1/ruling 6: the initramfs grows only on the encrypting path, after sealing (I13).
+    if sizes && (($(free_after) > 2048)); then
+      grow_max || return 1
+    fi
+    record encrypted
+  else
+    run_write state=encrypted reason=
+  fi
+}
+
+prepare() {
+  local m d
+  trap cleanup EXIT
+  read_cmdline
+  if [[ -z $X ]]; then
+    log "no root=UUID= on the kernel command line; nothing to do"
+    return 0
+  fi
+  wait_for_root
+  if ((${#plain[@]})); then
+    if ! part_info "${plain[0]}"; then
+      log "${plain[0]} not found in sysfs; leaving it plain"
+      run_write state=not-encrypted "reason=root partition not found in sysfs"
+      return 0
+    fi
+    cidata_open "$disk" || log "no CIDATA on $disk"
+    m=$(marker_read)
+    if is_tryboot; then
+      log "under tryboot; header changes deferred until a confirmed boot"
+      run_write state=not-encrypted "reason=$(plain_reason "$m")"
+      return 0
+    fi
+    case $m in
+      on | converting) first_boot ;;
+      *) run_write state=not-encrypted "reason=$(plain_reason "$m")" ;;
+    esac
+    return 0
+  fi
+  find_luks
+  if ((${#luks[@]} + ${#c1[@]} == 0)); then
+    log "no partition carries root UUID=$X"
+    return 0
+  fi
+  if is_tryboot; then
+    log "under tryboot; header changes deferred until a confirmed boot"
+    run_write state=encrypted reason=
+    return 0
+  fi
+  mkdir -p "$lock_dir" || log "could not create $lock_dir"
+  for d in "${luks[@]}" "${c1[@]}"; do
+    luks_steps "$d" 0 || unfinished "$d"
+  done
+  return 0
+}
+
+# --- unlock ---
+report_open() {
+  local dev=$1 st cipher j it rec n kl
+  st=$(cryptsetup status juniper-root 2>/dev/null || true)
+  cipher=$(first_line "$(printf '%s\n' "$st" | sed -n 's/^[[:space:]]*cipher:[[:space:]]*//p')")
+  j=$(token_get "$dev" 0)
+  it=$(json_field "$j" id_type)
+  rec=$(json_field "$j" recovery)
+  n=$(json_field "$j" recipients)
+  kl=$(first_line "$("$fwkey" lock 2>/dev/null || true)")
+  [[ $kl == locked ]] || kl=unavailable
+  if [[ $it == board ]]; then it=board; else it=board+${it:-unknown}; fi
+  if [[ $rec == sealed ]]; then rec=sealed:${n:-0}; else rec=pending; fi
+  run_write state=encrypted reason= "cipher=$cipher" "binding=$it" "key_lock=$kl" "recovery=$rec"
+}
+
+# try_open: the first candidate this Pi's key opens. A tokenless header (C1) is adopted
+# first if its conversion finished (power cut before the token); one still marked for
+# reencryption is never opened (half of it is plaintext) and sets `unfinished_conv`.
+unfinished_conv=0
+try_open() {
+  local d dump
+  for d in "${luks[@]}" "${c1[@]}"; do
+    part_info "$d" || continue
+    dump=$(cryptsetup luksDump "$d" 2>/dev/null || true)
+    if [[ $dump == *online-reencrypt* ]]; then
+      log "$d is still being encrypted; not opening it (prepare resumes it)"
+      unfinished_conv=1
+      continue
+    fi
+    if [[ $(token_read "$d" type) != juniper ]]; then
+      # I9: no header writes under tryboot (a converting card never boots under tryboot).
+      is_tryboot && continue
+      adopt "$d" || continue
+      part_info "$d" || continue
+    fi
+    if with_key "$disk" cryptsetup open --allow-discards --key-file - "$d" juniper-root; then
+      log "unlocked $d"
+      report_open "$d"
+      return 0
+    fi
+  done
+  return 1
+}
+
+unlock() {
+  local a tries=3 seen=0 reason='' msg
+  trap cleanup EXIT
+  read_cmdline
+  if [[ -z $X ]]; then
+    log "no root=UUID= on the kernel command line; nothing to unlock"
+    return 0
+  fi
+  is_tryboot && tries=1
+  for ((a = 1; a <= tries; a++)); do
+    find_plain
+    if ((${#plain[@]})); then
+      if [[ -r $run_dir/cryptroot ]]; then
+        reason=$(first_line "$(sed -n 's/^reason=//p' "$run_dir/cryptroot" || true)")
+      fi
+      run_write state=not-encrypted "reason=$reason"
+      return 0
+    fi
+    find_luks
+    if ((${#luks[@]} + ${#c1[@]})); then
+      seen=1
+      try_open && return 0
+    fi
+    if ((a < tries)); then sleep 10; fi
+  done
+  if ((seen == 0)); then
+    log "no plain or juniper-root partition for UUID=$X; leaving the root device to dracut"
+    return 0
+  fi
+  if is_tryboot; then
+    log "unlock failed under tryboot; failing so the firmware returns to the previous deployment"
+    return 1
+  fi
+  if ((unfinished_conv)); then
+    msg="juniper-cryptroot: encrypting this card could not resume (see the messages above); every boot retries. If it keeps failing, reflash the card: its recovery key is not sealed yet"
+  else
+    msg="juniper-cryptroot: this card is bound to another Raspberry Pi or another card; unlock it on a laptop with the recovery key (just unlock-card)"
+  fi
+  printf '%s\n' "$msg" >&2
+  { printf '\n%s\n\n' "$msg" >"$console"; } 2>/dev/null || true
+  sleep "$fail_delay"
+  return 1
+}
+
+usage() {
+  echo "usage: cryptroot prepare|unlock" >&2
+  exit 2
+}
+# Not inside a condition or a ||/&& list: errexit and the ERR trap must stay in force.
+(($# == 1)) || usage
+case $1 in
+  prepare) prepare ;;
+  unlock) unlock ;;
+  *) usage ;;
+esac

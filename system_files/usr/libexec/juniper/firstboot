@@ -26,6 +26,11 @@ scrub_cidata() {
   if [[ -e $cidata_dir/network-config ]]; then shred -u "$cidata_dir/network-config"; fi
   if [[ -e $cidata_dir/user-data ]]; then shred "$cidata_dir/user-data"; fi
   cp "$share/cidata/user-data" "$cidata_dir/user-data"
+  # The age-sealed recovery blob stays on the device: it is only an unlock aid, no secret.
+  if [[ -e $cidata_dir/juniper-recovery.age ]]; then
+    mkdir -p "$state_dir"
+    install -m 0644 "$cidata_dir/juniper-recovery.age" "$state_dir/recovery.age"
+  fi
   sync
 }
 

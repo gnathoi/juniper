@@ -49,7 +49,7 @@ These are repeated in each task brief where they apply.
   - default off until Task 13, then Task 14.
 - **Key rules:**
   - key id 1;
-  - probe with `hmac` on `juniper.probe.v1`;
+  - probe with `hmac` on `juniper.probe.v1`; **Superseded 2026-10-11:** `hmac` wedged the mailbox on EEPROM 2025-11-05. Probe with `pubkey` (250 = not set), gate on build-timestamp >= 1769002727 (Pi 5; fail open on Pi 4), and bound every call with a deadline and a wedged marker (spec, "Hardware findings");
   - `genkey --key-id 1 --alg ec` **only** on `KEY_NOT_SET` (error 6), and **only as the last first-boot precondition** (I7);
   - never `privkey`, `rpi-otp-private-key`, `vcmailbox 0x00030081` or `set-key-usage`;
   - after unlock, `set-key-status 1 READ_LOCKED GEN_LOCKED HMAC_LOCKED USAGE_LOCKED` **is best-effort** (ruling 4, I3): `unavailable` is expected, and it never fails the boot;
@@ -254,6 +254,8 @@ In `90-juniper.conf`, add `early_microcode="no"` with the comment `# else dracut
 
 ### Task 3: `fwkey` — probe, ensure, card id, derive, lock — **critical path**
 
+> **Superseded 2026-10-11 (read first):** this task's `hmac` probe and its token-before-resume ordering failed on hardware. See the spec's "Hardware findings": gate on build-timestamp, probe with `pubkey`, deadline every call, token 0 only after the conversion.
+
 **Files:**
 - Create: `system_files/usr/libexec/juniper/fwkey`
 - Modify: `tests/unit.sh`
@@ -273,6 +275,8 @@ In `90-juniper.conf`, add `early_microcode="no"` with the comment `# else dracut
 | `fwkey card-id DISK` (kernel name, for example `mmcblk0`) | `mmc:<cid>`, `nvme:<serial>`, `usb:<vid>:<pid>:<serial>` or `board:` (a USB disk with no serial, ruling 1) | 0; 1 only if DISK doesn't exist in sysfs |
 | `fwkey derive DISK` | **exactly** 64 lowercase hex bytes, **no newline** (`printf '%s'`) | 1 on any failure, with empty stdout |
 | `fwkey lock` | `locked` or `unavailable` | **always 0** (best-effort, ruling 4) |
+
+**Superseded 2026-10-11:** the `hmac` probe below is dead; use `pubkey` (spec, "Hardware findings").
 
 Environment: `JUNIPER_SYSFS` (default `/sys`; used for the id attributes and the USB walk), `JUNIPER_VCIO` (default `/dev/vcio`), `RPI_FW_CRYPTO` (default `rpi-fw-crypto`). No temporary files at all. The probe's stdout and stderr are captured together: `both=$(printf 'juniper.probe.v1' | hmac 2>&1)`.
 
@@ -366,6 +370,7 @@ fw_error() { printf '%s\n' "$1" | sed -n 's/^Last crypto error: \([0-9]*\).*/\1/
 probe() {
   [[ -e $vcio ]] || { echo "unavailable:no $vcio"; return; }
   local both err
+  # Superseded 2026-10-11: probe with pubkey, not hmac (wedged the mailbox)
   both=$(printf 'juniper.probe.v1' | hmac 2>&1) || true
   if printf '%s\n' "$both" | grep -Eqx '[0-9a-f]{64}'; then echo ok; return; fi
   err=$(fw_error "$both")
@@ -402,6 +407,8 @@ derive() {
 ---
 
 ### Task 4: `cryptroot` — prepare (before udev) and unlock (after udev) — **critical path**
+
+> **Superseded 2026-10-11 (read first):** this task's `hmac` probe and its token-before-resume ordering failed on hardware. See the spec's "Hardware findings": gate on build-timestamp, probe with `pubkey`, deadline every call, token 0 only after the conversion.
 
 **Files:**
 - Create: `system_files/usr/libexec/juniper/cryptroot`
@@ -451,9 +458,9 @@ derive() {
    6. Grow by 64 MiB with an absolute size (I15). `cur` is the partition's size in sectors (`cat $JUNIPER_BLOCK_SYSFS/class/block/$part/size`). Run `printf 'size=%s\n' "$((cur + 131072))" | sfdisk -N "$n" --no-reread --no-tell-kernel /dev/$disk`, then `partx -u -n "$n" /dev/$disk`.
    7. `fwkey derive "$disk" | cryptsetup reencrypt --batch-mode --encrypt --init-only --type luks2 --key-slot 0 --reduce-device-size 32M --cipher "$cipher" --key-size "$keysize" --sector-size 512 --pbkdf pbkdf2 --pbkdf-force-iterations 1000 --label juniper-root --key-file - "/dev/$part"`.
    8. **Disarm the trap.** From here, failures leave the marker at `converting` so the next boot resumes.
-   9. Import token 0 with `recovery: pending`, `recipients: <n>` and `id_type` (from `fwkey card-id`, the part before `:`).
+   9. **Superseded 2026-10-11:** cryptsetup refuses `token import` while the header is marked for reencryption (reboot loop). Import token 0 only after the conversion completes; before then the candidate is found by the `converting` marker, GPT root type and CIDATA disk. Original text: import token 0 with `recovery: pending`, `recipients: <n>` and `id_type` (from `fwkey card-id`, the part before `:`).
 4. **Resume.**
-   - A LUKS candidate with no token (the C1 case) gets token 0 imported first.
+   - A LUKS candidate with no token (the C1 case) gets token 0 imported first. (**Superseded 2026-10-11:** it is imported only once the conversion has finished.)
    - If `cryptsetup luksDump` shows `online-reencrypt` in its requirements:
      - after an interruption (a second boot): `fwkey derive | cryptsetup repair --batch-mode --key-file - DEV`;
      - then `fwkey derive | cryptsetup reencrypt --batch-mode --resume-only --progress-frequency 10 --key-file - DEV`.
@@ -505,6 +512,7 @@ test_cryptroot_first_boot_sequence() {
   check "prep: marker converting before relocate" order "mount -o remount,rw" "sfdisk --relocate gpt-bak-std /dev/mmcblk0"
   check "prep: +64 MiB absolute" grep -qx "size=$((12584927 + 131072))" "$T/sfdisk.1"
   check "prep: init-only slot 0" called "--init-only --type luks2 --key-slot 0 --reduce-device-size 32M"
+  # Superseded 2026-10-11: the token now follows the finished conversion
   check "prep: token before resume" order "cryptsetup token import --token-id 0" "--resume-only"
   check "prep: sector 512, aes" called "--cipher aes-xts-plain64 --key-size 512 --sector-size 512"
   check "prep: age before slot 1" order "age -R" "cryptsetup luksAddKey --batch-mode --key-slot 1"
@@ -538,6 +546,7 @@ test_cryptroot_genkey_only_last() {   # I7
   done
 }
 test_cryptroot_recipients_validated_by_age() { … touch $T/age.fail → reason "no usable recovery recipient", no cryptsetup … }   # C3
+# Superseded 2026-10-11: token imported only after the conversion; candidate found by marker + GPT type + CIDATA disk
 test_cryptroot_resume_after_header_without_token() {   # C1
   cryptroot_env luks-notoken converting; "$LIBEXEC/cryptroot" prepare
   check "prep: token imported" called "cryptsetup token import --token-id 0"

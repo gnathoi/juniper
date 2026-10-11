@@ -55,6 +55,20 @@ issue.
   Debian/dpkg error on the runner; see `gh run list -R AlmaLinux/bootc-images-rpi`). No issue
   existed on 2026-10-10. Check it's still failing before filing.
 
+### Encryption at rest (Juniper #50)
+
+- Package `rpi-fw-crypto` (librpifwcrypto and the CLI) for EL10; Juniper builds it from a
+  pinned commit today.
+- Ship `rpi-eeprom-firmware` 2026-06-17 or later. It has the per-operation key locks
+  (`set-key-status ... HMAC_LOCKED`) that Juniper wants after unlock (ruling 4 on #50). Until
+  then a root process on a running device can derive the disk key.
+
+## bootc-image-builder
+
+- Every card of a release gets identical filesystem UUIDs (F3 in the encryption design). Per-card
+  UUIDs would make cloning and mixing up cards visible; encryption works around it by tying
+  the root to the card's serial and the LUKS header UUID.
+
 ## kfox1111/rpi-bootc-bootloader
 
 - **Pi 4 firmware never updated:** only kernel, initrd, DTBs, overlays and `rpi-config.txt`

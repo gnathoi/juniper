@@ -12,10 +12,12 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ### Added
 
+- Opt-in encryption at rest (`encrypt: true` in flash.yaml, Pi 5 with bootloader EEPROM 2026-01-21 or later): the first boot encrypts the root with LUKS2, bound to the board's one-time-programmable key and the card's serial, with an age recovery keyslot sealed to your flash.yaml SSH keys (or `recovery_key:`). `just unlock-card DEVICE` opens a card on a laptop with your SSH private key. New metrics `juniper_encrypted`, `juniper_encryption_key_locked` and `juniper_encryption_recovery_sealed`. README section "Encryption at rest"
 - `ujust update-unhold` clears a held update's strikes (`bad-digests`) and the held note, prints which digests it cleared or "nothing held", so the image is tried again
 
 ### Changed
 
+- config.txt sets `lock_device_private_key=1`, so Linux can no longer read the Pi's OTP device key (it can still use it)
 - `bootc status` shows Juniper's version (e.g. 20261011) instead of the base image's: every image sets the `org.opencontainers.image.version` label. A derived image inherits it unless it sets its own
 - `ujust pi-status` no longer echoes its commands
 

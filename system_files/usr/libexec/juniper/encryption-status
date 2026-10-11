@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+# What this Pi's root really is (issue #50). juniper-encryption-status.service runs it once per
+# boot and it writes /var/lib/juniper/encryption, which the login banner, `ujust pi-status` and
+# juniper-metrics read. The initramfs (cryptroot) leaves its verdict in /run/juniper/cryptroot;
+# the live device has the last word: the root counts as encrypted only if a crypt layer sits
+# under /sysroot. With no verdict at all, the CIDATA marker tells an image flashed before
+# encryption support from a prepare step that never ran.
+#
+#   encryption-status          write /var/lib/juniper/encryption
+#   encryption-status --print  the `ujust pi-status` line, from that file
+#
+# `requested=no` is a card that never asked for encryption: shown quietly, never as a warning.
+set -uo pipefail
+
+state_dir=${JUNIPER_STATE_DIR:-/var/lib/juniper}
+run_dir=${JUNIPER_RUN_DIR:-/run/juniper}
+out=$state_dir/encryption
+
+# kv FILE KEY: the first value of KEY in a key=value file, printable characters only.
+kv() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1 | tr -cd '[:print:]'; }
+
+# retries RAW: does the next boot try again by itself (rather than needing a reflash)?
+retries() {
+  case $1 in 'encryption unfinished'* | 'encryption deferred'*) return 0 ;; esac
+  return 1
+}
+
+# human RAW: a reason from cryptroot in plain words.
+human() {
+  case $1 in
+    *firmware-too-old*) echo "the Pi's firmware is too old to hold the key; update the Pi's EEPROM: sudo rpi-eeprom-update -a" ;;
+    *pi4-unverified*) echo "the Pi 4 firmware key interface is unverified, so it was not used" ;;
+    *firmware-wedged*) echo "the Pi's firmware key interface stopped answering" ;;
+    *'firmware key interface unavailable'*) echo "the Pi's firmware key interface is unavailable (${1#*unavailable: })" ;;
+    'encryption unfinished'*) echo "encryption was interrupted and will finish on the next boot" ;;
+    'encryption deferred'*) echo "encryption starts after the first confirmed boot" ;;
+    'two disks carry'*) echo "two disks carry this root filesystem" ;;
+    'no free space'*) echo "no free space after the root partition" ;;
+    'no usable recovery recipient'*) echo "no usable recovery key was supplied" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+# Quiet reasons: the card never asked for encryption (or was told not to).
+asked_for() {
+  case $1 in
+    'not requested at flash time' | 'encrypt: false' | 'juniper.encrypt=0' | 'flashed before encryption support') return 1 ;;
+  esac
+  return 0
+}
+
+if [[ ${1:-} == --print ]]; then
+  [[ -r $out ]] || {
+    echo "Storage: unknown (no encryption report yet)"
+    exit 0
+  }
+  state=$(kv "$out" state)
+  if [[ $state == encrypted ]]; then
+    bind='bound to this Pi and card'
+    [[ $(kv "$out" binding) == board ]] && bind='bound to this Pi only (USB disk has no serial; a clone unlocks on this Pi)'
+    rec=$(kv "$out" recovery)
+    case $rec in
+      sealed:*) rec="sealed to ${rec#sealed:} keys" ;;
+      *) rec="NOT sealed yet (${rec:-unknown})" ;;
+    esac
+    printf 'Storage: encrypted (LUKS2 %s, %s; key lock: %s; recovery: %s)\n' \
+      "$(kv "$out" cipher)" "$bind" "$(kv "$out" key_lock)" "$rec"
+  elif [[ $state == unknown ]]; then
+    printf 'Storage: UNKNOWN (%s). %s\n' "$(kv "$out" friendly)" "$(kv "$out" advice)"
+  elif [[ $(kv "$out" requested) == yes ]]; then
+    printf 'Storage: NOT ENCRYPTED (%s). %s\n' "$(kv "$out" friendly)" "$(kv "$out" advice)"
+  else
+    printf 'Storage: not encrypted (%s)\n' "$(kv "$out" friendly)"
+  fi
+  exit 0
+fi
+
+# --- write the state file ---
+run=$run_dir/cryptroot
+state=
+reason=
+if [[ -r $run ]]; then
+  state=$(kv "$run" state)
+  reason=$(kv "$run" reason)
+fi
+
+# Is a crypt layer under the root? (lsblk -s walks from the root device down to the disk.)
+live=plain
+src=$(findmnt -no SOURCE "${JUNIPER_ROOT_MOUNT:-/sysroot}" 2>/dev/null)
+src=${src%%[[]*}
+if [[ -n $src ]] && lsblk -no TYPE -s "$src" 2>/dev/null | grep -qx crypt; then live=crypt; fi
+
+marker=
+unreadable=
+dir=
+mounted=
+cleanup() {
+  if [[ -n $mounted ]]; then
+    umount "$dir" 2>/dev/null
+    rmdir "$dir" 2>/dev/null
+    mounted=
+  fi
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM
+if [[ -z $state ]]; then
+  # No verdict from the initramfs: read the CIDATA marker, read-only. firstboot may hold the
+  # partition read-write at the same moment (EBUSY; the unit cannot be ordered after it without a cycle through the health check), so retry; a mount that still fails means
+  # we do not know, which is reported loudly, never as "flashed before encryption support".
+  dir=${JUNIPER_CIDATA_DIR:-}
+  if [[ -z $dir ]]; then
+    if dev=$("${JUNIPER_CIDATA_DEVICE:-/usr/libexec/juniper/cidata-device}" 2>/dev/null) && [[ -n $dev ]]; then
+      dir=$(mktemp -d) || exit 1
+      for _ in 1 2 3 4 5; do
+        if mount -o ro "$dev" "$dir" 2>/dev/null; then
+          mounted=1
+          break
+        fi
+        sleep "${JUNIPER_MOUNT_RETRY_DELAY:-2}"
+      done
+      if [[ -z $mounted ]]; then
+        rmdir "$dir"
+        dir=
+        unreadable=1
+      fi
+    fi
+  fi
+  if [[ -n $dir && -e $dir/juniper-encrypt ]]; then
+    marker=$(head -n1 "$dir/juniper-encrypt" | tr -cd '[:print:]')
+    marker=${marker%"${marker##*[![:space:]]}"}
+  fi
+  cleanup
+  if [[ -n $unreadable ]]; then
+    state=unknown
+    reason='could not read the CIDATA marker (mount failed)'
+  elif [[ -z $marker ]]; then
+    state=not-encrypted
+    reason='flashed before encryption support'
+  else
+    state=not-encrypted
+    reason='prepare did not run'
+  fi
+fi
+
+if [[ $live == crypt ]]; then
+  state=encrypted
+  reason=
+elif [[ $state == encrypted ]]; then
+  state=not-encrypted
+  reason='root is not on dm-crypt'
+fi
+
+if [[ $state == encrypted ]]; then
+  requested=yes
+elif [[ $state == unknown ]]; then
+  requested=yes
+elif [[ -z $reason ]]; then
+  # No reason recorded (cryptroot unlock found no verdict): unknown, not a warning.
+  requested=no
+elif [[ $reason == 'prepare did not run' ]]; then
+  case $marker in on | converting) requested=yes ;; *) requested=no ;; esac
+elif asked_for "$reason"; then
+  requested=yes
+else
+  requested=no
+fi
+
+friendly=
+advice=
+if [[ $state != encrypted ]]; then
+  friendly=$(human "$reason")
+  [[ -n $reason ]] || friendly='reason not recorded'
+  if [[ $state == unknown ]]; then
+    advice="It is checked again on the next boot."
+  elif retries "$reason"; then advice="The next boot retries."; else advice="Reflash to encrypt."; fi
+fi
+
+mkdir -p "$state_dir" || exit 1
+tmp=$(mktemp "$state_dir/.encryption.XXXXXX") || exit 1
+{
+  printf 'state=%s\nrequested=%s\nreason=%s\nfriendly=%s\nadvice=%s\n' "$state" "$requested" "$reason" "$friendly" "$advice"
+  if [[ $state == encrypted ]]; then
+    for k in cipher binding key_lock recovery; do
+      v=
+      [[ -r $run ]] && v=$(kv "$run" "$k")
+      printf '%s=%s\n' "$k" "$v"
+    done
+  fi
+} >"$tmp" && chmod 0644 "$tmp" && mv -f "$tmp" "$out" && exit 0
+rm -f "$tmp"
+exit 1

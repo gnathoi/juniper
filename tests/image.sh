@@ -3,6 +3,10 @@
 #   just image=juniper test-image   /   just image=juniper-minimal test-image
 #   just image=juniper-desktop test-image
 set -euo pipefail
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+# Name the failing check: most of them are silent greps.
+trap 'echo "image.sh:$LINENO: failed: $BASH_COMMAND" >&2' ERR
 
 # shellcheck source=/dev/null
 . /usr/lib/os-release
@@ -17,6 +21,11 @@ test -s /usr/share/licenses/juniper/LICENSE
 test -s /usr/share/licenses/juniper/THIRD_PARTY.md
 grep -q 'BSD 3-Clause' /usr/share/licenses/tailscale/LICENSE
 
+# fail MSG: stop the image test with a message (a bare `set -e` exit prints nothing).
+fail() {
+  echo "image test: $*" >&2
+  exit 1
+}
 need_cmds() {
   for cmd; do
     command -v "$cmd" >/dev/null || {
@@ -86,7 +95,8 @@ need_enabled juniper-firstboot.service juniper-tailscale-join.service
 test -x /usr/libexec/juniper/tailscale-join
 test -x /usr/libexec/juniper/lan-ssh
 test -x /usr/libexec/juniper/metrics
-need_enabled juniper-update.timer juniper-image-prune.timer juniper-metrics.timer juniper-reboot.timer juniper-healthcheck.service juniper-lan-ssh-status.service
+test -x /usr/libexec/juniper/encryption-status
+need_enabled juniper-update.timer juniper-image-prune.timer juniper-metrics.timer juniper-reboot.timer juniper-healthcheck.service juniper-lan-ssh-status.service juniper-encryption-status.service
 need_cmds rpi-bootc-bootloader
 grep -qx 'TRYBOOT=1' /etc/rpi-bootc-bootloader/tryboot.conf
 test -x /usr/libexec/juniper/bootloader
@@ -112,6 +122,14 @@ grep -qx 'OnCalendar=Tue \*-\*-\* 04:00:00' /usr/lib/systemd/system/juniper-rebo
   exit 1
 }
 systemd-analyze verify /usr/lib/systemd/system/juniper-*.service /usr/lib/systemd/system/juniper-*.timer
+systemd-analyze verify /usr/lib/dracut/modules.d/90juniper-cryptroot/juniper-cryptroot-*.service
+# prepare runs while udevd-control.socket exists but udevd doesn't: libdevmapper must not
+# wait for udev there; unlock (after udevd) must keep udev sync.
+grep -qx 'Environment=DM_DISABLE_UDEV=1' /usr/lib/dracut/modules.d/90juniper-cryptroot/juniper-cryptroot-prepare.service
+if grep -q DM_DISABLE_UDEV /usr/lib/dracut/modules.d/90juniper-cryptroot/juniper-cryptroot-unlock.service; then
+  echo "unlock must keep udev sync (no DM_DISABLE_UDEV)"
+  exit 1
+fi
 # Ordering cycles only show up in a whole boot transaction (and verify still exits 0).
 # cloud-init's generator adds cloud-init.target on first boot; cloud-final runs after
 # multi-user.target, so nothing multi-user.target pulls in may order itself after it.
@@ -125,14 +143,56 @@ need_cmds rpi-eeprom-update lspci strings
 # Trimmed initramfs (90-juniper.conf): ostree and crypt in, network root/VM/RAID/TPM out.
 for img in /usr/lib/modules/*/initramfs.img; do
   mods=$(lsinitrd "$img" | sed -n '/^dracut modules:/,/^=/p')
-  for m in ostree crypt systemd-initrd rootfs-block; do grep -qx "$m" <<<"$mods"; done
+  for m in ostree crypt systemd-initrd rootfs-block juniper-cryptroot; do grep -qx "$m" <<<"$mods"; done
   for m in nfs network-manager qemu lvm clevis fips btrfs; do
     if grep -qx "$m" <<<"$mods"; then
       echo "initramfs still has $m"
       exit 1
     fi
   done
-  (($(stat -c %s "$img") < 35 * 1024 * 1024))
+  echo "initramfs size: $(stat -c %s "$img") bytes ($img)"
+  (($(stat -c %s "$img") < 40 * 1024 * 1024))
+  # Encrypted root (issue #50): the juniper-cryptroot module, its tools, units and modules.
+  lsinitrd "$img" >"$tmp/inv"
+  for f in usr/sbin/cryptsetup usr/bin/rpi-fw-crypto usr/bin/age usr/sbin/sfdisk usr/sbin/partx usr/sbin/blkid \
+    usr/libexec/juniper/cryptroot usr/libexec/juniper/fwkey \
+    usr/lib/systemd/system/juniper-cryptroot-prepare.service usr/lib/systemd/system/juniper-cryptroot-unlock.service \
+    sysinit.target.wants/juniper-cryptroot-prepare.service initrd.target.wants/juniper-cryptroot-unlock.service \
+    kernel/drivers/md/dm-crypt.ko kernel/drivers/md/dm-mod.ko kernel/crypto/adiantum.ko kernel/crypto/algif_skcipher.ko \
+    arch/arm64/crypto/aes-ce-blk.ko usr/sbin/dmsetup usr/lib/udev/rules.d/10-dm.rules \
+    usr/lib/udev/rules.d/13-dm-disk.rules usr/lib/udev/rules.d/95-dm-notify.rules; do
+    grep -q "$f" "$tmp/inv" || {
+      echo "initramfs lacks $f"
+      exit 1
+    }
+  done
+  # Every command cryptroot/fwkey can run resolves inside the unpacked initramfs. The list is
+  # derived from the initramfs's own copies of the scripts (tests/script-commands.py, which
+  # tests/unit.sh also checks against module-setup.sh), plus a fixed floor in case the
+  # extractor ever under-reports. /usr/sbin is not merged into /usr/bin on EL10.
+  rm -rf "$tmp/ir"
+  mkdir "$tmp/ir"
+  (cd "$tmp/ir" && lsinitrd --unpack "$img" >/dev/null)
+  bash -n "$tmp/ir/usr/libexec/juniper/cryptroot"
+  bash -n "$tmp/ir/usr/libexec/juniper/fwkey"
+  derived=$(python3 "$(dirname "$0")/script-commands.py" "$tmp/ir/usr/libexec/juniper/cryptroot" "$tmp/ir/usr/libexec/juniper/fwkey")
+  grep -qx wc <<<"$derived" # the extractor works (fwkey's firmware gate uses wc)
+  for c in $derived cryptsetup rpi-fw-crypto age sfdisk partx blkid mount umount mkdir grep sed tr od readlink sync mv sleep modprobe env bash wc; do
+    case $c in
+      '$'*) continue ;; # function dispatch; tests/unit.sh allowlists these
+      /*) p=$tmp/ir$c ;;
+      *) p= ;;
+    esac
+    found=0
+    for p in ${p:+"$p"} "$tmp/ir/usr/bin/$c" "$tmp/ir/usr/sbin/$c"; do
+      if [[ -e $p || -L $p ]]; then found=1; fi
+    done
+    ((found)) || {
+      echo "initramfs lacks command $c"
+      exit 1
+    }
+  done
+  rm -rf "$tmp/ir"
 done
 # rpi-eeprom ships only the tools; the bootloader images are in rpi-eeprom-firmware.
 ls /usr/lib/firmware/raspberrypi/bootloader-2712/default/pieeprom-*.bin >/dev/null
@@ -152,6 +212,62 @@ for kdir in /usr/lib/modules/*/; do
     fi
   fi
 done
+# rpi-fw-crypto + age (issue #50): the OTP-bound key and recovery sealing for root encryption.
+need_cmds rpi-fw-crypto age cryptsetup sfdisk partx
+# Each of these checks names what it got: a bare `set -e` failure in the smoke test is silent.
+ldd /usr/bin/rpi-fw-crypto >"$tmp/ldd" 2>&1 || fail "ldd rpi-fw-crypto failed: $(cat "$tmp/ldd")"
+# /lib64 is a symlink to usr/lib64, so the loader may report either path.
+grep -Eq 'librpifwcrypto\.so\.0 => (/usr)?/lib64/' "$tmp/ldd" ||
+  fail "librpifwcrypto.so.0 not resolved from /usr/lib64: $(cat "$tmp/ldd")"
+usage=$({ rpi-fw-crypto 2>&1 || true; })
+for sub in 'hmac --in' 'genkey' 'get-key-status' 'set-key-status'; do
+  grep -q -- "$sub" <<<"$usage" || fail "rpi-fw-crypto lacks $sub; its usage: $usage"
+done
+test -s /usr/share/licenses/rpi-fw-crypto/LICENCE || fail "no rpi-fw-crypto LICENCE"
+for kdir in /usr/lib/modules/*/; do
+  grep -qx 'lock_device_private_key=1' "$kdir/rpi-config.txt" ||
+    fail "no lock_device_private_key=1 in $kdir/rpi-config.txt"
+  if grep -q 'lock_device_key_write' "$kdir/rpi-config.txt"; then
+    fail "lock_device_key_write breaks genkey"
+  fi
+done
+for img in /usr/lib/modules/*/initramfs.img; do
+  lsinitrd "$img" >"$tmp/inv" 2>"$tmp/inv.err" || fail "lsinitrd $img failed: $(head -c 2000 "$tmp/inv.err")"
+  if grep -q 'kernel/x86/microcode' "$tmp/inv"; then
+    fail "x86 microcode in the arm64 initramfs"
+  fi
+  echo "initramfs: $img: $(stat -c %s "$img") bytes"
+done
+# fwkey (issue #50): runs in the image without the firmware, and never touches it here.
+test -x /usr/libexec/juniper/fwkey || fail "fwkey missing or not executable"
+fwkey_probe=$(JUNIPER_VCIO=/nonexistent /usr/libexec/juniper/fwkey probe) ||
+  fail "fwkey probe failed"
+[[ $fwkey_probe == 'unavailable:no /nonexistent' ]] || fail "fwkey probe without vcio: $fwkey_probe"
+fwkey_lock=$(JUNIPER_VCIO=/nonexistent /usr/libexec/juniper/fwkey lock) || fail "fwkey lock failed"
+[[ $fwkey_lock == unavailable ]] || fail "fwkey lock without vcio: $fwkey_lock"
+if /usr/libexec/juniper/fwkey card-id nosuchdisk0 >/dev/null 2>&1; then
+  fail "fwkey card-id accepted a disk that is not in sysfs"
+fi
+# cryptroot (issue #50): runs in the image; with no root partition to find it does nothing.
+test -x /usr/libexec/juniper/cryptroot || fail "cryptroot missing or not executable"
+bash -n /usr/libexec/juniper/cryptroot || fail "cryptroot has a syntax error"
+crdir=$(mktemp -d)
+echo "root=UUID=00000000-0000-4000-8000-000000000000 rw" >"$crdir/cmdline"
+for crcmd in prepare unlock; do
+  JUNIPER_CMDLINE=$crdir/cmdline JUNIPER_ROOT_WAIT=0 JUNIPER_RUN_DIR=$crdir/run \
+    JUNIPER_CIDATA_MNT=$crdir/cidata JUNIPER_CRYPTSETUP_LOCKDIR=$crdir/lock \
+    /usr/libexec/juniper/cryptroot "$crcmd" 2>/dev/null || fail "cryptroot $crcmd without a root failed"
+done
+[[ ! -e $crdir/cidata && ! -e $crdir/lock ]] || fail "cryptroot touched CIDATA or cryptsetup without a root"
+crrc=0
+/usr/libexec/juniper/cryptroot bogus 2>/dev/null || crrc=$?
+[[ $crrc == 2 ]] || fail "cryptroot usage error exited $crrc, not 2"
+rm -rf "${crdir:?}"
+# /dev/vcio stays root-only: it is the only barrier without the HMAC lock (ruling 4).
+if grep -rlE 'vcio.*MODE|vcio.*GROUP' /usr/lib/udev/rules.d /etc/udev/rules.d 2>/dev/null; then
+  echo "a udev rule widens /dev/vcio"
+  exit 1
+fi
 need_enabled juniper-wifi-import.service juniper-firstboot-retry.service juniper-emergency-fallback.service
 grep -qx 'prefer_fqdn_over_hostname: false' /etc/cloud/cloud.cfg.d/10-juniper-hostname.cfg
 test -f /usr/share/juniper/cidata/user-data

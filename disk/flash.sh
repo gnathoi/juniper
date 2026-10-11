@@ -58,6 +58,9 @@ if [[ ${1:-} == --write ]]; then
   $mounted || die "could not mount $part to write the first-boot files"
   cp "$cidata_src/user-data" "$mnt/user-data"
   if [[ -e $cidata_src/network-config ]]; then cp "$cidata_src/network-config" "$mnt/"; fi
+  # Public only: the opt-in marker and the recovery recipients, never a key that can decrypt.
+  cp "$cidata_src/juniper-encrypt" "$mnt/juniper-encrypt"
+  if [[ -e $cidata_src/juniper-recovery.txt ]]; then cp "$cidata_src/juniper-recovery.txt" "$mnt/"; fi
   sync
   # The desktop may have auto-mounted the new partitions; leave the card safe to pull.
   for p in $(lsblk -nrpo PATH "$dev" | tail -n +2); do umount "$p" 2>/dev/null || true; done
@@ -104,6 +107,59 @@ if [[ ${1:-} == --fetch-only ]]; then
   exit 0
 fi
 
+# print_summary CONFIG CIDATA-DIR: what will be written, from the rendered files.
+print_summary() {
+  python3 - "$1" "$2" <<'PY'
+import os, sys, yaml
+d = sys.argv[2]
+ud = yaml.safe_load(open(os.path.join(d, "user-data")))
+u = ud["users"][0]
+print(f"Hostname:  {ud['hostname']}")
+print(f"User:      {u['name']} ({len(u['ssh_authorized_keys'])} SSH keys)")
+print(f"Timezone:  {ud.get('timezone', 'UTC')}")
+print(f"Tailscale: {'auth key set' if 'write_files' in ud else 'none (log in later with ujust tailscale-up)'}")
+nc = os.path.join(d, "network-config")
+ssids = list(yaml.safe_load(open(nc))["network"]["wifis"]["wlan0"]["access-points"]) if os.path.exists(nc) else []
+print(f"Wi-Fi:     {ssids[0] if ssids else 'none (Ethernet)'}")
+print(f"Password:  {'set' if 'passwd' in u else 'none (SSH keys only)'}")
+PY
+  local marker rec n fps l
+  marker=$(<"$2/juniper-encrypt")
+  if [[ $marker == on ]]; then
+    rec=$(grep -v '^[[:space:]]*\(#\|$\)' "$2/juniper-recovery.txt")
+    if [[ $rec == age1* ]]; then
+      echo "Encrypt:   yes (recovery: age key age1…${rec: -6})"
+    else
+      n=0 fps=
+      while IFS= read -r l; do
+        n=$((n + 1))
+        fps+="${fps:+, }$(printf '%s\n' "$l" | ssh-keygen -lf - | awk '{print $2}')"
+      done <<<"$rec"
+      echo "Encrypt:   yes (recovery: $n SSH keys: $fps)"
+    fi
+  elif python3 -c 'import sys, yaml; sys.exit(0 if (yaml.safe_load(open(sys.argv[1])) or {}).get("encrypt") is False else 1)' "$1"; then
+    echo "Encrypt:   no (encrypt: false)"
+  else
+    echo "Encrypt:   no (not requested)"
+  fi
+}
+
+# print_warning CIDATA-DIR: shown just before the erase question when encryption is on.
+print_warning() {
+  if [[ $(<"$1/juniper-encrypt") == on ]]; then
+    echo
+    echo "Encryption: on first boot this Pi writes a permanent device key into its one-time-programmable memory (if it has none) and encrypts this card to this Pi and this card; first boot takes a few minutes longer (don't cut power; it resumes if you do); recovery needs your SSH private key. Set encrypt: false to skip."
+    echo
+  fi
+}
+
+if [[ ${1:-} == --summary-only ]]; then
+  # flash.sh --summary-only CONFIG CIDATA-DIR: the summary and warning for rendered files.
+  print_summary "$2" "$3"
+  print_warning "$3"
+  exit 0
+fi
+
 dev=$(readlink -f "${1:?usage: flash.sh DEVICE CONFIG [latest|TAG|PATH.raw.xz]}")
 config=${2:?usage: flash.sh DEVICE CONFIG [latest|TAG|PATH.raw.xz]}
 source=${3:-latest}
@@ -140,25 +196,13 @@ fi
 # Every time, not just after download: the cache is only as trusted as this check.
 cosign verify-blob --key "$pubkey" --bundle "$xz.bundle" "$xz"
 
-python3 - "$work/cidata" <<'PY'
-import os, sys, yaml
-d = sys.argv[1]
-ud = yaml.safe_load(open(os.path.join(d, "user-data")))
-u = ud["users"][0]
-print(f"Hostname:  {ud['hostname']}")
-print(f"User:      {u['name']} ({len(u['ssh_authorized_keys'])} SSH keys)")
-print(f"Timezone:  {ud.get('timezone', 'UTC')}")
-print(f"Tailscale: {'auth key set' if 'write_files' in ud else 'none (log in later with ujust tailscale-up)'}")
-nc = os.path.join(d, "network-config")
-ssids = list(yaml.safe_load(open(nc))["network"]["wifis"]["wlan0"]["access-points"]) if os.path.exists(nc) else []
-print(f"Wi-Fi:     {ssids[0] if ssids else 'none (Ethernet)'}")
-print(f"Password:  {'set' if 'passwd' in u else 'none (SSH keys only)'}")
-PY
+print_summary "$config" "$work/cidata"
 echo "Image:     $(basename "$xz")"
 echo
 lsblk -o NAME,SIZE,TYPE,TRAN,MODEL,LABEL,MOUNTPOINTS "$dev"
 echo
 identity=$(disk_identity "$dev")
+print_warning "$work/cidata"
 read -rp "Erase everything on $dev and flash it? [y/N] " answer
 [[ $answer == [yY] || $answer == [yY][eE][sS] ]] || die "not confirmed; nothing written"
 

@@ -9,9 +9,17 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 LIBEXEC=$ROOT/system_files/usr/libexec/juniper
 LIBEXEC_DESKTOP=$ROOT/system_files_desktop/usr/libexec/juniper
 ORIG_PATH=$PATH
+ORIG_TMPDIR=${TMPDIR-}
 fails=0
 
 setup() {
+  # a test may export TMPDIR into its own (now deleted) $T
+  if [[ -n $ORIG_TMPDIR ]]; then export TMPDIR=$ORIG_TMPDIR; else unset TMPDIR; fi
+  # ...and the overrides fwkey/cryptroot tests export; a later test must never inherit them
+  unset JUNIPER_SYSFS JUNIPER_VCIO JUNIPER_CMDLINE JUNIPER_BLOCK_SYSFS JUNIPER_CIDATA_MNT \
+    JUNIPER_RUN_DIR JUNIPER_CPUINFO JUNIPER_TRYBOOT_FLAG JUNIPER_ROOT_WAIT \
+    JUNIPER_UNLOCK_FAIL_DELAY JUNIPER_FWKEY JUNIPER_CONSOLE JUNIPER_CRYPTSETUP_LOCKDIR FAKE_PASS \
+    JUNIPER_DT JUNIPER_FWKEY_WEDGED JUNIPER_FWKEY_DEADLINE
   T=$(mktemp -d)
   export CALLS=$T/calls JUNIPER_STATE_DIR=$T/state
   mkdir -p "$T/bin" "$JUNIPER_STATE_DIR"
@@ -1380,6 +1388,96 @@ test_render_cidata_rejects_bad_config() {
   for c in nouser nokeys badkey badts; do
     check "cidata: rejects $c" fails "$ROOT/disk/render-cidata" "$T/$c.yaml" "$T/out-$c"
   done
+}
+
+enc_config() { # enc_config FILE 'extra yaml lines'
+  printf 'user: me\nssh_keys:\n  - ssh-ed25519 AAAAC3ed25519 a@b\n  - ecdsa-sha2-nistp256 AAAAE2ecdsa c@d\n  - sk-ssh-ed25519@openssh.com AAAAsk e@f\n%s\n' "$2" >"$1"
+  chmod 600 "$1"
+}
+AGE_PUB=age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqx
+
+test_render_cidata_encrypt_default_off() {
+  enc_config "$T/e.yaml" ""
+  "$ROOT/disk/render-cidata" "$T/e.yaml" "$T/o"
+  check "encrypt: marker off" test "$(cat "$T/o/juniper-encrypt")" = off
+  check "encrypt: no recovery file when off" test ! -e "$T/o/juniper-recovery.txt"
+  check "encrypt: marker mode 0644" test "$(stat -c %a "$T/o/juniper-encrypt")" = 644
+}
+
+test_render_cidata_encrypt_on_uses_ssh_recipients() {
+  enc_config "$T/e.yaml" "encrypt: true"
+  "$ROOT/disk/render-cidata" "$T/e.yaml" "$T/o"
+  check "encrypt: marker on" test "$(cat "$T/o/juniper-encrypt")" = on
+  check "encrypt: only the ed25519 key" test "$(cat "$T/o/juniper-recovery.txt")" = "ssh-ed25519 AAAAC3ed25519 a@b"
+  check "encrypt: recovery mode 0644" test "$(stat -c %a "$T/o/juniper-recovery.txt")" = 644
+  enc_config "$T/rsa.yaml" "encrypt: true"
+  sed -i 's/^  - ssh-ed25519.*/  - ssh-rsa AAAArsa r@s/' "$T/rsa.yaml"
+  "$ROOT/disk/render-cidata" "$T/rsa.yaml" "$T/o2"
+  check "encrypt: ssh-rsa accepted" test "$(cat "$T/o2/juniper-recovery.txt")" = "ssh-rsa AAAArsa r@s"
+}
+
+test_render_cidata_recovery_key_overrides() {
+  enc_config "$T/e.yaml" "encrypt: true
+recovery_key: $AGE_PUB"
+  "$ROOT/disk/render-cidata" "$T/e.yaml" "$T/o"
+  check "recovery_key replaces SSH recipients" test "$(cat "$T/o/juniper-recovery.txt")" = "$AGE_PUB"
+}
+
+test_render_cidata_encrypt_refuses_without_recipient() {
+  printf 'user: me\nencrypt: true\nssh_keys:\n  - ecdsa-sha2-nistp256 AAAAE2ecdsa c@d\n  - sk-ssh-ed25519@openssh.com AAAAsk e@f\n' >"$T/n.yaml"
+  chmod 600 "$T/n.yaml"
+  check "encrypt: no recipient refused" fails "$ROOT/disk/render-cidata" "$T/n.yaml" "$T/o"
+  check "encrypt: no-recipient message" stderr_has "no recovery recipient" "$ROOT/disk/render-cidata" "$T/n.yaml" "$T/o"
+  sed -i 's/^encrypt: true/encrypt: false/' "$T/n.yaml"
+  check "encrypt: false with only FIDO keys is fine" "$ROOT/disk/render-cidata" "$T/n.yaml" "$T/o3"
+}
+
+test_render_cidata_rejects_bad_recovery_key() {
+  enc_config "$T/e1.yaml" "encrypt: true
+recovery_key: age1short"
+  check "recovery_key: short refused" fails "$ROOT/disk/render-cidata" "$T/e1.yaml" "$T/o1"
+  enc_config "$T/e2.yaml" "encrypt: true
+recovery_key: AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ"
+  check "recovery_key: private key refused" fails "$ROOT/disk/render-cidata" "$T/e2.yaml" "$T/o2"
+  check "recovery_key: private key message" stderr_has "that's an age private key" "$ROOT/disk/render-cidata" "$T/e2.yaml" "$T/o2"
+}
+
+test_render_cidata_encrypt_must_be_bool() {
+  local v
+  for v in '"yes"' maybe; do
+    enc_config "$T/b.yaml" "encrypt: $v"
+    check "encrypt: $v refused" fails "$ROOT/disk/render-cidata" "$T/b.yaml" "$T/ob"
+    check "encrypt: $v message" stderr_has "encrypt: true or false" "$ROOT/disk/render-cidata" "$T/b.yaml" "$T/ob"
+  done
+  for v in true yes; do
+    enc_config "$T/b.yaml" "encrypt: $v"
+    check "encrypt: $v accepted" "$ROOT/disk/render-cidata" "$T/b.yaml" "$T/ok-$v"
+  done
+}
+
+test_flash_summary_and_warning() {
+  local out
+  enc_config "$T/e.yaml" "encrypt: true"
+  "$ROOT/disk/render-cidata" "$T/e.yaml" "$T/o"
+  stub ssh-keygen 'cat >/dev/null; echo "256 SHA256:fakeprint a@b (ED25519)"'
+  out=$("$ROOT/disk/flash.sh" --summary-only "$T/e.yaml" "$T/o")
+  check "summary: encrypt yes with fingerprint" grep -qF "Encrypt:   yes (recovery: 1 SSH keys: SHA256:fakeprint)" <<<"$out"
+  check "summary: warning" grep -qF "Encryption: on first boot this Pi writes a permanent device key" <<<"$out"
+  check "summary: warning ends" grep -qF "recovery needs your SSH private key. Set encrypt: false to skip." <<<"$out"
+  enc_config "$T/e2.yaml" "encrypt: true
+recovery_key: ${AGE_PUB}"
+  "$ROOT/disk/render-cidata" "$T/e2.yaml" "$T/o2"
+  out=$("$ROOT/disk/flash.sh" --summary-only "$T/e2.yaml" "$T/o2")
+  check "summary: age key tail" grep -qF "Encrypt:   yes (recovery: age key age1…${AGE_PUB: -6})" <<<"$out"
+  enc_config "$T/e3.yaml" "encrypt: false"
+  "$ROOT/disk/render-cidata" "$T/e3.yaml" "$T/o3"
+  out=$("$ROOT/disk/flash.sh" --summary-only "$T/e3.yaml" "$T/o3")
+  check "summary: encrypt: false" grep -qF "Encrypt:   no (encrypt: false)" <<<"$out"
+  check "summary: no warning when off" not_stdout_has "Encryption: on first boot" echo "$out"
+  enc_config "$T/e4.yaml" ""
+  "$ROOT/disk/render-cidata" "$T/e4.yaml" "$T/o4"
+  out=$("$ROOT/disk/flash.sh" --summary-only "$T/e4.yaml" "$T/o4")
+  check "summary: not requested" grep -qF "Encrypt:   no (not requested)" <<<"$out"
 }
 
 # lsblk_json JSON: stub lsblk to print JSON (the -J output check-target asks for)
@@ -3009,6 +3107,1186 @@ test_metrics_timer_defaults() {
   check "metrics: enabled in build.sh" grep -q 'juniper-metrics.timer' "$ROOT/build_files/build.sh"
 }
 
+# --- fwkey: the OTP device key through the firmware (issue #50) ---
+# Stub rpi-fw-crypto driven by $T/fw.mode (ok|not-set|locked|gen-fails|nolock|otp-error|invalid).
+# pubkey answers the key presence; hmac copies stdin to $T/hmac.in and prints an HMAC of it
+# under a test key. The device tree says Pi 5 with a fixed bootloader (fw_build to change it).
+fw_build() { # fw_build N: the bootloader build-timestamp, a big-endian u32
+  local n=$1
+  mkdir -p "$JUNIPER_DT/chosen/bootloader"
+  # shellcheck disable=SC2059 # the format is the bytes
+  printf "$(printf '\\%03o\\%03o\\%03o\\%03o' $((n >> 24 & 255)) $((n >> 16 & 255)) $((n >> 8 & 255)) $((n & 255)))" \
+    >"$JUNIPER_DT/chosen/bootloader/build-timestamp"
+}
+fwkey_env() {
+  export T JUNIPER_SYSFS=$T/sys JUNIPER_VCIO=$T/vcio TMPDIR=$T/tmp JUNIPER_DT=$T/dt \
+    JUNIPER_FWKEY_WEDGED=$T/run/fwkey-wedged
+  mkdir -p "$TMPDIR" "$T/sys/block/mmcblk0/device" "$JUNIPER_DT"
+  : >"$JUNIPER_VCIO"
+  printf 'raspberrypi,5-model-b\0brcm,bcm2712\0' >"$JUNIPER_DT/compatible"
+  fw_build 1790000000 # after 2026-06-17 (fine-grained locks)
+  echo 0353445344333247803a1b2c3d014e00 >"$T/sys/block/mmcblk0/device/cid"
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub rpi-fw-crypto 'mode=$(cat "$T/fw.mode" 2>/dev/null || echo ok)
+case $1 in
+  pubkey)
+        case $mode in
+          ok|nolock) ;;
+          not-set|gen-fails) echo "Failed to get public key: x" >&2; echo "Last crypto error: 6 (Key not set (all zeros))" >&2; exit 250 ;;
+          invalid) echo "Last crypto error: 7 (Invalid key)" >&2; exit 249 ;;
+          locked) echo "Last crypto error: 4 (locked)" >&2; exit 252 ;;
+          otp-error) echo "Last crypto error: 5 (OTP error)" >&2; exit 251 ;;
+        esac ;;
+  hmac) cat >"$T/hmac.in"
+        case $mode in
+          ok|nolock) openssl dgst -sha256 -mac HMAC -macopt key:juniper-test -r "$T/hmac.in" | cut -c1-64 | tr -d "\n" ;;
+          not-set|gen-fails) echo "Last crypto error: 6 (Key is all zeros)" >&2; exit 250 ;;
+          invalid) echo "Last crypto error: 7 (Invalid key)" >&2; exit 249 ;;
+          locked) echo "Last crypto error: 4 (locked)" >&2; exit 252 ;;
+          otp-error) echo "Last crypto error: 5 (OTP error)" >&2; exit 251 ;;
+        esac ;;
+  genkey) [[ $mode == gen-fails ]] && { echo "Last crypto error: 10 (not blank)" >&2; exit 246; }
+          echo ok >"$T/fw.mode"; echo "Successfully generated ECDSA key in slot 1" ;;
+  set-key-status) [[ $mode == nolock ]] && { echo "Last crypto error: 2 (EINVAL)" >&2; exit 254; }; echo "Set key 1 status" ;;
+  get-key-status) [[ $mode == nolock ]] && echo "Key 1 status: 0x00000101 (x)" || echo "Key 1 status: 0x00001b01 (x)" ;;
+esac'
+}
+fw_calls() { grep -c '^rpi-fw-crypto' "$CALLS" || true; }
+
+test_fwkey_derive_exact_bytes() {
+  fwkey_env
+  "$LIBEXEC/fwkey" derive mmcblk0 >"$T/out"
+  check "fwkey: exactly 64 hex bytes, no newline" test "$(wc -c <"$T/out")" = 64
+  check "fwkey: hex only" grep -Eqx '[0-9a-f]{64}' "$T/out"
+  check "fwkey: exact HMAC input" cmp -s "$T/hmac.in" <(printf 'juniper.luks.root.v1\0mmc:0353445344333247803a1b2c3d014e00')
+  check "fwkey: HMAC over key id 1, hex" called "rpi-fw-crypto hmac --in /dev/stdin --key-id 1 --outform hex"
+}
+
+test_fwkey_derive_is_stable() {
+  fwkey_env
+  check "fwkey: same card, same passphrase" test "$("$LIBEXEC/fwkey" derive mmcblk0)" = "$("$LIBEXEC/fwkey" derive mmcblk0)"
+  local a
+  a=$("$LIBEXEC/fwkey" derive mmcblk0)
+  echo 0353445344333247803a1b2c3d014e01 >"$T/sys/block/mmcblk0/device/cid"
+  check "fwkey: other card, other passphrase" test "$("$LIBEXEC/fwkey" derive mmcblk0)" != "$a"
+}
+
+test_fwkey_mmc_card_id() {
+  fwkey_env
+  check "fwkey: mmc id" test "$("$LIBEXEC/fwkey" card-id mmcblk0)" = "mmc:0353445344333247803a1b2c3d014e00"
+}
+
+test_fwkey_usb_without_serial_is_board_only() { # ruling 1 (I2)
+  fwkey_env
+  mkdir -p "$T/sys/devices/usb1/1-1/1-1:1.0/host0/target0/0:0:0:0" "$T/sys/block/sda"
+  echo 0781 >"$T/sys/devices/usb1/1-1/idVendor"
+  echo 5583 >"$T/sys/devices/usb1/1-1/idProduct"
+  ln -s "$T/sys/devices/usb1/1-1/1-1:1.0/host0/target0/0:0:0:0" "$T/sys/block/sda/device"
+  check "fwkey: board-only id" test "$("$LIBEXEC/fwkey" card-id sda)" = "board:"
+  echo 4C530001 >"$T/sys/devices/usb1/1-1/serial"
+  check "fwkey: usb id with serial" test "$("$LIBEXEC/fwkey" card-id sda)" = "usb:0781:5583:4C530001"
+  : >"$T/sys/devices/usb1/1-1/serial"
+  check "fwkey: empty usb serial is board-only" test "$("$LIBEXEC/fwkey" card-id sda)" = "board:"
+  "$LIBEXEC/fwkey" derive sda >/dev/null
+  check "fwkey: board-only HMAC input" cmp -s "$T/hmac.in" <(printf 'juniper.luks.root.v1\0board:')
+}
+
+test_fwkey_usb_walk_stays_in_sysfs() {
+  fwkey_env
+  mkdir -p "$T/outside/dev" "$T/sys/block/sdb"
+  echo 1234 >"$T/outside/idVendor"
+  echo 5678 >"$T/outside/idProduct"
+  echo LEAK >"$T/outside/serial"
+  ln -s "$T/outside/dev" "$T/sys/block/sdb/device"
+  check "fwkey: no ids outside sysfs" test "$("$LIBEXEC/fwkey" card-id sdb)" = "board:"
+}
+
+test_fwkey_nvme_serial_trimmed() {
+  fwkey_env
+  mkdir -p "$T/sys/block/nvme0n1/device"
+  echo "  S6X1NJ0R123456  " >"$T/sys/block/nvme0n1/device/serial"
+  check "fwkey: nvme id, whitespace removed" test "$("$LIBEXEC/fwkey" card-id nvme0n1)" = "nvme:S6X1NJ0R123456"
+}
+
+test_fwkey_card_id_missing_disk() {
+  fwkey_env
+  check "fwkey: unknown disk fails" fails "$LIBEXEC/fwkey" card-id sdz
+  check "fwkey: derive on unknown disk fails" fails "$LIBEXEC/fwkey" derive sdz
+  check "fwkey: derive on unknown disk prints nothing" test -z "$("$LIBEXEC/fwkey" derive sdz 2>/dev/null || true)"
+  check "fwkey: no HMAC for unknown disk" not_called "rpi-fw-crypto hmac"
+}
+
+test_fwkey_probe_states() {
+  fwkey_env
+  check "fwkey: probe ok" test "$("$LIBEXEC/fwkey" probe)" = ok
+  check "fwkey: probe asks for the public key" called "rpi-fw-crypto pubkey --key-id 1 --out /dev/null"
+  check "fwkey: probe never runs hmac" not_called "rpi-fw-crypto hmac"
+  check "fwkey: probe never trusts get-key-status" not_called "rpi-fw-crypto get-key-status"
+  echo not-set >"$T/fw.mode"
+  check "fwkey: probe not-set (250)" test "$("$LIBEXEC/fwkey" probe)" = not-set
+  echo invalid >"$T/fw.mode"
+  check "fwkey: probe invalid key (249)" test "$("$LIBEXEC/fwkey" probe)" = unavailable:invalid-key
+  echo locked >"$T/fw.mode"
+  check "fwkey: probe locked is unavailable" test "$("$LIBEXEC/fwkey" probe)" = "unavailable:firmware error 4 (exit 252)"
+  echo otp-error >"$T/fw.mode"
+  check "fwkey: probe other error" test "$("$LIBEXEC/fwkey" probe)" = "unavailable:firmware error 5 (exit 251)"
+  rm -f "$JUNIPER_VCIO"
+  check "fwkey: probe no vcio" test "$("$LIBEXEC/fwkey" probe)" = "unavailable:no $JUNIPER_VCIO"
+  check "fwkey: probe never writes" not_called "rpi-fw-crypto genkey"
+}
+
+test_fwkey_probe_without_cli() {
+  fwkey_env
+  check "fwkey: probe without the CLI" test "$(RPI_FW_CRYPTO=$T/missing "$LIBEXEC/fwkey" probe)" = "unavailable:firmware error none (exit 127)"
+}
+
+# Hardware finding: pre-2026-01-21 Pi 5 firmware wedges the mailbox on hmac. No call at all.
+test_fwkey_firmware_too_old_makes_no_calls() {
+  local n
+  # 2025-11-05 (the board), one below the fix, and files that aren't exactly 4 bytes (GNU od
+  # zero-pads a short word: \xff\xff would read as 4294901760)
+  for n in 1762364238 1769002726 missing short short2 short3 long; do
+    fwkey_env
+    echo not-set >"$T/fw.mode"
+    case $n in
+      missing) rm -f "$JUNIPER_DT/chosen/bootloader/build-timestamp" ;;
+      short) printf '\001\002' >"$JUNIPER_DT/chosen/bootloader/build-timestamp" ;;
+      short2) printf '\377\377' >"$JUNIPER_DT/chosen/bootloader/build-timestamp" ;;
+      short3) printf '\377\377\377' >"$JUNIPER_DT/chosen/bootloader/build-timestamp" ;;
+      long) printf '\377\377\377\377\000' >"$JUNIPER_DT/chosen/bootloader/build-timestamp" ;;
+      *) fw_build "$n" ;;
+    esac
+    check "fwkey ($n): probe too old" test "$("$LIBEXEC/fwkey" probe)" = unavailable:firmware-too-old
+    check "fwkey ($n): ensure too old" test "$("$LIBEXEC/fwkey" ensure || true)" = unavailable:firmware-too-old
+    check "fwkey ($n): ensure fails" fails "$LIBEXEC/fwkey" ensure
+    check "fwkey ($n): derive fails" fails "$LIBEXEC/fwkey" derive mmcblk0
+    check "fwkey ($n): lock unavailable" test "$("$LIBEXEC/fwkey" lock)" = unavailable
+    check "fwkey ($n): no rpi-fw-crypto call" test "$(fw_calls)" = 0
+  done
+  fwkey_env
+  rm -f "$T/fw.mode"
+  fw_build 1769002727 # pieeprom-2026-01-21: the HMAC lock-up fix
+  check "fwkey: 2026-01-21 passes the gate" test "$("$LIBEXEC/fwkey" probe)" = ok
+}
+
+test_fwkey_pi4_unverified() {
+  fwkey_env
+  printf 'raspberrypi,4-model-b\0brcm,bcm2711\0' >"$JUNIPER_DT/compatible"
+  check "fwkey: pi4 probe" test "$("$LIBEXEC/fwkey" probe)" = unavailable:pi4-unverified
+  check "fwkey: pi4 ensure fails" fails "$LIBEXEC/fwkey" ensure
+  check "fwkey: pi4 derive fails" fails "$LIBEXEC/fwkey" derive mmcblk0
+  check "fwkey: pi4 lock unavailable" test "$("$LIBEXEC/fwkey" lock)" = unavailable
+  check "fwkey: pi4 no rpi-fw-crypto call" test "$(fw_calls)" = 0
+  printf 'brcm,bcm2837\0' >"$JUNIPER_DT/compatible"
+  check "fwkey: other board" test "$("$LIBEXEC/fwkey" probe)" = unavailable:unsupported-board
+  rm -f "$JUNIPER_DT/compatible"
+  check "fwkey: no compatible" test "$("$LIBEXEC/fwkey" probe)" = unavailable:unsupported-board
+  check "fwkey: still no call" test "$(fw_calls)" = 0
+}
+
+# A call that never returns (D state) is left behind; the marker stops every later call.
+test_fwkey_hung_firmware_is_wedged() {
+  local start
+  fwkey_env
+  export JUNIPER_FWKEY_DEADLINE=1
+  stub rpi-fw-crypto 'sleep 4'
+  start=$SECONDS
+  "$LIBEXEC/fwkey" probe >"$T/out" 2>"$T/err"
+  check "fwkey: returns at the deadline" test $((SECONDS - start)) -le 3
+  check "fwkey: hung pubkey is wedged" test "$(cat "$T/out")" = unavailable:firmware-wedged
+  check "fwkey: wedged marker written" test -e "$JUNIPER_FWKEY_WEDGED"
+  check "fwkey: says why on stderr" grep -q "wedged until reboot" "$T/err"
+  start=$SECONDS
+  check "fwkey: ensure after wedge" test "$("$LIBEXEC/fwkey" ensure || true)" = unavailable:firmware-wedged
+  check "fwkey: derive after wedge fails" fails "$LIBEXEC/fwkey" derive mmcblk0
+  check "fwkey: lock after wedge" test "$("$LIBEXEC/fwkey" lock)" = unavailable
+  check "fwkey: after wedge, instant" test $((SECONDS - start)) -le 1
+  check "fwkey: no call after the wedge" test "$(fw_calls)" = 1
+  check "fwkey: no genkey" not_called "rpi-fw-crypto genkey"
+}
+
+# A NUL in the output ends `read -d ''` early: never wait on a child that may still run.
+test_fwkey_nul_output_is_not_waited_on() {
+  local start
+  fwkey_env
+  export JUNIPER_FWKEY_DEADLINE=2
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub rpi-fw-crypto 'printf "x\0y"; sleep 4'
+  start=$SECONDS
+  "$LIBEXEC/fwkey" probe >"$T/out" 2>/dev/null
+  check "fwkey: NUL output returns at once" test $((SECONDS - start)) -le 1
+  check "fwkey: NUL output is unavailable" grep -q '^unavailable:' "$T/out"
+  check "fwkey: NUL output is not a wedge" test ! -e "$JUNIPER_FWKEY_WEDGED"
+  check "fwkey: NUL output never generates" fails "$LIBEXEC/fwkey" ensure
+  check "fwkey: NUL output, no genkey" not_called "rpi-fw-crypto genkey"
+}
+
+test_fwkey_hung_genkey_and_hmac_are_wedged() {
+  fwkey_env
+  export JUNIPER_FWKEY_DEADLINE=1
+  echo not-set >"$T/fw.mode"
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub rpi-fw-crypto 'case $1 in pubkey) echo "Last crypto error: 6 (x)" >&2; exit 250 ;; *) sleep 4 ;; esac'
+  check "fwkey: hung genkey" test "$("$LIBEXEC/fwkey" ensure 2>/dev/null || true)" = unavailable:firmware-wedged
+  check "fwkey: genkey marker" test -e "$JUNIPER_FWKEY_WEDGED"
+  fwkey_env
+  export JUNIPER_FWKEY_DEADLINE=1
+  stub rpi-fw-crypto 'cat >/dev/null; sleep 4'
+  check "fwkey: hung hmac fails derive" test -z "$("$LIBEXEC/fwkey" derive mmcblk0 2>/dev/null || true)"
+  check "fwkey: hmac marker" test -e "$JUNIPER_FWKEY_WEDGED"
+}
+
+test_fwkey_genkey_only_when_not_set() {
+  fwkey_env
+  echo not-set >"$T/fw.mode"
+  check "fwkey: generated" test "$("$LIBEXEC/fwkey" ensure)" = generated
+  check "fwkey: genkey once" test "$(grep -c '^rpi-fw-crypto genkey --key-id 1 --alg ec$' "$CALLS")" = 1
+  check "fwkey: then ok, no second genkey" test "$("$LIBEXEC/fwkey" ensure)" = ok
+  check "fwkey: still genkey once" test "$(grep -c '^rpi-fw-crypto genkey' "$CALLS")" = 1
+}
+
+test_fwkey_never_writes_when_locked_or_no_vcio() {
+  for mode in locked novcio otp-error invalid; do
+    fwkey_env
+    echo "$mode" >"$T/fw.mode"
+    [[ $mode == novcio ]] && rm -f "$JUNIPER_VCIO"
+    check "fwkey ($mode): ensure fails" fails "$LIBEXEC/fwkey" ensure
+    check "fwkey ($mode): reports unavailable" stdout_has '^unavailable:' "$LIBEXEC/fwkey" ensure
+    check "fwkey ($mode): no genkey" not_called "rpi-fw-crypto genkey"
+  done
+}
+
+test_fwkey_ensure_fails_when_genkey_fails() {
+  fwkey_env
+  echo gen-fails >"$T/fw.mode"
+  check "fwkey: failed genkey fails ensure" fails "$LIBEXEC/fwkey" ensure
+  check "fwkey: failed genkey reported" stdout_has '^unavailable:' "$LIBEXEC/fwkey" ensure
+}
+
+test_fwkey_never_reads_raw_key() {
+  fwkey_env
+  echo not-set >"$T/fw.mode"
+  "$LIBEXEC/fwkey" ensure >/dev/null
+  "$LIBEXEC/fwkey" derive mmcblk0 >/dev/null
+  "$LIBEXEC/fwkey" lock >/dev/null
+  check "fwkey: no privkey" not_called "privkey"
+  check "fwkey: no key-usage write" not_called "set-key-usage"
+  check "fwkey: no vcmailbox" not_called "vcmailbox"
+  check "fwkey: no temp files" test -z "$(ls -A "$TMPDIR")"
+  check "fwkey: script never names privkey" not_grep_dir 'privkey\|rpi-otp-private-key\|vcmailbox\|set-key-usage' "$LIBEXEC/fwkey"
+}
+
+test_fwkey_lock_is_best_effort() { # ruling 4 (I3)
+  fwkey_env
+  check "fwkey: locked" test "$("$LIBEXEC/fwkey" lock)" = locked
+  check "fwkey: one call, four flags" called "rpi-fw-crypto set-key-status 1 READ_LOCKED GEN_LOCKED HMAC_LOCKED USAGE_LOCKED"
+  check "fwkey: SIGN stays unlocked" not_called "SIGN_LOCKED"
+  echo nolock >"$T/fw.mode"
+  check "fwkey: unavailable, exit 0" test "$("$LIBEXEC/fwkey" lock)" = unavailable
+  rm -f "$JUNIPER_VCIO"
+  check "fwkey: no vcio, unavailable, exit 0" test "$("$LIBEXEC/fwkey" lock)" = unavailable
+}
+
+# Before 2026-06-17 bit 8 was a global LOCKED bit and bits 9-12 don't exist: don't ask.
+test_fwkey_lock_skipped_before_fine_grained_locks() {
+  fwkey_env
+  fw_build 1778498402 # pieeprom-2026-05-11: HMAC fixed, no per-operation locks
+  check "fwkey: 2026-05-11 lock unavailable" test "$("$LIBEXEC/fwkey" lock)" = unavailable
+  check "fwkey: 2026-05-11 no set-key-status" not_called "set-key-status"
+  check "fwkey: 2026-05-11 still derives" stdout_has '^[0-9a-f]\{64\}$' "$LIBEXEC/fwkey" derive mmcblk0
+  fw_build 1781654813 # pieeprom-2026-06-17
+  check "fwkey: 2026-06-17 locks" test "$("$LIBEXEC/fwkey" lock)" = locked
+}
+
+test_fwkey_lock_checks_hmac_bit() {
+  fwkey_env
+  # set-key-status succeeds but the firmware ignores HMAC_LOCKED (bit 11 clear)
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub rpi-fw-crypto 'case $1 in get-key-status) echo "Key 1 status: 0x00000301 (x)" ;; esac'
+  check "fwkey: bit 11 clear is unavailable" test "$("$LIBEXEC/fwkey" lock)" = unavailable
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub rpi-fw-crypto 'case $1 in get-key-status) echo "Key 1 status: unknown" ;; esac'
+  check "fwkey: unparsable status is unavailable" test "$("$LIBEXEC/fwkey" lock)" = unavailable
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub rpi-fw-crypto 'case $1 in get-key-status) echo "Key 1 status: 0x00000801 (x)"; exit 1 ;; esac'
+  check "fwkey: failed get-key-status is unavailable" test "$("$LIBEXEC/fwkey" lock)" = unavailable
+}
+
+test_fwkey_derive_fails_closed() {
+  fwkey_env
+  echo locked >"$T/fw.mode"
+  check "fwkey: derive fails when locked" fails "$LIBEXEC/fwkey" derive mmcblk0
+  check "fwkey: derive prints nothing when locked" test -z "$("$LIBEXEC/fwkey" derive mmcblk0 2>/dev/null || true)"
+  echo not-set >"$T/fw.mode"
+  check "fwkey: derive fails when not set" fails "$LIBEXEC/fwkey" derive mmcblk0
+  check "fwkey: derive never generates" not_called "rpi-fw-crypto genkey"
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub rpi-fw-crypto 'cat >/dev/null; printf "%s" ABCDEF'
+  check "fwkey: derive rejects non-hex output" test -z "$("$LIBEXEC/fwkey" derive mmcblk0 2>/dev/null || true)"
+}
+
+# M1: many matching lines must not kill the parser with SIGPIPE under pipefail.
+test_fwkey_long_error_output() {
+  fwkey_env
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub rpi-fw-crypto 'case $1 in
+  pubkey) for ((i = 0; i < 20000; i++)); do echo "Last crypto error: 6 (Key is all zeros)"; done >&2; exit 250 ;;
+  get-key-status) for ((i = 0; i < 20000; i++)); do echo "Key 1 status: 0x00001b01 (x)"; done ;;
+esac'
+  check "fwkey: long error output still parsed" test "$("$LIBEXEC/fwkey" probe)" = not-set
+  check "fwkey: long status output still parsed" test "$("$LIBEXEC/fwkey" lock)" = locked
+}
+
+# M3: only an exact KEY_NOT_SET may reach genkey; garbage or a missing CLI never does.
+test_fwkey_ensure_garbage_never_generates() {
+  local out
+  for out in 'Last crypto error: 66 (x)' 'Last crypto error:  6' 'Last crypto error: (x)' 'error 6' \
+    '0123456789abcdef' '' 'bash: rpi-fw-crypto: command not found'; do
+    fwkey_env
+    # shellcheck disable=SC2016 # expands inside the stub
+    stub rpi-fw-crypto "case \$1 in pubkey) printf '%s\n' '$out' >&2; exit 127 ;; esac"
+    check "fwkey ($out): ensure fails" fails "$LIBEXEC/fwkey" ensure
+    check "fwkey ($out): unavailable" stdout_has '^unavailable:' "$LIBEXEC/fwkey" ensure
+    check "fwkey ($out): no genkey" not_called "rpi-fw-crypto genkey"
+  done
+  fwkey_env
+  check "fwkey (no CLI): ensure unavailable" test "$(RPI_FW_CRYPTO=$T/missing "$LIBEXEC/fwkey" ensure || true)" = "unavailable:firmware error none (exit 127)"
+  check "fwkey (no CLI): no genkey" not_called "rpi-fw-crypto genkey"
+}
+
+# M2: setup() drops the overrides fwkey_env exports.
+test_fwkey_overrides_not_inherited_a() { fwkey_env; }
+test_fwkey_overrides_not_inherited_b() {
+  check "setup: JUNIPER_SYSFS unset" test -z "${JUNIPER_SYSFS+x}"
+  check "setup: JUNIPER_VCIO unset" test -z "${JUNIPER_VCIO+x}"
+}
+
+test_fwkey_usage() {
+  fwkey_env
+  check "fwkey: unknown command fails" fails "$LIBEXEC/fwkey" bogus
+  check "fwkey: no command fails" fails "$LIBEXEC/fwkey"
+  check "fwkey: bad deadline falls back" test "$(JUNIPER_FWKEY_DEADLINE=abc "$LIBEXEC/fwkey" probe)" = ok
+  check "fwkey: zero deadline falls back" test "$(JUNIPER_FWKEY_DEADLINE=0 "$LIBEXEC/fwkey" probe)" = ok
+}
+
+# --- cryptroot: first-boot encryption and unlock (issue #50) ---
+# The board passphrase lives only in the environment: never in a file under $T.
+fake_pass() { printf '%s' 5e1f0c2a9b3d4e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7; }
+order() { [[ $(grep -nF -- "$1" "$CALLS" | head -1 | cut -d: -f1) -lt $(grep -nF -- "$2" "$CALLS" | head -1 | cut -d: -f1) ]]; }
+order_last() { [[ $(grep -nF -- "$1" "$CALLS" | tail -1 | cut -d: -f1) -lt $(grep -nF -- "$2" "$CALLS" | tail -1 | cut -d: -f1) ]]; }
+not_grep_v() { ! grep -qv -- "$1" "$2"; }
+count_calls() { grep -cF -- "$1" "$CALLS" || true; }
+# stub_file NAME: like stub, with the body on stdin.
+stub_file() {
+  # shellcheck disable=SC2016 # $* and $CALLS expand when the stub runs
+  { printf '#!/usr/bin/env bash\necho "%s $*" >>"$CALLS"\n' "$1" && cat; } >"$T/bin/$1"
+  chmod +x "$T/bin/$1"
+}
+# crt ARGS: run cryptroot; its exit status goes to RC (a failure must not end the runner).
+crt() {
+  RC=0
+  "$LIBEXEC/cryptroot" "$@" || RC=$?
+}
+runf() { sed -n "s/^$1=//p" "$T/run/cryptroot"; }
+tok() { cat "$T/luks/$1/token$2" 2>/dev/null || true; }
+
+# bsys_part DISK N START SIZE: a partition in the fake block sysfs (I14 layout).
+bsys_part() {
+  local d=$T/bsys/devices/$1 p
+  p=$1$2
+  [[ $1 == *[0-9] ]] && p=$1p$2
+  mkdir -p "$d/$p" "$T/bsys/class/block"
+  echo "$2" >"$d/$p/partition"
+  echo "$3" >"$d/$p/start"
+  echo "$4" >"$d/$p/size"
+  ln -sfn "../../devices/$1/$p" "$T/bsys/class/block/$p"
+  ln -sfn "../../devices/$1" "$T/bsys/class/block/$1"
+}
+
+# luks_card NAME RECOVERY SLOTS [reencrypt]: an existing juniper header on /dev/NAME.
+luks_card() {
+  local d=$T/luks/$1
+  mkdir -p "$d"
+  : >"$d/header"
+  echo aes-xts-plain64 >"$d/cipher"
+  echo "$3" >"$d/slots"
+  if [[ -n $2 ]]; then
+    printf '{"type":"juniper","keyslots":[],"root_uuid":"U1","binding":"juniper.luks.root.v1","id_type":"mmc","recovery":"%s","recipients":"2"}' "$2" >"$d/token0"
+  fi
+  if [[ ${4:-} == reencrypt ]]; then
+    : >"$d/reencrypt"
+    : >"$d/repair-needed"
+  fi
+}
+
+# cryptroot_env STATE MARKER
+#   STATE:  plain | luks-notoken (header marked for reencryption, so no token: C1) |
+#           luks-done-notoken (conversion finished, cut before the token) |
+#           luks-pending | luks-sealed
+#   MARKER: on | off | converting | encrypted | missing | anything else
+cryptroot_env() {
+  local state=$1 marker=$2
+  if [[ -d ${T:?}/cidata ]]; then chmod -R u+w "$T/cidata"; fi
+  rm -rf "${T:?}/luks" "${T:?}/bsys" "${T:?}/run" "${T:?}/cidata" "${T:?}"/sfdisk.* \
+    "${T:?}"/fw.* "${T:?}/age.fail" "${T:?}"/cs.* "${T:?}/console" "${T:?}/tryboot"
+  : >"$CALLS"
+  export T FAKE_PASS
+  FAKE_PASS=$(fake_pass)
+  export JUNIPER_CMDLINE=$T/cmdline JUNIPER_BLOCK_SYSFS=$T/bsys JUNIPER_SYSFS=$T/sys \
+    JUNIPER_CIDATA_MNT=$T/cidata JUNIPER_RUN_DIR=$T/run JUNIPER_CPUINFO=$T/cpuinfo \
+    JUNIPER_TRYBOOT_FLAG=$T/no-tryboot JUNIPER_ROOT_WAIT=2 JUNIPER_UNLOCK_FAIL_DELAY=0 \
+    JUNIPER_FWKEY=$T/bin/fwkey JUNIPER_CONSOLE=$T/console JUNIPER_CRYPTSETUP_LOCKDIR=$T/run-cryptsetup
+  echo "BOOT_IMAGE=(hd0,gpt2)/vmlinuz root=UUID=U1 rw boot=UUID=B1 rootflags=noatime panic=10 rd.shell=0 rd.emergency=reboot ostree=/ostree/boot.1/default/x/0" >"$T/cmdline"
+  printf 'processor\t: 0\nFeatures\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics\n' >"$T/cpuinfo"
+  bsys_part mmcblk0 1 2048 2097152
+  bsys_part mmcblk0 2 2099200 2097152
+  bsys_part mmcblk0 3 4192256 12584927
+  echo 62521344 >"$T/bsys/devices/mmcblk0/size"
+  cat >"$T/blkid.db" <<'EOF'
+/dev/mmcblk0p1 TYPE=vfat LABEL=CIDATA UUID=C1 PART_ENTRY_TYPE=c12a7328-f81f-11d2-ba4b-00a0c93ec93b
+/dev/mmcblk0p2 TYPE=xfs LABEL=boot UUID=B1 PART_ENTRY_TYPE=0fc63daf-8483-4772-8e79-3d69d8477de4
+/dev/mmcblk0p3 TYPE=xfs LABEL=root UUID=U1 PART_ENTRY_TYPE=b921b045-1df0-41c3-af44-4c6f280d3fae
+EOF
+  mkdir -p "$T/cidata"
+  printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA owner@laptop\n# comment\n\nssh-rsa AAAAB3NzaC1yc2E owner@desk\n' >"$T/cidata/juniper-recovery.txt"
+  [[ $marker == missing ]] || echo "$marker" >"$T/cidata/juniper-encrypt"
+  case $state in
+    luks-notoken) luks_card mmcblk0p3 '' 0 reencrypt ;;
+    luks-done-notoken) luks_card mmcblk0p3 '' 0 ;;
+    luks-pending) luks_card mmcblk0p3 pending 0 ;;
+    luks-sealed)
+      luks_card mmcblk0p3 sealed "0 1"
+      echo $((62521344 - 33 - 4192256)) >"$T/bsys/devices/mmcblk0/mmcblk0p3/size"
+      ;;
+  esac
+  # blkid answers from blkid.db; a device with a fake header is crypto_LUKS, label juniper-root.
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub_file blkid <<'EOF'
+db() {
+  local dev rest
+  while read -r dev rest; do
+    if [[ -e $T/luks/${dev##*/}/header ]]; then
+      rest=$(printf ' %s' "$rest" | sed -E 's/ (TYPE|LABEL|UUID)=[^ ]*//g')
+      rest="$rest TYPE=crypto_LUKS LABEL=juniper-root UUID=luks-${dev##*/}"
+    fi
+    echo "$dev $rest"
+  done <"$T/blkid.db"
+}
+tok= tag= dev=
+while (($#)); do
+  case $1 in -c | -o) shift ;; -p) ;; -t) tok=$2; shift ;; -s) tag=$2; shift ;; *) dev=$1 ;; esac
+  shift
+done
+if [[ -n $tok ]]; then
+  out=$(db | grep -E " $tok( |\$)" | cut -d' ' -f1)
+else
+  out=$(db | grep "^$dev " | grep -oE " $tag=[^ ]*" | cut -d= -f2-)
+fi
+[[ -n $out ]] || exit 2
+echo "$out"
+EOF
+  # cryptsetup keeps fake header state in $T/luks/<dev>/: header, slots, token<N>, cipher,
+  # reencrypt (online-reencrypt requirement), repair-needed, wrongboard (key doesn't open it).
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub_file cryptsetup <<'EOF'
+cmd=$1
+shift
+n=
+for a in "$@"; do
+  case $a in /dev/fd/*) ;; /dev/*) n=${a##*/}; break ;; esac
+done
+d=$T/luks/$n
+has() { local a; for a in "${@:2}"; do [[ $a == "$1" ]] && return 0; done; return 1; }
+val() { local p=; for a in "${@:2}"; do [[ $p == "$1" ]] && { echo "$a"; return; }; p=$a; done; }
+# Like cryptsetup 2.8: no header metadata changes while the header is marked for reencryption.
+case $cmd:${1:-} in
+  token:import | luksAddKey:* | luksKillSlot:*)
+    if [[ -e $d/reencrypt ]]; then
+      echo "Operation incompatible with device marked for LUKS2 reencryption. Aborting." >&2
+      exit 1
+    fi ;;
+esac
+if has --key-file "$@"; then
+  k=$(cat)
+  if [[ $k != "$FAKE_PASS" ]]; then echo "cryptsetup-key bad" >>"$CALLS"; exit 2; fi
+  if [[ -e $d/wrongboard ]]; then echo "No key available with this passphrase." >&2; exit 2; fi
+fi
+case $cmd in
+  reencrypt)
+    if has --init-only "$@"; then
+      [[ -e $T/cs.init.fail ]] && exit 1
+      mkdir -p "$d"; : >"$d/header"; : >"$d/reencrypt"; echo 0 >"$d/slots"
+      val --cipher "$@" >"$d/cipher"
+      if [[ -e $T/cs.init.fail-after-header ]]; then : >"$d/repair-needed"; exit 1; fi
+    else
+      [[ -e $d/repair-needed ]] && { echo "needs repair" >&2; exit 1; }
+      [[ -e $T/cs.resume.fail ]] && exit 1
+      rm -f "$d/reencrypt"
+    fi ;;
+  repair) rm -f "$d/repair-needed" ;;
+  token)
+    id=$(val --token-id "$@")
+    if [[ $1 == import ]]; then
+      [[ -e $d/token$id ]] && ! has --token-replace "$@" && { echo "Token $id in use." >&2; exit 1; }
+      [[ -e $T/cs.token.fail ]] && exit 1
+      cat >"$d/token$id"
+    else
+      cat "$d/token$id" 2>/dev/null || exit 1
+    fi ;;
+  luksDump)
+    [[ -e $d/header ]] || exit 1
+    printf 'LUKS header information\nVersion:       \t2\nLabel:          \tjuniper-root\n'
+    if [[ -e $d/reencrypt ]]; then printf 'Requirements:\tonline-reencrypt-v2\n'; fi
+    printf '\nKeyslots:\n'
+    for s in $(cat "$d/slots"); do printf '  %s: luks2\n\tKey:        512 bits\n' "$s"; done
+    if [[ -e $d/reencrypt ]]; then printf '  1: reencrypt (unbound)\n'; fi
+    printf 'Tokens:\n'
+    for t in "$d"/token*; do if [[ -e $t ]]; then printf '  %s: juniper\n' "${t##*token}"; fi; done ;;
+  luksKillSlot)
+    s=" $(cat "$d/slots") "; s=${s/ ${!#} / }; echo $s >"$d/slots" ;;
+  luksAddKey)
+    s=$(val --key-slot "$@")
+    if [[ " $(cat "$d/slots") " == *" $s "* ]]; then echo "Key slot $s is full." >&2; exit 1; fi
+    r=$(cat /dev/fd/3)
+    [[ $r =~ ^[0-9a-f]{64}$ ]] || exit 1
+    echo "newkey fd3=$(readlink /proc/$$/fd/3) sha=$(printf %s "$r" | sha256sum | cut -c1-64)" >>"$CALLS"
+    echo "$(cat "$d/slots") $s" >"$d/slots" ;;
+  open) [[ -e $d/header ]] || exit 1; echo "$n" >"$T/luks/active" ;;
+  status)
+    [[ -e $T/luks/active ]] || exit 4
+    printf '/dev/mapper/juniper-root is active.\n  type:    LUKS2\n  cipher:  %s\n  keysize: 512 bits\n' "$(cat "$T/luks/$(cat "$T/luks/active")/cipher")" ;;
+  isLuks) [[ -e $d/header ]] ;;
+  *) exit 1 ;;
+esac
+EOF
+  # sfdisk -N records its stdin in $T/sfdisk.K and updates the partition size in sysfs.
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub_file sfdisk <<'EOF'
+num=
+dev=
+while (($#)); do
+  case $1 in -N) num=$2; shift ;; /dev/*) dev=${1##*/} ;; esac
+  shift
+done
+[[ -n $num ]] || exit 0
+k=$(($(cat "$T/sfdisk.count" 2>/dev/null || echo 0) + 1))
+echo "$k" >"$T/sfdisk.count"
+cat >"$T/sfdisk.$k"
+p=$dev$num
+[[ $dev == *[0-9] ]] && p=${dev}p$num
+s=$(sed -n 's/^size=//p' "$T/sfdisk.$k")
+if [[ $s == + ]]; then
+  s=$(($(cat "$T/bsys/devices/$dev/size") - 33 - $(cat "$T/bsys/devices/$dev/$p/start")))
+fi
+echo "$s" >"$T/bsys/devices/$dev/$p/size"
+EOF
+  stub partx ''
+  stub sleep ''
+  # CIDATA is $T/cidata: writable only between remount,rw and remount,ro.
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub mount '[[ -e $T/mount.fail ]] && exit 32
+case "$*" in *remount,rw*) chmod u+w "$T/cidata" ;; *) chmod a-w "$T/cidata" ;; esac'
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub umount 'chmod u+w "$T/cidata"'
+  # age honours -o; the fake ciphertext holds a hash of the input, never the input.
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub_file age <<'EOF'
+rec= out=
+while (($#)); do
+  case $1 in -R) rec=$2; shift ;; -o) out=$2; shift ;; esac
+  shift
+done
+[[ -e $T/age.fail ]] && { echo "age: error: no recipients" >&2; exit 1; }
+[[ -s $rec ]] || exit 1
+in=$(cat)
+[[ $out == /dev/null ]] && exit 0
+s=$(printf %s "$in" | sha256sum | cut -c1-64)
+echo "age-in sha=$s" >>"$CALLS"
+printf -- '-----BEGIN AGE ENCRYPTED FILE-----\n%s\nq"uote\\back\n-----END AGE ENCRYPTED FILE-----\n' "$s" >"$out"
+EOF
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub fwkey 'case $1 in
+  derive) [[ -e $T/fw.derive-fail ]] && exit 1; printf %s "$FAKE_PASS" ;;
+  ensure) m=$(cat "$T/fw.mode" 2>/dev/null || echo ok); echo "$m"; [[ $m == ok || $m == generated ]] ;;
+  card-id) [[ -e $T/fw.cardid-fail ]] && exit 1; cat "$T/fw.id" 2>/dev/null || echo mmc:abc ;;
+  probe) cat "$T/fw.probe" 2>/dev/null || echo ok ;;
+  lock) echo unavailable ;;
+esac'
+}
+
+test_cryptroot_first_boot_sequence() {
+  cryptroot_env plain on
+  crt prepare >"$T/out" 2>&1
+  check "prep: exit 0" test "$RC" = 0
+  check "prep: marker converting before relocate" order "mount -o remount,rw" "sfdisk --relocate gpt-bak-std /dev/mmcblk0"
+  check "prep: relocate before grow" order "sfdisk --relocate" "sfdisk -N 3"
+  check "prep: +64 MiB absolute" grep -qx "size=$((12584927 + 131072))" "$T/sfdisk.1"
+  check "prep: partx after grow" called "partx -u -n 3 /dev/mmcblk0"
+  check "prep: init-only slot 0" called "--init-only --type luks2 --key-slot 0 --reduce-device-size 32M"
+  check "prep: label, pbkdf2" called "--pbkdf pbkdf2 --pbkdf-force-iterations 1000 --label juniper-root --key-file - /dev/mmcblk0p3"
+  check "prep: resume before token" order "--resume-only" "cryptsetup token import --token-id 0"
+  check "prep: no repair within one boot" not_called "cryptsetup repair"
+  check "prep: resume with progress" called "cryptsetup reencrypt --batch-mode --resume-only --progress-frequency 10 --key-file - /dev/mmcblk0p3"
+  check "prep: sector 512, aes" called "--cipher aes-xts-plain64 --key-size 512 --sector-size 512"
+  check "prep: age before slot 1" order "age -R" "cryptsetup luksAddKey --batch-mode --key-slot 1"
+  check "prep: max grow is last sfdisk" grep -qx 'size=+' "$T/sfdisk.2"
+  check "prep: max grow after sealing" order_last "cryptsetup luksAddKey" "sfdisk -N 3" # I13
+  check "prep: recovery file" test -s "$T/cidata/juniper-recovery.age"
+  check "prep: no .new left" test ! -e "$T/cidata/juniper-recovery.age.new"
+  check "prep: recorded" grep -qx encrypted "$T/cidata/juniper-encrypt"
+  check "prep: slots 0 and 1" test "$(cat "$T/luks/mmcblk0p3/slots")" = "0 1"
+  check "prep: token sealed" grep -q '"recovery":"sealed"' "$T/luks/mmcblk0p3/token0"
+  check "prep: run state" test "$(runf state)" = encrypted
+  check "prep: genkey path ran" called "fwkey ensure"
+  check "prep: lock dir" test -d "$T/run-cryptsetup"
+  check "prep: every message prefixed" not_grep_v '^juniper-cryptroot: ' "$T/out"
+  check "prep: CIDATA unmounted" called "umount $T/cidata"
+  check "prep: no passphrase anywhere" not_grep_dir "$(fake_pass)" "$T"
+  local writes='^cryptsetup (reencrypt|luksAddKey|luksKillSlot|token import|repair)|^sfdisk|remount,rw'
+  local before
+  before=$(grep -cE "$writes" "$CALLS" || true)
+  crt prepare 2>/dev/null
+  check "prep: second boot changes nothing" test "$(grep -cE "$writes" "$CALLS")" = "$before"
+}
+
+test_cryptroot_off_or_missing_does_nothing() { # I1, ruling 2
+  local m
+  for m in off missing garbage; do
+    cryptroot_env plain "$m"
+    crt prepare
+    check "prep ($m): no sfdisk" not_called sfdisk
+    check "prep ($m): no fwkey" not_called fwkey
+    check "prep ($m): no cryptsetup" not_called cryptsetup
+    check "prep ($m): no CIDATA write" not_called "remount,rw"
+    check "prep ($m): plain" test "$(runf state)" = not-encrypted
+    check "prep ($m): no wait" not_called sleep
+  done
+  cryptroot_env plain off
+  crt prepare
+  check "prep (off): reason" test "$(runf reason)" = "encrypt: false"
+  cryptroot_env plain missing
+  crt prepare
+  check "prep (missing): reason" test "$(runf reason)" = "not requested at flash time"
+}
+
+test_cryptroot_failure_before_header_is_final() { # C2
+  cryptroot_env plain on
+  stub sfdisk 'exit 1'
+  crt prepare 2>/dev/null
+  check "prep: recorded fail-open" grep -qx 'not-encrypted:relocate failed' "$T/cidata/juniper-encrypt"
+  check "prep: run file says why" test "$(runf reason)" = "relocate failed"
+  check "prep: no header" not_called "cryptsetup reencrypt"
+  : >"$CALLS"
+  stub sfdisk ''
+  crt prepare
+  check "prep: second boot doesn't encrypt" not_called "cryptsetup reencrypt"
+  check "prep: second boot no fwkey" not_called fwkey
+}
+
+test_cryptroot_unreadable_sysfs_is_final() {
+  cryptroot_env plain on
+  rm "$T/bsys/devices/mmcblk0/mmcblk0p3/size"
+  ln -s /nonexistent "$T/bsys/devices/mmcblk0/mmcblk0p3/size"
+  crt prepare 2>/dev/null
+  check "prep: exit 0 after fail-open" test "$RC" = 0
+  check "prep: recorded" grep -q '^not-encrypted:' "$T/cidata/juniper-encrypt"
+  check "prep: no sfdisk" not_called sfdisk
+}
+
+test_cryptroot_killed_before_header_is_final() { # C2: the trap, not the explicit checks
+  cryptroot_env plain on
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub sfdisk 'kill -TERM $PPID'
+  crt prepare 2>"$T/err"
+  check "prep: SIGTERM ran the trap" grep -q 'relocate failed; continuing unencrypted' "$T/err"
+  check "prep: SIGTERM before the header records fail-open" grep -qx 'not-encrypted:relocate failed' "$T/cidata/juniper-encrypt"
+  check "prep: SIGTERM, no header" not_called "cryptsetup reencrypt"
+  check "prep: SIGTERM, CIDATA unmounted" called "umount"
+}
+
+test_cryptroot_error_trap_before_header() { # C2: an unchecked failure trips the ERR trap
+  cryptroot_env plain on
+  # sysfs size readable by the precheck, gone by the time the grow reads it
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub sfdisk 'if [[ $* == *relocate* ]]; then rm "$T/bsys/devices/mmcblk0/mmcblk0p3/size"; fi'
+  crt prepare 2>"$T/err"
+  check "prep: it was the trap" grep -q 'grow failed; continuing unencrypted' "$T/err"
+  check "prep: ERR trap exit 0" test "$RC" = 0
+  check "prep: ERR trap records the step" grep -qx 'not-encrypted:grow failed' "$T/cidata/juniper-encrypt"
+  check "prep: ERR trap, no grow" not_called "sfdisk -N"
+}
+
+test_cryptroot_kernel_size_must_grow() { # --reduce-device-size needs the 64 MiB
+  cryptroot_env plain on
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub sfdisk 'if [[ $* == *-N* ]]; then cat >/dev/null; fi'
+  crt prepare 2>/dev/null
+  check "prep: grow not seen -> fail open" grep -qx 'not-encrypted:grow failed' "$T/cidata/juniper-encrypt"
+  check "prep: grow not seen -> no header" not_called "cryptsetup reencrypt"
+}
+
+test_cryptroot_karg_is_final() { # I8
+  cryptroot_env plain on
+  sed -i 's/$/ juniper.encrypt=0/' "$T/cmdline"
+  crt prepare 2>/dev/null
+  check "prep: karg recorded" grep -qx 'not-encrypted:juniper.encrypt=0' "$T/cidata/juniper-encrypt"
+  check "prep: karg no fwkey" not_called fwkey
+  check "prep: karg no sfdisk" not_called sfdisk
+  sed -i 's/ juniper.encrypt=0//' "$T/cmdline"
+  : >"$CALLS"
+  crt prepare
+  check "prep: karg removed, still no cryptsetup" not_called cryptsetup
+  check "prep: karg removed, reason kept" test "$(runf reason)" = juniper.encrypt=0
+}
+
+# setup_case CASE: break one first-boot precondition.
+setup_case() {
+  case $1 in
+    norecipient) touch "$T/age.fail" ;;
+    norecipientfile) rm "$T/cidata/juniper-recovery.txt" ;;
+    twocands)
+      echo "/dev/sda3 TYPE=xfs LABEL=root UUID=U1 PART_ENTRY_TYPE=b921b045-1df0-41c3-af44-4c6f280d3fae" >>"$T/blkid.db"
+      bsys_part sda 3 4192256 12584927
+      echo 62521344 >"$T/bsys/devices/sda/size"
+      ;;
+    wrongtype) sed -i '/mmcblk0p3/s/PART_ENTRY_TYPE=[^ ]*/PART_ENTRY_TYPE=0fc63daf-8483-4772-8e79-3d69d8477de4/' "$T/blkid.db" ;;
+    nospace) echo $((4192256 + 12584927 + 34 + 131071)) >"$T/bsys/devices/mmcblk0/size" ;;
+    nocardid) touch "$T/fw.cardid-fail" ;;
+  esac
+}
+
+test_cryptroot_genkey_only_last() { # I7
+  local c
+  declare -A why=([norecipient]="no usable recovery recipient" [norecipientfile]="no usable recovery recipient"
+    [twocands]="two disks carry this root filesystem" [wrongtype]="root partition not on the boot disk"
+    [nospace]="no free space after the root partition" [nocardid]="disk not found in sysfs")
+  for c in norecipient norecipientfile twocands wrongtype nospace nocardid; do
+    cryptroot_env plain on
+    setup_case "$c"
+    crt prepare 2>/dev/null
+    check "prep ($c): fwkey ensure not called" not_called "fwkey ensure"
+    check "prep ($c): no sfdisk" not_called sfdisk
+    check "prep ($c): no cryptsetup" not_called cryptsetup
+    check "prep ($c): reason" grep -qxF "not-encrypted:${why[$c]}" "$T/cidata/juniper-encrypt"
+  done
+}
+
+test_cryptroot_firmware_unavailable_fails_open() {
+  cryptroot_env plain on
+  echo "unavailable:no /dev/vcio" >"$T/fw.mode"
+  crt prepare 2>/dev/null
+  check "prep: ensure detail recorded" grep -qxF "not-encrypted:firmware key interface unavailable: no /dev/vcio" "$T/cidata/juniper-encrypt"
+  check "prep: ensure failure, no sfdisk" not_called sfdisk
+  cryptroot_env plain on
+  echo "garbage" >"$T/fw.mode"
+  crt prepare 2>/dev/null
+  check "prep: unknown ensure output fails open" grep -qxF "not-encrypted:firmware key interface unavailable: garbage" "$T/cidata/juniper-encrypt"
+  cryptroot_env plain on
+  touch "$T/fw.derive-fail"
+  echo locked >"$T/fw.probe"
+  crt prepare 2>/dev/null
+  check "prep: derive failure uses the probe" grep -qxF "not-encrypted:firmware key interface unavailable: derive failed (locked)" "$T/cidata/juniper-encrypt"
+  check "prep: derive failure, no sfdisk" not_called sfdisk
+  check "prep: derive failure, no cryptsetup" not_called cryptsetup
+}
+
+# Task 3b: fwkey's firmware gate reasons all fail open, recorded with the reason.
+test_cryptroot_firmware_gate_reasons_fail_open() {
+  local r
+  for r in firmware-too-old pi4-unverified unsupported-board firmware-wedged invalid-key; do
+    cryptroot_env plain on
+    echo "unavailable:$r" >"$T/fw.mode"
+    crt prepare 2>/dev/null
+    check "prep ($r): exit 0" test "$RC" = 0
+    check "prep ($r): recorded on CIDATA" grep -qxF "not-encrypted:firmware key interface unavailable: $r" "$T/cidata/juniper-encrypt"
+    check "prep ($r): recorded in /run" test "$(runf reason)" = "firmware key interface unavailable: $r"
+    check "prep ($r): no sfdisk" not_called sfdisk
+    check "prep ($r): no cryptsetup" not_called cryptsetup
+  done
+  cryptroot_env plain on
+  touch "$T/fw.derive-fail"
+  echo unavailable:firmware-wedged >"$T/fw.probe"
+  crt prepare 2>/dev/null
+  check "prep: wedged during derive fails open" grep -qxF "not-encrypted:firmware key interface unavailable: derive failed (firmware-wedged)" "$T/cidata/juniper-encrypt"
+  check "prep: wedged during derive, no cryptsetup" not_called cryptsetup
+}
+
+test_cryptroot_recipients_validated_by_age() { # C3
+  cryptroot_env plain on
+  touch "$T/age.fail"
+  crt prepare 2>/dev/null
+  check "prep: age validates" called "age -R $T/cidata/juniper-recovery.txt -o /dev/null"
+  check "prep: no recipient reason" grep -qx 'not-encrypted:no usable recovery recipient' "$T/cidata/juniper-encrypt"
+  check "prep: no recipient, no cryptsetup" not_called cryptsetup
+}
+
+test_cryptroot_init_failure_fails_open() {
+  cryptroot_env plain on
+  touch "$T/cs.init.fail"
+  crt prepare 2>/dev/null
+  check "prep: init-only failed, no header -> fail open" grep -qx 'not-encrypted:encrypt failed' "$T/cidata/juniper-encrypt"
+}
+
+test_cryptroot_init_failure_with_header_resumes() { # never fail open over a header
+  cryptroot_env plain on
+  touch "$T/cs.init.fail-after-header"
+  crt prepare 2>/dev/null
+  check "prep: header kept converting, then finished" grep -qx encrypted "$T/cidata/juniper-encrypt"
+  check "prep: repair after a failed init" order "cryptsetup repair" "--resume-only"
+  check "prep: sealed" grep -q '"recovery":"sealed"' "$T/luks/mmcblk0p3/token0"
+}
+
+test_cryptroot_token_failure_keeps_converting() {
+  cryptroot_env plain on
+  touch "$T/cs.token.fail"
+  crt prepare 2>/dev/null
+  check "prep: token failure keeps converting" grep -qx converting "$T/cidata/juniper-encrypt"
+  rm "$T/cs.token.fail"
+  : >"$CALLS"
+  crt prepare 2>/dev/null
+  check "prep: next boot imports the token (C1)" called "cryptsetup token import --token-id 0"
+  check "prep: next boot does not resume again" not_called "cryptsetup reencrypt"
+  check "prep: next boot finishes" grep -qx encrypted "$T/cidata/juniper-encrypt"
+}
+
+test_cryptroot_plain_converting_retries() { # header never written: retry from preconditions
+  cryptroot_env plain converting
+  crt prepare 2>/dev/null
+  check "prep: converting plain retries" called "--init-only"
+  check "prep: converting plain finishes" grep -qx encrypted "$T/cidata/juniper-encrypt"
+}
+
+test_cryptroot_resume_after_header_without_token() { # C1
+  cryptroot_env luks-notoken converting
+  crt prepare 2>/dev/null
+  check "prep: token imported" called "cryptsetup token import --token-id 0"
+  check "prep: token has root uuid" grep -q '"root_uuid":"U1"' "$T/luks/mmcblk0p3/token0"
+  check "prep: repair then resume" order "cryptsetup repair" "--resume-only"
+  check "prep: resume then token" order "--resume-only" "cryptsetup token import --token-id 0"
+  check "prep: token then seal" order "cryptsetup token import --token-id 0" "cryptsetup luksAddKey"
+  check "prep: C1 finishes" grep -qx encrypted "$T/cidata/juniper-encrypt"
+  check "prep: C1 sealed" grep -q '"recovery":"sealed"' "$T/luks/mmcblk0p3/token0"
+  check "prep: no second header" not_called "--init-only"
+}
+
+# Kill point: the conversion finished, power was cut before the token import.
+test_cryptroot_cut_after_resume_before_token() {
+  cryptroot_env luks-done-notoken converting
+  crt prepare 2>/dev/null
+  check "prep: no repair" not_called "cryptsetup repair"
+  check "prep: no resume" not_called "cryptsetup reencrypt"
+  check "prep: token imported" grep -q '"root_uuid":"U1"' "$T/luks/mmcblk0p3/token0"
+  check "prep: sealed" grep -q '"recovery":"sealed"' "$T/luks/mmcblk0p3/token0"
+  check "prep: grown" grep -qx 'size=+' "$T/sfdisk.1"
+  check "prep: recorded" grep -qx encrypted "$T/cidata/juniper-encrypt"
+}
+
+test_cryptroot_unlock_adopts_finished_tokenless_header() {
+  cryptroot_env luks-done-notoken converting
+  crt unlock 2>/dev/null
+  check "unlock adopt: exit 0" test "$RC" = 0
+  check "unlock adopt: token then open" order "cryptsetup token import --token-id 0" "cryptsetup open"
+  check "unlock adopt: token root uuid" grep -q '"root_uuid":"U1"' "$T/luks/mmcblk0p3/token0"
+  check "unlock adopt: opened" test "$(cat "$T/luks/active")" = mmcblk0p3
+  check "unlock adopt: recovery pending" test "$(runf recovery)" = pending
+  check "unlock adopt: CIDATA unmounted" called "umount"
+  cryptroot_env luks-done-notoken encrypted
+  crt unlock 2>/dev/null
+  check "unlock adopt: needs the converting marker" not_called "cryptsetup token import"
+  cryptroot_env luks-done-notoken converting
+  printf '\0\0\0\1' >"$T/tryboot"
+  export JUNIPER_TRYBOOT_FLAG=$T/tryboot
+  crt unlock 2>/dev/null
+  check "unlock adopt: no header write under tryboot" not_called "cryptsetup token import"
+}
+
+test_cryptroot_unlock_unfinished_conversion_hint() {
+  cryptroot_env luks-notoken converting
+  crt unlock 2>/dev/null
+  check "unlock unfinished: exit 1" test "$RC" = 1
+  check "unlock unfinished: not opened" not_called "cryptsetup open"
+  check "unlock unfinished: says it could not resume" grep -q "could not resume" "$T/console"
+  check "unlock unfinished: not 'another Pi'" not_grep_dir "another Raspberry Pi" "$T/console"
+}
+
+test_cryptroot_first_boot_resume_failure_exits_0() { # prepare exits 0 (brief)
+  cryptroot_env plain on
+  touch "$T/cs.resume.fail"
+  crt prepare 2>/dev/null
+  check "prep: resume failure on first boot exits 0" test "$RC" = 0
+  check "prep: first-boot resume failure keeps converting" grep -qx converting "$T/cidata/juniper-encrypt"
+  check "prep: first-boot resume failure, no token yet" not_called "cryptsetup token import"
+  check "prep: first-boot resume failure, run reason" test "$(runf reason)" = "encryption unfinished; the next boot retries"
+}
+
+test_cryptroot_c1_needs_converting_marker() {
+  local m
+  for m in encrypted on; do
+    cryptroot_env luks-notoken "$m"
+    crt prepare 2>/dev/null
+    check "prep ($m): tokenless LUKS untouched" not_called "cryptsetup token import"
+    check "prep ($m): no resume" not_called "cryptsetup reencrypt"
+  done
+  cryptroot_env luks-notoken converting
+  setup_case wrongtype
+  crt prepare 2>/dev/null
+  check "prep: tokenless LUKS of another type untouched" not_called "cryptsetup token import"
+}
+
+test_cryptroot_resume_mid_reencrypt() {
+  cryptroot_env luks-notoken converting
+  crt prepare 2>/dev/null
+  check "prep: repair" called "cryptsetup repair --batch-mode --key-file - /dev/mmcblk0p3"
+  check "prep: repair then resume" order "cryptsetup repair" "--resume-only"
+  check "prep: resume then seal" order "--resume-only" "cryptsetup luksAddKey"
+  check "prep: seal then grow" order_last "cryptsetup luksAddKey" "sfdisk -N 3"
+  check "prep: grow to max" grep -qx 'size=+' "$T/sfdisk.1"
+  check "prep: no relocate on resume" not_called "sfdisk --relocate"
+  check "prep: recorded" grep -qx encrypted "$T/cidata/juniper-encrypt"
+  check "prep: no genkey on resume" not_called "fwkey ensure"
+}
+
+test_cryptroot_resume_failure_keeps_converting() {
+  cryptroot_env luks-notoken converting
+  touch "$T/cs.resume.fail"
+  crt prepare 2>/dev/null
+  check "prep: resume failure exits 0" test "$RC" = 0
+  check "prep: resume failure keeps converting" grep -qx converting "$T/cidata/juniper-encrypt"
+  check "prep: resume failure, no seal" not_called "cryptsetup luksAddKey"
+  check "prep: resume failure, no grow" not_called "sfdisk"
+  rm "$T/cs.resume.fail"
+  : >"$CALLS"
+  crt prepare 2>/dev/null
+  check "prep: next boot finishes" grep -qx encrypted "$T/cidata/juniper-encrypt"
+}
+
+test_cryptroot_cut_after_grow_records() { # kill point: after the grow, before the record
+  cryptroot_env luks-sealed converting
+  crt prepare 2>/dev/null
+  check "prep: records encrypted" grep -qx encrypted "$T/cidata/juniper-encrypt"
+  check "prep: no second grow" not_called sfdisk
+  check "prep: no header writes" not_called "cryptsetup luksAddKey"
+}
+
+test_cryptroot_encrypted_card_is_quiet() {
+  cryptroot_env luks-sealed encrypted
+  crt prepare 2>/dev/null
+  check "prep: no header writes" test "$(grep -cE '^cryptsetup (reencrypt|luksAddKey|luksKillSlot|token import|repair)' "$CALLS")" = 0
+  check "prep: no sfdisk" not_called sfdisk
+  check "prep: no CIDATA write" not_called "remount,rw"
+  check "prep: no fwkey" not_called fwkey
+}
+
+test_cryptroot_no_grow_unless_converting() { # I1: grow only on the encrypting path
+  cryptroot_env luks-pending encrypted
+  crt prepare 2>/dev/null
+  check "prep: encrypted marker, no grow" not_called sfdisk
+}
+
+test_cryptroot_seal_retry_kills_slot1_first() { # I5
+  cryptroot_env luks-pending converting
+  echo "0 1" >"$T/luks/mmcblk0p3/slots"
+  crt prepare 2>/dev/null
+  check "seal: kill slot 1" called "cryptsetup luksKillSlot --batch-mode --key-file - /dev/mmcblk0p3 1"
+  check "seal: kill before add" order "cryptsetup luksKillSlot" "cryptsetup luksAddKey --batch-mode --key-slot 1"
+  check "seal: exactly slots 0 and 1" test "$(cat "$T/luks/mmcblk0p3/slots")" = "0 1"
+  check "seal: never kills slot 0" not_called "luksKillSlot --batch-mode --key-file - /dev/mmcblk0p3 0"
+  check "seal: sealed" grep -q '"recovery":"sealed"' "$T/luks/mmcblk0p3/token0"
+}
+
+test_cryptroot_seal_age_failure_leaves_pending() { # C3
+  cryptroot_env luks-pending encrypted
+  touch "$T/age.fail"
+  crt prepare 2>/dev/null
+  check "seal: age failure, no luksAddKey" not_called "cryptsetup luksAddKey"
+  check "seal: age failure, still pending" grep -q '"recovery":"pending"' "$T/luks/mmcblk0p3/token0"
+  check "seal: age failure, no token 1" test ! -e "$T/luks/mmcblk0p3/token1"
+  crt unlock 2>/dev/null
+  check "seal: unlock reports pending" test "$(runf recovery)" = pending
+}
+
+test_cryptroot_seal_cut_after_token1_redoes() { # kill point: after the slot, before `sealed`
+  cryptroot_env luks-pending converting
+  echo "0 1" >"$T/luks/mmcblk0p3/slots"
+  echo '{"type":"juniper-recovery","keyslots":[],"age":"old"}' >"$T/luks/mmcblk0p3/token1"
+  echo old >"$T/cidata/juniper-recovery.age"
+  crt prepare 2>/dev/null
+  check "seal: token 1 replaced" not_grep_dir '"age":"old"' "$T/luks"
+  check "seal: file replaced" not_grep_dir '^old$' "$T/cidata/juniper-recovery.age"
+  check "seal: slots 0 1" test "$(cat "$T/luks/mmcblk0p3/slots")" = "0 1"
+}
+
+test_cryptroot_recovery_via_pipe() {
+  cryptroot_env luks-pending encrypted
+  crt prepare 2>/dev/null
+  check "seal: new key through a pipe" grep -q '^newkey fd3=pipe:' "$CALLS"
+  local a b
+  a=$(sed -n 's/^age-in sha=//p' "$CALLS")
+  b=$(sed -n 's/^newkey .* sha=//p' "$CALLS")
+  check "seal: the sealed key is the added key" test -n "$a" -a "$a" = "$b"
+  check "seal: no passphrase in argv" not_called "$(fake_pass)"
+}
+
+test_cryptroot_token_json_shape() {
+  cryptroot_env plain on
+  crt prepare 2>/dev/null
+  local t0 t1
+  t0=$(tok mmcblk0p3 0)
+  t1=$(tok mmcblk0p3 1)
+  check "token0: exact" test "$t0" = '{"type":"juniper","keyslots":[],"root_uuid":"U1","binding":"juniper.luks.root.v1","id_type":"mmc","recovery":"sealed","recipients":"2"}'
+  check "token1: type" grep -q '^{"type":"juniper-recovery","keyslots":\[\],"age":"' "$T/luks/mmcblk0p3/token1"
+  check "token1: escaped" grep -qF 'q\"uote\\back\n-----END AGE ENCRYPTED FILE-----\n"}' "$T/luks/mmcblk0p3/token1"
+  check "token1: one line" test "$(grep -c '' "$T/luks/mmcblk0p3/token1")" = 1
+  check "token1: begins armored" test "${t1%%'\n'*}" = '{"type":"juniper-recovery","keyslots":[],"age":"-----BEGIN AGE ENCRYPTED FILE-----'
+}
+
+test_cryptroot_no_header_writes_under_tryboot() { # I9
+  local c
+  cryptroot_env luks-pending converting
+  printf '\0\0\0\1' >"$T/tryboot"
+  export JUNIPER_TRYBOOT_FLAG=$T/tryboot
+  crt prepare 2>"$T/err"
+  for c in "luksAddKey" "luksKillSlot" "token import" "reencrypt" "repair" "sfdisk" "remount,rw"; do
+    check "tryboot: no $c" not_called "$c"
+  done
+  check "tryboot: logged" grep -q 'under tryboot; header changes deferred until a confirmed boot' "$T/err"
+  check "tryboot: run file" test -s "$T/run/cryptroot"
+  printf '\0\0\0\0' >"$T/tryboot"
+  crt prepare 2>/dev/null
+  check "tryboot flag 0: sealing runs" called "luksAddKey"
+}
+
+test_cryptroot_usb_board_only_encrypts() { # I2
+  cryptroot_env plain on
+  echo board: >"$T/fw.id"
+  crt prepare 2>/dev/null
+  check "board: encrypted" grep -qx encrypted "$T/cidata/juniper-encrypt"
+  check "board: id_type" grep -q '"id_type":"board"' "$T/luks/mmcblk0p3/token0"
+  crt unlock 2>/dev/null
+  check "board: binding" test "$(runf binding)" = board
+}
+
+test_cryptroot_cidata_ro_except_writes() {
+  cryptroot_env plain on
+  crt prepare 2>/dev/null
+  check "cidata: mounted read-only" called "mount -o ro -t vfat /dev/mmcblk0p1 $T/cidata"
+  check "cidata: as many ro as rw" test "$(count_calls "remount,rw")" = "$(count_calls "remount,ro")"
+  check "cidata: writes happened" test "$(count_calls "remount,rw")" -ge 3
+  # a write outside a window would have failed: the stubbed mount makes the dir read-only
+  check "cidata: marker written" grep -qx encrypted "$T/cidata/juniper-encrypt"
+  check "cidata: blob written" test -s "$T/cidata/juniper-recovery.age"
+  check "cidata: unmounted" called "umount"
+}
+
+test_cryptroot_adiantum_without_aes() {
+  cryptroot_env plain on
+  printf 'Features\t: fp asimd evtstrm crc32 cpuid\n' >"$T/cpuinfo"
+  crt prepare 2>/dev/null
+  check "pi4: adiantum" called "--cipher xchacha12,aes-adiantum-plain64 --key-size 256 --sector-size 512"
+}
+
+test_cryptroot_unlock_plain_is_noop() {
+  cryptroot_env plain off
+  crt prepare
+  crt unlock
+  check "unlock plain: exit 0" test "$RC" = 0
+  check "unlock plain: no open" not_called "cryptsetup open"
+  check "unlock plain: no fwkey" not_called fwkey
+  check "unlock plain: state" test "$(runf state)" = not-encrypted
+  check "unlock plain: one state line" test "$(grep -c '^state=' "$T/run/cryptroot")" = 1
+  check "unlock plain: keeps prepare's reason" test "$(runf reason)" = "encrypt: false"
+  check "plain boot: prepare and unlock never sleep" not_called sleep
+}
+
+test_cryptroot_unlock_tries_each_candidate() {
+  cryptroot_env luks-sealed encrypted
+  sed -i '1i /dev/sda3 TYPE=xfs LABEL=root UUID=U2 PART_ENTRY_TYPE=b921b045-1df0-41c3-af44-4c6f280d3fae' "$T/blkid.db"
+  bsys_part sda 3 4192256 12584927
+  luks_card sda3 sealed "0 1"
+  touch "$T/luks/sda3/wrongboard"
+  crt unlock 2>/dev/null
+  check "unlock: exit 0" test "$RC" = 0
+  check "unlock: tried sda3" called "cryptsetup open --allow-discards --key-file - /dev/sda3 juniper-root"
+  check "unlock: then mmcblk0p3" order "/dev/sda3 juniper-root" "/dev/mmcblk0p3 juniper-root"
+  check "unlock: derive per disk" called "fwkey derive mmcblk0"
+  check "unlock: opened" test "$(cat "$T/luks/active")" = mmcblk0p3
+  check "unlock: fwkey lock once" test "$(count_calls "fwkey lock")" = 1
+  check "unlock: lock after open" order "/dev/mmcblk0p3 juniper-root" "fwkey lock"
+  check "unlock: state" test "$(runf state)" = encrypted
+  check "unlock: cipher" test "$(runf cipher)" = aes-xts-plain64
+  check "unlock: binding" test "$(runf binding)" = board+mmc
+  check "unlock: key_lock" test "$(runf key_lock)" = unavailable
+  check "unlock: recovery" test "$(runf recovery)" = sealed:2
+  check "unlock: no sleep" not_called sleep
+  check "unlock: no header writes" not_called "token import"
+}
+
+test_cryptroot_unlock_ignores_other_root_uuid() {
+  cryptroot_env luks-sealed encrypted
+  sed -i 's/"root_uuid":"U1"/"root_uuid":"U9"/' "$T/luks/mmcblk0p3/token0"
+  crt unlock 2>/dev/null
+  check "unlock: another release's root not opened" not_called "cryptsetup open"
+}
+
+test_cryptroot_unlock_ignores_unknown_token_fields() {
+  cryptroot_env luks-sealed encrypted
+  sed -i 's/}$/,"future":"x","n":"7"}/' "$T/luks/mmcblk0p3/token0"
+  crt unlock 2>/dev/null
+  check "unlock: unknown fields ignored" test "$(runf recovery)" = sealed:2
+}
+
+test_cryptroot_unlock_skips_unfinished_conversion() {
+  cryptroot_env luks-notoken converting
+  crt unlock 2>/dev/null
+  check "unlock: half-encrypted root not opened" not_called "cryptsetup open"
+}
+
+test_cryptroot_unlock_failure_under_tryboot_exits_fast() {
+  cryptroot_env luks-sealed encrypted
+  touch "$T/luks/mmcblk0p3/wrongboard"
+  printf '\0\0\0\1' >"$T/tryboot"
+  export JUNIPER_TRYBOOT_FLAG=$T/tryboot JUNIPER_UNLOCK_FAIL_DELAY=120
+  check "unlock tryboot: exit 1" fails "$LIBEXEC/cryptroot" unlock
+  check "unlock tryboot: no sleep" not_called sleep
+  check "unlock tryboot: one try" test "$(count_calls "cryptsetup open")" = 1
+  check "unlock tryboot: no console hint" test ! -e "$T/console"
+}
+
+test_cryptroot_unlock_failure_normal_boot_hint() {
+  cryptroot_env luks-sealed encrypted
+  touch "$T/luks/mmcblk0p3/wrongboard"
+  check "unlock: exit 1" fails "$LIBEXEC/cryptroot" unlock
+  check "unlock: three tries" test "$(count_calls "cryptsetup open")" = 3
+  check "unlock: 10 s apart" test "$(count_calls "sleep 10")" = 2
+  check "unlock: then the delay" called "sleep 0"
+  check "unlock: console hint" grep -q "just unlock-card" "$T/console"
+  check "unlock: no rebind promise" not_grep_dir rebind "$T/console"
+  check "unlock: no lock on failure" not_called "fwkey lock"
+}
+
+test_cryptroot_unlock_no_device_leaves_it_to_dracut() {
+  cryptroot_env plain on
+  : >"$T/blkid.db"
+  crt unlock 2>/dev/null
+  check "unlock: nothing found exits 0" test "$RC" = 0
+  check "unlock: nothing found, no hint" test ! -e "$T/console"
+}
+
+test_cryptroot_usage() {
+  cryptroot_env plain off
+  local rc
+  rc=0
+  "$LIBEXEC/cryptroot" bogus 2>/dev/null || rc=$?
+  check "cryptroot: unknown command exits 2" test "$rc" = 2
+  rc=0
+  "$LIBEXEC/cryptroot" 2>/dev/null || rc=$?
+  check "cryptroot: no command exits 2" test "$rc" = 2
+  rc=0
+  "$LIBEXEC/cryptroot" prepare extra 2>/dev/null || rc=$?
+  check "cryptroot: extra argument exits 2" test "$rc" = 2
+  check "cryptroot: no set -x" not_grep_dir '^[[:space:]]*set -[a-zA-Z]*x' "$LIBEXEC/cryptroot"
+}
+
 # --- #81: hardware-run follow-ups ---
 test_second_strike_writes_update_held_at_once() {
   strike_env
@@ -3099,8 +4377,330 @@ test_version_label_and_first_boot_reboot_guard() {
   done
 }
 
+# --- encryption reporting (#50 task 7) ---
+enc_env() {
+  export JUNIPER_RUN_DIR=$T/run JUNIPER_CIDATA_DIR=$T/cidata
+  mkdir -p "$JUNIPER_RUN_DIR" "$JUNIPER_CIDATA_DIR"
+  stub findmnt 'echo /dev/mapper/juniper-root'
+  stub lsblk 'printf "crypt\npart\ndisk\n"'
+  enc=$JUNIPER_STATE_DIR/encryption
+}
+enc_run() { printf '%s\n' "$@" >"$JUNIPER_RUN_DIR/cryptroot"; }
+enc_ok() {
+  enc_run state=encrypted reason= cipher=aes-xts-plain64 binding=board+mmc key_lock=locked recovery=sealed:2
+}
+
+test_encryption_status_encrypted() {
+  enc_env
+  enc_ok
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: encrypted" grep -qx 'state=encrypted' "$enc"
+  check "encryption-status: cipher kept" grep -qx 'cipher=aes-xts-plain64' "$enc"
+  check "encryption-status: requested" grep -qx 'requested=yes' "$enc"
+  check "encryption-status: print line" stdout_has \
+    'Storage: encrypted (LUKS2 aes-xts-plain64, bound to this Pi and card; key lock: locked; recovery: sealed to 2 keys)' \
+    "$LIBEXEC/encryption-status" --print
+}
+
+test_encryption_status_live_device_wins() {
+  enc_env
+  enc_ok
+  stub lsblk 'printf "part\ndisk\n"'
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: live part -> not-encrypted" grep -qx 'state=not-encrypted' "$enc"
+  check "encryption-status: live reason" grep -qx 'reason=root is not on dm-crypt' "$enc"
+  check "encryption-status: live mismatch is a warning" grep -qx 'requested=yes' "$enc"
+  check "encryption-status: print warns" stdout_has 'Storage: NOT ENCRYPTED (root is not on dm-crypt). Reflash to encrypt.' "$LIBEXEC/encryption-status" --print
+}
+
+test_encryption_status_plain_card_is_quiet() {
+  enc_env
+  stub lsblk 'printf "part\ndisk\n"'
+  enc_run state=not-encrypted 'reason=not requested at flash time'
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: plain card, not requested" grep -qx 'requested=no' "$enc"
+  check "encryption-status: plain card, quiet line" stdout_has '^Storage: not encrypted (not requested at flash time)$' "$LIBEXEC/encryption-status" --print
+  check "encryption-status: plain card, no shouting" not_stdout_has 'NOT ENCRYPTED' "$LIBEXEC/encryption-status" --print
+}
+
+test_encryption_status_firmware_reasons() {
+  enc_env
+  stub lsblk 'printf "part\ndisk\n"'
+  enc_run state=not-encrypted 'reason=firmware key interface unavailable: firmware-too-old'
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: firmware-too-old asks for an EEPROM update" stdout_has 'update the Pi.s EEPROM: sudo rpi-eeprom-update -a' "$LIBEXEC/encryption-status" --print
+  check "encryption-status: firmware-too-old is requested" grep -qx 'requested=yes' "$enc"
+  enc_run state=not-encrypted 'reason=firmware key interface unavailable: pi4-unverified'
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: pi4-unverified" stdout_has 'Pi 4 firmware key interface is unverified' "$LIBEXEC/encryption-status" --print
+  enc_run state=not-encrypted 'reason=firmware key interface unavailable: derive failed (firmware-wedged)'
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: firmware-wedged" stdout_has 'firmware key interface stopped answering' "$LIBEXEC/encryption-status" --print
+  enc_run state=not-encrypted 'reason=encryption unfinished; the next boot retries'
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: unfinished retries" stdout_has 'The next boot retries' "$LIBEXEC/encryption-status" --print
+}
+
+test_encryption_status_legacy_device() {
+  enc_env
+  stub lsblk 'printf "part\ndisk\n"'
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: no run file, no marker -> legacy" grep -qx 'reason=flashed before encryption support' "$enc"
+  check "encryption-status: legacy is quiet" grep -qx 'requested=no' "$enc"
+}
+
+test_encryption_status_prepare_missing() {
+  enc_env
+  stub lsblk 'printf "part\ndisk\n"'
+  echo on >"$JUNIPER_CIDATA_DIR/juniper-encrypt"
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: marker but no run file" grep -qx 'reason=prepare did not run' "$enc"
+  check "encryption-status: asked for encryption -> warning" grep -qx 'requested=yes' "$enc"
+  echo off >"$JUNIPER_CIDATA_DIR/juniper-encrypt"
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: marker off -> quiet" grep -qx 'requested=no' "$enc"
+}
+
+test_encryption_status_mounts_cidata_read_only() {
+  enc_env
+  unset JUNIPER_CIDATA_DIR
+  stub lsblk 'printf "part\ndisk\n"'
+  stub cidata-device 'echo /dev/mmcblk0p1'
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub mount 'echo on >"${@: -1}/juniper-encrypt"'
+  export JUNIPER_CIDATA_DEVICE=cidata-device JUNIPER_MOUNT_RETRY_DELAY=0
+  TMPDIR=$T "$LIBEXEC/encryption-status" || true
+  check "encryption-status: mounts boot disk CIDATA read-only" called "mount -o ro /dev/mmcblk0p1"
+  check "encryption-status: unmounts it" called "umount"
+  check "encryption-status: really read the marker" grep -qx 'reason=prepare did not run' "$enc"
+}
+
+test_encryption_status_mount_failure_is_loud() {
+  enc_env
+  unset JUNIPER_CIDATA_DIR
+  stub lsblk 'printf "part\ndisk\n"'
+  stub cidata-device 'echo /dev/mmcblk0p1'
+  stub mount 'exit 32'
+  export JUNIPER_CIDATA_DEVICE=cidata-device JUNIPER_MOUNT_RETRY_DELAY=0
+  TMPDIR=$T "$LIBEXEC/encryption-status"
+  check "encryption-status: mount failure -> unknown" grep -qx 'state=unknown' "$enc"
+  check "encryption-status: mount failure is not quiet" grep -qx 'requested=yes' "$enc"
+  check "encryption-status: mount retried" test "$(grep -c '^mount' "$CALLS")" = 5
+  check "encryption-status: not passed off as legacy" not_grep_dir 'flashed before' "$JUNIPER_STATE_DIR"
+  check "encryption-status: print says unknown" stdout_has 'Storage: UNKNOWN' "$LIBEXEC/encryption-status" --print
+  motd_env
+  df_queue "30000 20000"
+  check "motd: unknown status warns" stdout_has 'Storage encryption status unknown' "$LIBEXEC/motd"
+  check "unit: not ordered after firstboot (healthcheck cycle)" not_grep_dir 'juniper-firstboot' "$ROOT/system_files/usr/lib/systemd/system/juniper-encryption-status.service"
+}
+
+test_encryption_status_empty_reason_is_quiet() {
+  enc_env
+  stub lsblk 'printf "part\ndisk\n"'
+  enc_run state=not-encrypted reason=
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: empty reason, quiet" grep -qx 'requested=no' "$enc"
+  check "encryption-status: empty reason noted in pi-status" stdout_has 'not encrypted (reason not recorded)' "$LIBEXEC/encryption-status" --print
+}
+
+test_metrics_encryption_gauges() {
+  metrics_env
+  printf 'state=encrypted\nkey_lock=unavailable\nrecovery=sealed:2\n' >"$JUNIPER_STATE_DIR/encryption"
+  "$LIBEXEC/metrics"
+  check "metrics: encrypted 1" grep -qx 'juniper_encrypted 1' "$prom"
+  check "metrics: key lock 0" grep -qx 'juniper_encryption_key_locked 0' "$prom"
+  check "metrics: recovery sealed 1" grep -qx 'juniper_encryption_recovery_sealed 1' "$prom"
+  printf 'state=encrypted\nkey_lock=locked\nrecovery=pending\n' >"$JUNIPER_STATE_DIR/encryption"
+  "$LIBEXEC/metrics"
+  check "metrics: locked 1" grep -qx 'juniper_encryption_key_locked 1' "$prom"
+  check "metrics: pending recovery 0" grep -qx 'juniper_encryption_recovery_sealed 0' "$prom"
+  rm "$JUNIPER_STATE_DIR/encryption"
+  "$LIBEXEC/metrics"
+  check "metrics: no file -> encrypted 0" grep -qx 'juniper_encrypted 0' "$prom"
+  check "metrics: no file -> requested 0" grep -qx 'juniper_encryption_requested 0' "$prom"
+  check "metrics: no file -> recovery series absent" not_grep_dir juniper_encryption_recovery_sealed "$JUNIPER_METRICS_DIR"
+  check "metrics: no file -> key lock series absent" not_grep_dir juniper_encryption_key_locked "$JUNIPER_METRICS_DIR"
+  printf 'state=not-encrypted\nrequested=yes\n' >"$JUNIPER_STATE_DIR/encryption"
+  "$LIBEXEC/metrics"
+  check "metrics: failed request -> requested 1" grep -qx 'juniper_encryption_requested 1' "$prom"
+  check "metrics: failed request -> encrypted 0" grep -qx 'juniper_encrypted 0' "$prom"
+}
+
+test_metrics_keeps_existing_series() {
+  metrics_env
+  "$LIBEXEC/metrics"
+  check "metrics: image info still present" grep -q '^juniper_image_info' "$prom"
+  check "metrics: healthy still present" grep -qx 'juniper_healthy 1' "$prom"
+}
+
+test_motd_warns_not_encrypted() {
+  motd_env
+  df_queue "30000 20000"
+  printf 'state=not-encrypted\nrequested=yes\nreason=x\nfriendly=firmware too old\nadvice=Reflash to encrypt.\n' >"$JUNIPER_STATE_DIR/encryption"
+  check "motd: not-encrypted warning" stdout_has 'Storage NOT ENCRYPTED (firmware too old): anyone holding this card can read its secrets. Reflash to encrypt.' "$LIBEXEC/motd"
+  printf 'state=not-encrypted\nrequested=no\nreason=not requested at flash time\nfriendly=not requested at flash time\n' >"$JUNIPER_STATE_DIR/encryption"
+  check "motd: plain card shows nothing" not_stdout_has 'ENCRYPTED\|Storage' "$LIBEXEC/motd"
+  rm "$JUNIPER_STATE_DIR/encryption"
+  check "motd: no report shows nothing" not_stdout_has 'ENCRYPTED' "$LIBEXEC/motd"
+}
+
+test_motd_warns_recovery_unsealed() {
+  motd_env
+  df_queue "30000 20000"
+  printf 'state=encrypted\nrecovery=pending\n' >"$JUNIPER_STATE_DIR/encryption"
+  check "motd: unsealed recovery warning" stdout_has 'Storage recovery key not sealed (pending): only this Pi can unlock this card.' "$LIBEXEC/motd"
+  printf 'state=encrypted\nrecovery=sealed:2\n' >"$JUNIPER_STATE_DIR/encryption"
+  check "motd: sealed -> quiet" not_stdout_has 'Storage' "$LIBEXEC/motd"
+}
+
+test_pi_status_board_only_wording() {
+  enc_env
+  enc_run state=encrypted reason= cipher=xchacha12,aes-adiantum-plain64 binding=board key_lock=unavailable recovery=sealed:1
+  "$LIBEXEC/encryption-status"
+  check "pi-status: board-only wording" stdout_has 'bound to this Pi only (USB disk has no serial; a clone unlocks on this Pi); key lock: unavailable; recovery: sealed to 1 keys' "$LIBEXEC/encryption-status" --print
+  check "pi-status: recipe calls it" grep -qx '    @/usr/libexec/juniper/encryption-status --print' "$ROOT/system_files/usr/share/juniper/just/pi.just"
+}
+
+test_encryption_status_unit() {
+  local u=$ROOT/system_files/usr/lib/systemd/system/juniper-encryption-status.service
+  check "unit: after local-fs" grep -qx 'After=local-fs.target' "$u"
+  check "unit: before healthcheck and metrics" grep -qx 'Before=juniper-healthcheck.service juniper-metrics.service' "$u"
+  check "build.sh enables it" grep -q 'juniper-encryption-status.service' "$ROOT/build_files/build.sh"
+}
+
+test_firstboot_keeps_and_copies_recovery() {
+  firstboot_env
+  echo "age-armor blob" >"$JUNIPER_CIDATA_DIR/juniper-recovery.age"
+  "$LIBEXEC/firstboot"
+  check "firstboot: blob copied" grep -q 'age-armor blob' "$JUNIPER_STATE_DIR/recovery.age"
+  check "firstboot: blob mode 0644" test "$(stat -c %a "$JUNIPER_STATE_DIR/recovery.age")" = 644
+  check "firstboot: blob stays on CIDATA" test -e "$JUNIPER_CIDATA_DIR/juniper-recovery.age"
+  rm "$JUNIPER_STATE_DIR/recovery.age" "$JUNIPER_CIDATA_DIR/juniper-recovery.age"
+  "$LIBEXEC/firstboot"
+  check "firstboot: no blob, no copy" test ! -e "$JUNIPER_STATE_DIR/recovery.age"
+}
+
 # --- runner ---
-for t in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do
+# UNIT_FILTER=REGEX runs only the matching tests (e.g. UNIT_FILTER=cryptroot tests/unit.sh).
+# --- initramfs completeness (issue #50): the dracut module installs every command ---
+MODSETUP=$ROOT/system_files/usr/lib/dracut/modules.d/90juniper-cryptroot/module-setup.sh
+modsetup_cmds() { # the words of module-setup.sh's inst_multiple call (with its continuations)
+  sed -n '/^[[:space:]]*inst_multiple/,/[^\\]$/p' "$MODSETUP" | tr -d '\134' | tr -s ' \t' '\n' |
+    grep -v -e '^$' -e '^inst_multiple$' -e '^-o$'
+}
+
+refuses() { ! python3 "$ROOT/tests/script-commands.py" "$1" >/dev/null 2>&1; }
+test_script_commands_parser() { # the extractor itself, on the constructs the scripts use
+  local f=$T/s out
+  # shellcheck disable=SC2016 # a script under test, not expanded here
+  printf '%s\n' '#!/usr/bin/env bash' 'set -e' 'x=${FOO_BIN:-/usr/bin/foo}' 'f() { printf "%s" "$1" | a1; }' \
+    'v=$(b1 -x "$(b2 <"$f")" 2>/dev/null || true)' 'case $v in' '  one | two) c1 ;;' \
+    '  *" q,r"*)' '    c2 | c3' '    ;;' 'esac' 'if [[ $v =~ ^(a|b)[[:space:]]*$ && $(d1) == 4 ]]; then ((n++)); fi' \
+    'exec {fd}< <(exec </dev/null 2>&1; "$x" | e1)' 'while read -r l; do :; done < <(e2 a)' \
+    'with_key() { "$@"; }' 'with_key d g1 --opt' 'timeout -s KILL 5 g2' 'arr=("$(h1)" b)' \
+    'trap cleanup EXIT' 'cleanup() { i1; }' 'f "$(j1)" &&' '  k1' 'f x # l1 in a comment' \
+    "echo 'm1 in quotes' \"\$((1 + 2))\"" >"$f"
+  out=$(python3 "$ROOT/tests/script-commands.py" "$f" | tr '\n' ' ')
+  check "script-commands: every construct" test "$out" = \
+    '$@ /usr/bin/foo a1 b1 b2 bash c1 c2 c3 d1 e1 e2 env g1 g2 h1 i1 j1 k1 timeout '
+  printf '%s\n' 'cat <<EOF' 'x' 'EOF' >"$f"
+  check "script-commands: refuses a here-document" refuses "$f"
+  # shellcheck disable=SC2016
+  printf '%s\n' 'x=`date`' >"$f"
+  check "script-commands: refuses backticks" refuses "$f"
+}
+
+test_initramfs_installs_every_script_command() {
+  local c cmds have
+  cmds=$(python3 "$ROOT/tests/script-commands.py" "$LIBEXEC/cryptroot" "$LIBEXEC/fwkey")
+  have=$(modsetup_cmds)
+  check "initramfs: the extractor found cryptsetup and wc" test -n "$(grep -x cryptsetup <<<"$cmds")" -a -n "$(grep -x wc <<<"$cmds")"
+  for c in $cmds; do
+    # shellcheck disable=SC2016 # '$@' etc. are literal names, not expansions
+    case $c in
+      # with_key's "$@" (its commands are listed by name), fwkey's dispatch to its own functions
+      '$@' | '$cmd' | '$input') ;;
+      /*) check "initramfs: module-setup.sh installs $c" grep -Eq "inst_simple $c( |\$)" "$MODSETUP" ;;
+      '$'*) check "initramfs: unresolved command $c (resolve it or allowlist it here)" false ;;
+      *) check "initramfs: inst_multiple has $c" grep -qx -- "$c" <<<"$have" ;;
+    esac
+  done
+}
+
+# unlock_env [with-cidata-file]: a removable card with CIDATA and juniper-root; age yields the
+# passphrase (built so no stub or log contains it literally); cryptsetup checks its stdin.
+# shellcheck disable=SC2016 # the stubs expand when they run
+unlock_env() {
+  export JUNIPER_MEDIA_DIR=$T/media HOME=$T/home
+  mkdir -p "$T/media/CIDATA" "$HOME/.ssh"
+  : >"$HOME/.ssh/id_ed25519"
+  [[ ${1:-} == nofile ]] || echo "CIPHERTEXT-FILE" >"$T/media/CIDATA/juniper-recovery.age"
+  stub lsblk 'if [[ $1 == -J ]]; then
+  echo "{\"blockdevices\":[{\"path\":\"/dev/sdb\",\"type\":\"disk\",\"rm\":true,\"tran\":\"usb\",\"mountpoints\":[null]}]}"
+else
+  printf "/dev/sdb \n/dev/sdb1 CIDATA\n/dev/sdb2 \n/dev/sdb3 juniper-root\n"
+fi'
+  stub udisksctl 'if [[ $1 == mount ]]; then echo "Mounted $3 at '"$T"'/media/CIDATA."; fi'
+  stub age 'cat >/dev/null; echo "hunter2-""secret"'
+  stub run0 'exec "$@"'
+  stub cryptsetup 'case $1 in
+  open) [[ $(cat) == "hunter2-""secret" ]] && echo "key-arrived-on-stdin" >>"$CALLS" ;;
+  token) echo "{\"type\":\"juniper-recovery\",\"age\":\"CIPHERTEXT-TOKEN\"}" ;;
+esac'
+}
+
+test_unlock_card_pipes_age_into_readonly_cryptsetup() {
+  unlock_env
+  check "unlock: runs" "$ROOT/disk/unlock-card" /dev/sdb
+  check "unlock: age decrypts with the identity" called "age -d -i $T/home/.ssh/id_ed25519"
+  check "unlock: readonly open from stdin" called "run0 cryptsetup open --readonly --key-file - /dev/sdb3 juniper-recovered"
+  check "unlock: the key arrived on stdin" called "key-arrived-on-stdin"
+  check "unlock: age before cryptsetup" test "$(grep -n -m1 '^age ' "$CALLS" | cut -d: -f1)" -lt "$(grep -n -m1 '^cryptsetup open' "$CALLS" | cut -d: -f1)"
+  check "unlock: mounts read-only" called "run0 mount -o ro /dev/mapper/juniper-recovered $T/media/juniper-recovered"
+  check "unlock: used the CIDATA copy, not the token" not_called "token export"
+  check "unlock: passphrase nowhere under T" not_grep_dir "hunter2-secret" "$T"
+}
+
+test_unlock_card_explicit_identity() {
+  unlock_env
+  : >"$T/other"
+  "$ROOT/disk/unlock-card" /dev/sdb "$T/other" >/dev/null
+  check "unlock: given identity wins" called "age -d -i $T/other"
+}
+
+test_unlock_card_falls_back_to_the_token() {
+  unlock_env nofile
+  check "unlock: runs without the FAT copy" "$ROOT/disk/unlock-card" /dev/sdb
+  check "unlock: exported token 1" called "run0 cryptsetup token export --token-id 1 /dev/sdb3"
+  check "unlock: still opened" called "key-arrived-on-stdin"
+}
+
+test_unlock_card_no_recovery_data() {
+  unlock_env nofile
+  stub cryptsetup 'exit 1'
+  check "unlock: error text" stderr_has "no recovery data on this card (not encrypted, or both copies lost)" "$ROOT/disk/unlock-card" /dev/sdb
+  check "unlock: nothing opened" not_called "cryptsetup open"
+}
+
+test_unlock_card_refuses_non_removable() {
+  unlock_env
+  stub lsblk 'echo "{\"blockdevices\":[{\"path\":\"/dev/sda\",\"type\":\"disk\",\"rm\":false,\"tran\":\"sata\",\"mountpoints\":[null]}]}"'
+  check "unlock: internal disk refused" fails "$ROOT/disk/unlock-card" /dev/sda
+  check "unlock: nothing opened" not_called "cryptsetup open"
+}
+
+test_unlock_card_close() {
+  unlock_env
+  "$ROOT/disk/unlock-card" --close >/dev/null
+  check "unlock: unmounts" called "run0 umount $T/media/juniper-recovered"
+  check "unlock: closes" called "run0 cryptsetup close juniper-recovered"
+}
+
+test_unlock_card_recipe() {
+  check "unlock: Justfile recipe" grep -q '^unlock-card device identity' "$ROOT/Justfile"
+}
+
+for t in $(declare -F | awk -v f="${UNIT_FILTER:-.}" '$3 ~ /^test_/ && $3 ~ f {print $3}'); do
   setup
   "$t"
   rm -rf "$T"

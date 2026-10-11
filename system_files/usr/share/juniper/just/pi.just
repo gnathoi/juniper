@@ -8,6 +8,7 @@ pi-status:
     @k=$(uname -r); b=$(rpm -q --qf '%{BUILDTIME}\n' raspberrypi2-kernel4 2>/dev/null | sort -n | tail -1); case $b in ''|*[!0-9]*) echo "Kernel $k (build date unknown)" ;; *) echo "Kernel $k (built $((($(date +%s) - b) / 86400)) days ago)" ;; esac
     @if [ -e /var/lib/juniper/tailscale-join-gave-up ] && ! tailscale ip -4 >/dev/null 2>&1; then echo "Tailscale: gave up joining ($(cat /var/lib/juniper/tailscale-join-gave-up)); key deleted. Run: ujust tailscale-up"; fi
     @if [ -e /var/lib/juniper/locked ]; then sudo /usr/libexec/juniper/lan-ssh legacy || true; fi
+    @/usr/libexec/juniper/encryption-status --print
     @cat /var/lib/juniper/update-held 2>/dev/null || true
     @cat /var/lib/juniper/update-skipped-space 2>/dev/null || true
     @fs=/sysroot; [ -d "$fs" ] || fs=/; df -Pm "$fs" | awk -v fs="$fs" 'NR == 2 && ($4 * 10 < $2 || $4 < 1024) {print "Low disk space: " $4 " MiB free of " $2 " MiB on " fs "; free some or move data to a USB disk"}'

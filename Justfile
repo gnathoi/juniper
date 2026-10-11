@@ -13,7 +13,7 @@ build:
     set -euo pipefail
     # Pre-pull base images with retries: registries drop connections transiently.
     stages=$(grep -oiP '^FROM \S+ AS \K\S+' Containerfile || true)
-    for img in $(grep -oP '^FROM \K\S+' Containerfile); do
+    for img in $(grep -oP '^FROM \K\S+' Containerfile | sort -u); do
       [[ $img == scratch ]] && continue
       grep -qixF "$img" <<<"$stages" && continue
       for i in 1 2 3; do
@@ -94,6 +94,27 @@ bump-desktop:
     mv "$tmp" build_files/desktop.lock
     git diff --stat build_files/desktop.lock
 
+# Pin rpi-fw-crypto to the newest raspberrypi/utils master commit touching rpifwcrypto/ (build_files/fwcrypto.lock)
+bump-fwcrypto:
+    #!/usr/bin/bash
+    set -euo pipefail
+    lock=build_files/fwcrypto.lock
+    old=$(sed -n 's/^commit=//p' "$lock")
+    new=$(curl -fsSL 'https://api.github.com/repos/raspberrypi/utils/commits?path=rpifwcrypto&per_page=1' | jq -r '.[0].sha')
+    [[ $new =~ ^[0-9a-f]{40}$ ]] || { echo "bump-fwcrypto: bad commit from the GitHub API: $new" >&2; exit 1; }
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    for c in "$old" "$new"; do
+      curl -fsSLo "$tmp/$c.tgz" "https://codeload.github.com/raspberrypi/utils/tar.gz/$c"
+      tar -xzf "$tmp/$c.tgz" -C "$tmp" "utils-$c/rpifwcrypto" "utils-$c/LICENCE"
+    done
+    # Review this before committing: it is the code that handles the board's OTP key.
+    (cd "$tmp" && diff -ru "utils-$old/rpifwcrypto" "utils-$new/rpifwcrypto"; diff -u "utils-$old/LICENCE" "utils-$new/LICENCE") || true
+    sha=$(sha256sum "$tmp/$new.tgz" | cut -d' ' -f1)
+    printf '# raspberrypi/utils (rpifwcrypto/ only). Bump with `just bump-fwcrypto`.\ncommit=%s\nsha256=%s\n' "$new" "$sha" >"$lock"
+    sed -i -E "s/(rpifwcrypto.*built from commit \`)[0-9a-f]{40}/\1$new/" THIRD_PARTY.md
+    git diff --stat "$lock" THIRD_PARTY.md
+
 # Rechunk :build into :latest and :{{ version }} (rootful podman storage)
 rechunk:
     #!/usr/bin/bash
@@ -116,6 +137,11 @@ rechunk:
 test-image image=(image_ref + ":build"):
     podman run --rm --pull=never -v ./tests:/tests:ro,z {{ image }} /tests/image.sh
 
+# Run tests/cryptroot-loop.sh inside an image: first-boot encryption with the image's real
+# cryptroot and cryptsetup on loop devices. Needs root (sudo just ...): privileged, host /dev
+test-cryptroot image=(image_ref + ":build"):
+    podman run --rm --pull=never --privileged -v /dev:/dev -v ./tests:/tests:ro,z {{ image }} /tests/cryptroot-loop.sh
+
 # Flash a signed release (latest, a tag, or a local .raw.xz) to an SD card/USB disk with
 # first-boot settings from config (template: examples/flash.yaml)
 flash device config source="latest":
@@ -123,6 +149,16 @@ flash device config source="latest":
     set -euo pipefail
     cd {{ quote(invocation_directory()) }}
     {{ quote(justfile_directory()) }}/disk/flash.sh {{ quote(device) }} {{ quote(config) }} {{ quote(source) }}
+
+# Open an encrypted card on this laptop, read-only, with your SSH key (or --close to undo)
+unlock-card device identity="":
+    #!/usr/bin/bash
+    set -euo pipefail
+    cd {{ quote(invocation_directory()) }}
+    if [[ {{ quote(device) }} == --close ]]; then
+      exec {{ quote(justfile_directory()) }}/disk/unlock-card --close
+    fi
+    exec {{ quote(justfile_directory()) }}/disk/unlock-card {{ quote(device) }} {{ quote(identity) }}
 
 # Build a flashable GPT .raw from a pushed image ref, optionally pinned to a verified digest (root: loop devices)
 build-raw ref out="juniper.raw" digest="":
