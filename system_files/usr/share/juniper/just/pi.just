@@ -2,9 +2,9 @@
 # whether the Tailscale join gave up, and a held (quarantined) update, an update skipped for
 # lack of space, and low disk space
 pi-status:
-    sudo vcgencmd measure_temp
-    sudo vcgencmd get_throttled
-    sudo vcgencmd measure_clock arm
+    @sudo vcgencmd measure_temp
+    @sudo vcgencmd get_throttled
+    @sudo vcgencmd measure_clock arm
     @k=$(uname -r); b=$(rpm -q --qf '%{BUILDTIME}\n' raspberrypi2-kernel4 2>/dev/null | sort -n | tail -1); case $b in ''|*[!0-9]*) echo "Kernel $k (build date unknown)" ;; *) echo "Kernel $k (built $((($(date +%s) - b) / 86400)) days ago)" ;; esac
     @if [ -e /var/lib/juniper/tailscale-join-gave-up ] && ! tailscale ip -4 >/dev/null 2>&1; then echo "Tailscale: gave up joining ($(cat /var/lib/juniper/tailscale-join-gave-up)); key deleted. Run: ujust tailscale-up"; fi
     @if [ -e /var/lib/juniper/locked ]; then sudo /usr/libexec/juniper/lan-ssh legacy || true; fi

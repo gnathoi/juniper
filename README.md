@@ -368,8 +368,9 @@ check itself fails, the Pi falls back to the previous image. A locked device tha
 Tailscale's control plane after an update falls back too. An image that fell back once is
 retried at the next window; one that fails twice is held: the login status and
 `ujust pi-status` say "update … failed its health check twice; waiting for a newer image",
-and the next release proceeds as usual. To retry a held image anyway, remove its line from
-`/var/lib/juniper/bad-digests`.
+and the next release proceeds as usual. To retry a held image anyway, run `ujust update-unhold`: it
+prints the digests it cleared (or "nothing held") and the image is tried again at the next window
+or by `ujust update`. The hold shows right away after the second failed boot.
 
 The kernel and Pi firmware arrive only when AlmaLinux rebuilds its base image, not with the
 weekly updates; each release's notes state the kernel's build date and whether a newer one

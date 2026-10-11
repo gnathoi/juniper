@@ -135,6 +135,11 @@ quarantine() {
     echo "$digest $count $boot"
   } | tail -n 10 >"$list.tmp"; then
     mv -f "$list.tmp" "$list"
+    # Show the hold at once (motd, pi-status, metrics) instead of at the next update window,
+    # when apply-update --check would write it. Same text as apply-update's.
+    if ((count >= 2)); then
+      echo "update $digest failed its health check twice; waiting for a newer image" >"$state_dir/update-held" || true
+    fi
   else
     rm -f "$list.tmp"
     echo "Could not record the strike for $digest." >&2

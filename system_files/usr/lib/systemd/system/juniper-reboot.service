@@ -3,4 +3,8 @@ Description=Reboot into a staged Juniper update
 
 [Service]
 Type=oneshot
+# No battery clock: at first boot chrony steps the time forward, which makes the weekly timer
+# fire at once. Skip (exit 1, not a failure) within 10 minutes of boot; `ujust update` is not
+# affected, and a timer that is really due still fires next week.
+ExecCondition=/usr/bin/awk 'BEGIN { getline <"/proc/uptime"; exit ($$1 > 600) ? 0 : 1 }'
 ExecStart=/usr/libexec/juniper/apply-update

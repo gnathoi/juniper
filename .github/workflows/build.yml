@@ -96,6 +96,17 @@ jobs:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
         run: sudo "$(command -v just)" image="${{ matrix.image }}" image_ref="$IMAGE_REF" check-layers
 
+      # `bootc status` reads this label for its Version line.
+      - name: Check version label
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          got=$(sudo podman image inspect "$IMAGE_REF:latest" \
+            --format '{{index .Labels "org.opencontainers.image.version"}}')
+          echo "org.opencontainers.image.version=$got (want $VERSION)"
+          [[ $got == "$VERSION" ]]
+
       - name: Image size
         env:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}

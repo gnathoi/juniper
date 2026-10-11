@@ -92,10 +92,15 @@ else:
             if err := check(net):
                 print(f"lan-ssh: skipping on-link route: {err.split(';')[0]}", file=sys.stderr)
                 continue
+            # A host route is a neighbour or a peer, not a network to open SSH to.
+            if net.prefixlen == net.max_prefixlen:
+                continue
             out.append(net)
     if not out:
         sys.exit("lan-ssh: no on-link networks found; pass CIDRs explicitly")
     out.append(ipaddress.ip_network("fe80::/10"))
+    # Drop what a broader entry already covers (fe80::/64 under fe80::/10).
+    out = [n for n in out if not any(m != n and m.version == n.version and n.subnet_of(m) for m in out)]
 seen = []
 for n in out:
     if n not in seen:
