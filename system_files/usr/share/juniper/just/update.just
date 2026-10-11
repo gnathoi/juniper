@@ -10,3 +10,11 @@ update-schedule day_or_time="" time="":
 # Switch to another image (e.g. ghcr.io/you/sensor-box:latest) and reboot into it now
 switch image:
     /usr/libexec/juniper/switch-image {{ quote(image) }}
+
+# List images that need a signature, or require one for NAMESPACE (ghcr.io/you ~/cosign.pub)
+trust-images namespace="" pubkey="":
+    {{ if namespace == "" { "" } else { "sudo" } }} /usr/libexec/juniper/trust-images {{ if namespace == "" { "" } else { quote(namespace) } }} {{ if pubkey == "" { "" } else { quote(pubkey) } }}
+
+# Stop requiring a signature for NAMESPACE (not Juniper's own)
+untrust-images namespace:
+    sudo /usr/libexec/juniper/trust-images --remove {{ quote(namespace) }}

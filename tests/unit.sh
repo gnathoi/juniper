@@ -1187,7 +1187,12 @@ stdout_has() {
 }
 not_stdout_has() { ! stdout_has "$@"; }
 not_stderr_has() { ! stderr_has "$@"; }
-stderr_has() { { "${@:2}" 2>&1 >/dev/null || true; } | grep -q -- "$1"; }
+# Capture first: `grep -q` exiting early would SIGPIPE the command before it finishes its work.
+stderr_has() {
+  local err
+  err=$({ "${@:2}" 2>&1 >/dev/null || true; })
+  grep -q -- "$1" <<<"$err"
+}
 
 # yq-free YAML lookups for the flash tests: yget FILE PYTHON-EXPR (d is the parsed document)
 yget() { python3 -c 'import sys, yaml; d = yaml.safe_load(open(sys.argv[1])); print(eval(sys.argv[2]))' "$1" "$2"; }
@@ -1666,6 +1671,371 @@ test_switch_headless_needs_no_password() {
   "$LIBEXEC/switch-image" ghcr.io/gnathoi/juniper-minimal:latest >/dev/null
   check "switch: headless -> no password check" not_called "passwd -S"
   check "switch: headless switched" called "bootc switch ghcr.io/gnathoi/juniper-minimal:latest"
+}
+
+# --- trust-images + containers-policy: Juniper's base policy plus per-namespace drop-ins ---
+trust_env() {
+  export JUNIPER_POLICY_BASE=$T/base/policy.json JUNIPER_POLICY=$T/containers/policy.json \
+    JUNIPER_TRUST_DIR=$T/trusted-images.d JUNIPER_TRUST_DIR_USR=$T/usr-trusted-images.d \
+    JUNIPER_REGISTRIES_D=$T/containers/registries.d \
+    JUNIPER_KEY_DIR=$T/pki JUNIPER_OWN_KEY=/usr/share/pki/containers/juniper.pub \
+    JUNIPER_CONTAINERS_POLICY=$LIBEXEC/containers-policy
+  mkdir -p "$T/base" "$JUNIPER_REGISTRIES_D"
+  cat >"$JUNIPER_POLICY_BASE" <<'EOF'
+{
+  "default": [{"type": "insecureAcceptAnything"}],
+  "transports": {
+    "docker": {
+      "registry.redhat.io": [{"type": "sigstoreSigned", "keyPath": "/etc/pki/sigstore/SIGSTORE-redhat-release3",
+        "rekorPublicKeyPath": "/etc/pki/sigstore/REKOR-signing-key"}],
+      "ghcr.io/gnathoi": [{"type": "sigstoreSigned", "keyPath": "/usr/share/pki/containers/juniper.pub",
+        "signedIdentity": {"type": "matchRepository"}}]
+    },
+    "docker-daemon": {"": [{"type": "insecureAcceptAnything"}]}
+  }
+}
+EOF
+  cp "$JUNIPER_POLICY_BASE" "$JUNIPER_POLICY"
+  printf 'docker:\n  ghcr.io/gnathoi:\n    use-sigstore-attachments: true\n' >"$JUNIPER_REGISTRIES_D/juniper.yaml"
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$T/cosign.key" 2>/dev/null
+  openssl pkey -in "$T/cosign.key" -pubout -out "$T/cosign.pub"
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 2>/dev/null |
+    openssl pkey -pubout -out "$T/other.pub"
+  # skopeo parses the policy strictly and only then trips over the dummy source name. This one
+  # rejects any policy that mentions ghcr.io/skopeo-rejects.
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub skopeo 'if grep -q skopeo-rejects "$2"; then echo "Error loading trust policy: bad" >&2; else echo "Invalid source name juniper-policy-check:" >&2; fi; exit 1'
+  cp "$JUNIPER_POLICY" "$T/policy.orig"
+}
+trust() { "$LIBEXEC/trust-images" "$@"; }
+# shellcheck disable=SC2120 # --check is passed through check
+gen() { "$LIBEXEC/containers-policy" "$@"; }
+pol() { jq -c "$1" "$JUNIPER_POLICY"; }
+ns_entry() { jq -c --arg ns "$1" '.transports.docker[$ns]' "$JUNIPER_POLICY"; }
+juniper_entry_kept() { test "$(ns_entry ghcr.io/gnathoi)" = "$(jq -c '.transports.docker["ghcr.io/gnathoi"]' "$JUNIPER_POLICY_BASE")"; }
+others_kept() { # everything but transports.docker["$1"] is as in the base
+  test "$(jq -cS --arg ns "$1" 'del(.transports.docker[$ns])' "$JUNIPER_POLICY")" = \
+    "$(jq -cS --arg ns "$1" 'del(.transports.docker[$ns])' "$JUNIPER_POLICY_BASE")"
+}
+dropin() { # FILE NAMESPACE [JSON-REQUIREMENTS]
+  local r='[{"type": "sigstoreSigned", "keyPath": "/etc/pki/containers/x.pub"}]'
+  mkdir -p "$JUNIPER_TRUST_DIR"
+  jq -n --arg ns "$2" --argjson r "${3:-$r}" '{($ns): $r}' >"$JUNIPER_TRUST_DIR/$1"
+}
+
+test_containers_policy_base_only() {
+  trust_env
+  echo '{"default": [{"type": "reject"}], "transports": {"docker": {}}}' >"$JUNIPER_POLICY"
+  gen 2>/dev/null
+  check "policy: base alone is copied byte for byte" cmp -s "$JUNIPER_POLICY" "$JUNIPER_POLICY_BASE"
+  check "policy: previous kept as .bak" grep -q reject "$JUNIPER_POLICY.bak"
+  check "policy: 0644" test "$(stat -c %a "$JUNIPER_POLICY")" = 644
+  rm "$JUNIPER_POLICY.bak"
+  gen 2>/dev/null
+  check "policy: unchanged -> not rewritten" test ! -e "$JUNIPER_POLICY.bak"
+  check "policy: no temp files left" test -z "$(find "$T/containers" -name '*.tmp')"
+}
+
+test_containers_policy_merges_dropin() {
+  trust_env
+  dropin a.json ghcr.io/you
+  gen 2>/dev/null
+  check "policy: drop-in merged" test "$(ns_entry ghcr.io/you)" = '[{"type":"sigstoreSigned","keyPath":"/etc/pki/containers/x.pub"}]'
+  check "policy: base entries kept" others_kept ghcr.io/you
+  check "policy: validated by skopeo" called "skopeo --policy"
+}
+
+test_containers_policy_protects_juniper() {
+  trust_env
+  dropin 1.json ghcr.io/gnathoi '[{"type": "sigstoreSigned", "keyPath": "/tmp/evil.pub"}]'
+  dropin 2.json ghcr.io/gnathoi/juniper '[{"type": "sigstoreSigned", "keyPath": "/tmp/evil.pub"}]'
+  dropin 3.json registry.redhat.io
+  dropin 4.json ghcr.io/you
+  check "policy: Juniper drop-in logged" stderr_has "1.json: ghcr.io/gnathoi is at or under ghcr.io/gnathoi, .*: Juniper's own namespace" gen
+  check "policy: drop-in under Juniper's namespace logged" stderr_has "2.json: ghcr.io/gnathoi/juniper is at or under ghcr.io/gnathoi, .*Juniper's own" gen
+  check "policy: base namespace drop-in logged" stderr_has "3.json: registry.redhat.io is at or under registry.redhat.io, which the image's base policy sets; " gen
+  check "policy: Juniper entry intact" juniper_entry_kept
+  check "policy: no entry under Juniper's namespace" test "$(ns_entry ghcr.io/gnathoi/juniper)" = null
+  check "policy: base entries intact" others_kept ghcr.io/you
+  check "policy: the valid drop-in still applied" test "$(pol '.transports.docker["ghcr.io/you"][0].type')" = '"sigstoreSigned"'
+}
+
+test_containers_policy_skips_invalid_dropins() {
+  trust_env
+  mkdir -p "$JUNIPER_TRUST_DIR"
+  echo '{not json' >"$JUNIPER_TRUST_DIR/broken.json"
+  echo '{"a.io/x": [{"type": "sigstoreSigned"}], "b.io/y": [{"type": "sigstoreSigned"}]}' >"$JUNIPER_TRUST_DIR/two.json"
+  dropin badns.json 'ghcr.io/You'
+  dropin weak.json ghcr.io/weak '[{"type": "insecureAcceptAnything"}]'
+  dropin empty.json ghcr.io/empty '[]'
+  dropin strict.json ghcr.io/skopeo-rejects
+  dropin dup1.json ghcr.io/dup
+  dropin dup2.json ghcr.io/dup
+  dropin ok.json ghcr.io/ok
+  local d
+  for d in broken two badns weak empty strict; do
+    check "policy: invalid drop-in $d logged" stderr_has "$d.json: .*skipped" gen
+  done
+  check "policy: duplicate namespace logged" stderr_has "dup2.json: ghcr.io/dup is already set by .*dup1.json" gen
+  check "policy: only valid drop-ins merged" test "$(pol '.transports.docker | keys | sort')" = \
+    '["ghcr.io/dup","ghcr.io/gnathoi","ghcr.io/ok","registry.redhat.io"]'
+  check "policy: generation still succeeds" gen
+  check "policy: --check accepts a good drop-in" gen --check "$JUNIPER_TRUST_DIR/ok.json"
+  check "policy: --check refuses a weak one" fails gen --check "$JUNIPER_TRUST_DIR/weak.json"
+}
+
+test_containers_policy_follows_base() {
+  trust_env
+  dropin a.json ghcr.io/you
+  gen 2>/dev/null
+  # A new image ships a changed base: a rotated Juniper key path and a new vendor entry.
+  jq '.transports.docker["ghcr.io/gnathoi"][0].keyPaths = ["/usr/share/pki/containers/juniper.pub", "/usr/share/pki/containers/juniper-2.pub"]
+    | del(.transports.docker["ghcr.io/gnathoi"][0].keyPath)
+    | .transports.docker["quay.io/vendor"] = [{"type": "reject"}]' "$T/policy.orig" >"$JUNIPER_POLICY_BASE"
+  gen 2>/dev/null
+  check "base change: new Juniper entry in force" test "$(pol '.transports.docker["ghcr.io/gnathoi"][0].keyPaths | length')" = 2
+  check "base change: new base entry in force" test "$(pol '.transports.docker["quay.io/vendor"][0].type')" = '"reject"'
+  check "base change: drop-in kept" test "$(pol '.transports.docker["ghcr.io/you"][0].type')" = '"sigstoreSigned"'
+}
+
+test_containers_policy_bad_base_keeps_policy() {
+  trust_env
+  echo '{not json' >"$JUNIPER_POLICY_BASE"
+  check "bad base: fails" fails gen
+  check "bad base: policy untouched" cmp -s "$JUNIPER_POLICY" "$T/policy.orig"
+  echo '{"default": [{"type": "insecureAcceptAnything"}], "transports": {"docker": {"ghcr.io/skopeo-rejects": []}}}' >"$JUNIPER_POLICY_BASE"
+  check "base skopeo rejects: fails" fails gen
+  check "base skopeo rejects: policy untouched" cmp -s "$JUNIPER_POLICY" "$T/policy.orig"
+}
+
+test_containers_policy_drops_hand_edits() {
+  trust_env
+  jq '.transports.docker["ghcr.io/hand"] = [{"type": "reject"}]' "$T/policy.orig" >"$JUNIPER_POLICY"
+  check "hand edit: dropping logged" stderr_has 'dropping docker "ghcr.io/hand"' gen
+  check "hand edit: gone" test "$(ns_entry ghcr.io/hand)" = null
+}
+
+test_trust_images_adds_namespace() {
+  trust_env
+  trust ghcr.io/you "$T/cosign.pub" >/dev/null 2>&1
+  local key=$JUNIPER_KEY_DIR/ghcr.io+you.pub
+  check "trust: key installed" cmp -s <(openssl pkey -pubin -in "$key" -outform DER) <(openssl pkey -pubin -in "$T/cosign.pub" -outform DER)
+  check "trust: key 0644" test "$(stat -c %a "$key")" = 644
+  check "trust: drop-in written" test "$(jq -c . "$JUNIPER_TRUST_DIR/ghcr.io+you.json")" = \
+    "{\"ghcr.io/you\":[{\"type\":\"sigstoreSigned\",\"keyPath\":\"$key\",\"signedIdentity\":{\"type\":\"matchRepository\"}}]}"
+  check "trust: sigstoreSigned entry in policy" test "$(ns_entry ghcr.io/you)" = \
+    "[{\"type\":\"sigstoreSigned\",\"keyPath\":\"$key\",\"signedIdentity\":{\"type\":\"matchRepository\"}}]"
+  check "trust: base entries kept" others_kept ghcr.io/you
+  check "trust: backup of the previous policy" cmp -s "$JUNIPER_POLICY.bak" "$T/policy.orig"
+  check "trust: base untouched" cmp -s "$JUNIPER_POLICY_BASE" "$T/policy.orig"
+  check "trust: sigstore attachments on" grep -qx '  ghcr.io/you:' "$JUNIPER_REGISTRIES_D/ghcr.io+you.yaml"
+  check "trust: sigstore attachments true" grep -qx '    use-sigstore-attachments: true' "$JUNIPER_REGISTRIES_D/ghcr.io+you.yaml"
+  check "trust: juniper.yaml untouched" test "$(cat "$JUNIPER_REGISTRIES_D/juniper.yaml")" = "$(printf 'docker:\n  ghcr.io/gnathoi:\n    use-sigstore-attachments: true')"
+  check "trust: no temp files left" test -z "$(find "$T/containers" "$JUNIPER_KEY_DIR" "$JUNIPER_TRUST_DIR" -name '*.tmp*')"
+}
+
+test_trust_images_replaces_idempotently() {
+  trust_env
+  trust ghcr.io/you/app "$T/cosign.pub" >/dev/null 2>&1
+  trust ghcr.io/you/app "$T/cosign.pub" >/dev/null 2>&1
+  check "trust twice: one entry" test "$(pol '.transports.docker["ghcr.io/you/app"] | length')" = 1
+  check "trust twice: one drop-in" test "$(find "$JUNIPER_TRUST_DIR" -type f | wc -l)" = 1
+  local before
+  before=$(cat "$JUNIPER_POLICY")
+  trust ghcr.io/you/app "$T/other.pub" >/dev/null 2>&1
+  check "re-key: policy unchanged (same path)" test "$(cat "$JUNIPER_POLICY")" = "$before"
+  check "re-key: new key installed" cmp -s <(openssl pkey -pubin -in "$JUNIPER_KEY_DIR/ghcr.io+you+app.pub" -outform DER) <(openssl pkey -pubin -in "$T/other.pub" -outform DER)
+  check "re-key: base entries kept" others_kept ghcr.io/you/app
+  check "trust: refuses a namespace the base sets" stderr_has "base policy sets" trust registry.redhat.io "$T/cosign.pub"
+}
+
+test_trust_images_lists() {
+  trust_env
+  trust ghcr.io/you "$T/cosign.pub" >/dev/null 2>&1
+  trust registry.example.com:5000/team "$T/other.pub" >/dev/null 2>&1
+  dropin zz-skipped.json ghcr.io/gnathoi/x
+  cp "$JUNIPER_POLICY" "$T/policy.before"
+  check "list: ours" stdout_has "^ghcr.io/you  *$JUNIPER_KEY_DIR/ghcr.io+you.pub$" trust
+  check "list: port namespace" stdout_has "^registry.example.com:5000/team  *$JUNIPER_KEY_DIR/registry.example.com=5000+team.pub$" trust
+  check "list: Juniper's own, marked" stdout_has "^ghcr.io/gnathoi  */usr/share/pki/containers/juniper.pub (Juniper)" trust
+  check "list: image entries marked" stdout_has "^registry.redhat.io .*(image)" trust
+  check "list: skipped drop-in shown" stdout_has "^ghcr.io/gnathoi/x .*not applied" trust
+  check "list: changes nothing" cmp -s "$JUNIPER_POLICY" "$T/policy.before"
+}
+
+test_trust_images_removes() {
+  trust_env
+  trust ghcr.io/you "$T/cosign.pub" >/dev/null 2>&1
+  trust ghcr.io/other "$T/other.pub" >/dev/null 2>&1
+  trust --remove ghcr.io/you >/dev/null 2>&1
+  check "untrust: entry gone" test "$(ns_entry ghcr.io/you)" = null
+  check "untrust: drop-in gone" test ! -e "$JUNIPER_TRUST_DIR/ghcr.io+you.json"
+  check "untrust: key gone" test ! -e "$JUNIPER_KEY_DIR/ghcr.io+you.pub"
+  check "untrust: registries.d file gone" test ! -e "$JUNIPER_REGISTRIES_D/ghcr.io+you.yaml"
+  check "untrust: other trusted namespace kept" test "$(pol '.transports.docker["ghcr.io/other"][0].type')" = '"sigstoreSigned"'
+  check "untrust: Juniper entry kept" juniper_entry_kept
+  check "untrust: unknown namespace fails" stderr_has "not trusted" trust --remove ghcr.io/nobody
+  check "untrust: refuses a base namespace" stderr_has "base policy sets" trust --remove registry.redhat.io
+  trust --remove ghcr.io/other >/dev/null 2>&1
+  check "untrust all: back to the base byte for byte" cmp -s "$JUNIPER_POLICY" "$JUNIPER_POLICY_BASE"
+}
+
+test_trust_images_refuses_juniper_namespace() {
+  trust_env
+  check "trust: refuses Juniper's namespace" stderr_has "Juniper" trust ghcr.io/gnathoi "$T/cosign.pub"
+  check "trust: refuses a repo under it" fails trust ghcr.io/gnathoi/juniper "$T/cosign.pub"
+  check "untrust: refuses Juniper's namespace" stderr_has "Juniper" trust --remove ghcr.io/gnathoi
+  check "untrust: refuses a repo under it" fails trust --remove ghcr.io/gnathoi/juniper-minimal
+  check "juniper: policy untouched" cmp -s "$JUNIPER_POLICY" "$T/policy.orig"
+  check "juniper: no key installed" test ! -e "$JUNIPER_KEY_DIR"
+  check "juniper: no drop-in" test ! -e "$JUNIPER_TRUST_DIR"
+}
+
+test_trust_images_rejects_bad_namespace() {
+  trust_env
+  local bad
+  for bad in '' 'you/app' 'ghcr.io/You' 'ghcr.io/you/app:latest' 'ghcr.io/you@sha256:abc' \
+    '*.example.com' 'ghcr.io/*' 'ghcr.io/you/' 'ghcr.io//you' '-x.io/a' 'ghcr.io/a b' 'ghcr.io/../x' "ghcr.io/a\$(id)"; do
+    check "trust: rejects namespace '$bad'" stderr_has "namespace" trust "$bad" "$T/cosign.pub"
+  done
+  check "bad namespace: policy untouched" cmp -s "$JUNIPER_POLICY" "$T/policy.orig"
+  check "trust: accepts localhost:5000/x" trust localhost:5000/x "$T/cosign.pub"
+}
+
+test_trust_images_rejects_bad_key() {
+  trust_env
+  echo 'not a key' >"$T/junk.pub"
+  check "trust: rejects a non-PEM file" stderr_has "PEM public key" trust ghcr.io/you "$T/junk.pub"
+  check "trust: rejects a private key" stderr_has "private key" trust ghcr.io/you "$T/cosign.key"
+  check "trust: rejects a missing file" fails trust ghcr.io/you "$T/missing.pub"
+  sed 's/A/B/g' "$T/cosign.pub" >"$T/mangled.pub"
+  check "trust: rejects a mangled key" fails trust ghcr.io/you "$T/mangled.pub"
+  check "trust: needs both arguments" fails trust ghcr.io/you
+  check "bad key: policy untouched" cmp -s "$JUNIPER_POLICY" "$T/policy.orig"
+  check "bad key: nothing installed" test ! -e "$JUNIPER_KEY_DIR/ghcr.io+you.pub" -a ! -e "$JUNIPER_REGISTRIES_D/ghcr.io+you.yaml" -a ! -e "$JUNIPER_TRUST_DIR"
+}
+
+test_trust_images_refuses_invalid_policy() {
+  trust_env
+  check "invalid: refused" stderr_has "invalid" trust ghcr.io/skopeo-rejects "$T/cosign.pub"
+  check "invalid: policy untouched" cmp -s "$JUNIPER_POLICY" "$T/policy.orig"
+  check "invalid: nothing installed" test ! -e "$JUNIPER_KEY_DIR" -a ! -e "$JUNIPER_TRUST_DIR"
+  echo '{not json' >"$JUNIPER_POLICY_BASE"
+  check "broken base: refused" fails trust ghcr.io/you "$T/cosign.pub"
+  check "broken base: policy left as it was" cmp -s "$JUNIPER_POLICY" "$T/policy.orig"
+}
+
+# registries.d: a scope declared in two files is an error that breaks every pull.
+test_trust_images_keeps_existing_registries_d_entry() {
+  trust_env
+  printf 'docker:\n  ghcr.io/you/sensor-box:\n    use-sigstore-attachments: true\n' >"$JUNIPER_REGISTRIES_D/sensor-box.yaml"
+  check "existing scope: noted" stdout_has "sensor-box.yaml" trust ghcr.io/you/sensor-box "$T/cosign.pub"
+  check "existing scope: no second file" test ! -e "$JUNIPER_REGISTRIES_D/ghcr.io+you+sensor-box.yaml"
+  check "existing scope: still trusted" test "$(pol '.transports.docker["ghcr.io/you/sensor-box"][0].type')" = '"sigstoreSigned"'
+}
+
+test_trust_images_recipes() {
+  local j=$ROOT/system_files/usr/share/juniper/just/update.just
+  check "recipe: trust-images wraps the script" grep -q '/usr/libexec/juniper/trust-images' "$j"
+  check "recipe: untrust-images uses --remove" grep -q 'trust-images --remove' "$j"
+  check "recipe: listing needs no sudo" grep -q 'if namespace == "" { "" } else { "sudo" }' "$j"
+}
+
+# Any scope the base sets, in any transport and whatever its key format, protects itself and what
+# sits under it (by path component); broader scopes stay allowed.
+test_containers_policy_guards_every_base_scope() {
+  trust_env
+  # Juniper rotated to keyPaths; a vendor scope in another transport; a hostname wildcard.
+  jq '.transports.docker["ghcr.io/gnathoi"] = [{"type": "sigstoreSigned", "keyPaths": ["/usr/share/pki/containers/juniper.pub", "/usr/share/pki/containers/juniper-2.pub"],
+        "signedIdentity": {"type": "matchRepository"}}]
+    | .transports.atomic = {"quay.io/vendor": [{"type": "reject"}]}
+    | .transports.docker["*.example.com"] = [{"type": "reject"}]' "$T/policy.orig" >"$JUNIPER_POLICY_BASE"
+  dropin a.json ghcr.io/gnathoi/juniper-minimal '[{"type": "sigstoreSigned", "keyPath": "/tmp/evil.pub"}]'
+  dropin b.json registry.redhat.io/ubi9
+  dropin c.json quay.io/vendor/app
+  dropin d.json a.example.com/x
+  dropin e.json ghcr.io/gnathoi2
+  dropin f.json ghcr.io
+  check "guard: keyPaths-rotated Juniper sub-scope logged" stderr_has "a.json: .*under ghcr.io/gnathoi, .*Juniper's own namespace" gen
+  check "guard: sub-scope of another base entry logged" stderr_has "b.json: .*under registry.redhat.io" gen
+  check "guard: scope of another transport logged" stderr_has "c.json: .*under quay.io/vendor, .*(atomic)" gen
+  check "guard: hostname wildcard logged" stderr_has "d.json: .*under \\*.example.com" gen
+  check "guard: Juniper sub-scope not merged" test "$(ns_entry ghcr.io/gnathoi/juniper-minimal)" = null
+  check "guard: base sub-scope not merged" test "$(ns_entry registry.redhat.io/ubi9)" = null
+  check "guard: prefix that isn't a component (gnathoi2) allowed" test "$(pol '.transports.docker["ghcr.io/gnathoi2"][0].type')" = '"sigstoreSigned"'
+  check "guard: broader scope (ghcr.io) allowed" test "$(pol '.transports.docker["ghcr.io"][0].type')" = '"sigstoreSigned"'
+  # shellcheck disable=SC2016 # jq variables
+  check "guard: every base scope unchanged" jq -e --slurpfile b "$JUNIPER_POLICY_BASE" '. as $n | $b[0].transports
+    | to_entries | all(.key as $t | .value | to_entries | all(.key as $s | $n.transports[$t][$s] == .value))' "$JUNIPER_POLICY"
+  check "guard: --protected names the scope" stdout_has "under ghcr.io/gnathoi, .*Juniper's own" gen --protected ghcr.io/gnathoi/juniper-minimal
+  check "guard: --protected is quiet for a free namespace" fails gen --protected ghcr.io/gnathoi2
+  check "trust: refuses keyPaths-rotated Juniper sub-scope" stderr_has "Juniper's own namespace" trust ghcr.io/gnathoi/juniper-minimal "$T/cosign.pub"
+  check "trust: refuses base sub-scope" stderr_has "base policy sets" trust registry.redhat.io/ubi9 "$T/cosign.pub"
+  check "trust: allows ghcr.io/gnathoi2" trust ghcr.io/gnathoi2/app "$T/cosign.pub"
+}
+
+# Derived images ship drop-ins (and keys) under /usr; a local drop-in for the same scope wins.
+test_containers_policy_image_dropins() {
+  trust_env
+  mkdir -p "$JUNIPER_TRUST_DIR_USR/keys"
+  cp "$T/cosign.pub" "$JUNIPER_TRUST_DIR_USR/keys/you.pub"
+  printf '{"ghcr.io/you": [{"type": "sigstoreSigned", "keyPath": "%s"}]}\n' "$JUNIPER_TRUST_DIR_USR/keys/you.pub" >"$JUNIPER_TRUST_DIR_USR/you.json"
+  printf '{"ghcr.io/shared": [{"type": "sigstoreSigned", "keyPath": "/usr/image.pub"}]}\n' >"$JUNIPER_TRUST_DIR_USR/shared.json"
+  echo '{"default": [{"type": "reject"}]}' >"$JUNIPER_TRUST_DIR_USR/default.json"
+  printf '{"ghcr.io/gnathoi/x": [{"type": "sigstoreSigned", "keyPath": "/tmp/evil.pub"}]}\n' >"$JUNIPER_TRUST_DIR_USR/evil.json"
+  dropin shared.json ghcr.io/shared '[{"type": "sigstoreSigned", "keyPath": "/etc/local.pub"}]'
+  check "image drop-in: local override logged" stderr_has "shared.json: overrides the image's .*shared.json for ghcr.io/shared" gen
+  check "image drop-in: guarded like local ones" stderr_has "evil.json: .*Juniper's own namespace" gen
+  check "image drop-in: merged" test "$(pol '.transports.docker["ghcr.io/you"][0].keyPath')" = "\"$JUNIPER_TRUST_DIR_USR/keys/you.pub\""
+  check "image drop-in: local one wins" test "$(pol '.transports.docker["ghcr.io/shared"][0].keyPath')" = '"/etc/local.pub"'
+  check "image drop-in: default tightened to reject" test "$(pol '.default')" = '[{"type":"reject"}]'
+  check "image drop-in: Juniper entry intact" juniper_entry_kept
+  check "list: image drop-in marked" stdout_has "^ghcr.io/you .*(image drop-in)" trust
+  check "trust: refuses a namespace an image drop-in sets" stderr_has "already trusted by .*you.json" trust ghcr.io/you "$T/other.pub"
+  check "untrust: an image drop-in isn't trust-images'" stderr_has "trusted by .*you.json, not by trust-images" trust --remove ghcr.io/you
+}
+
+test_containers_policy_default_only_tightens() {
+  trust_env
+  mkdir -p "$JUNIPER_TRUST_DIR_USR"
+  echo '{"default": [{"type": "insecureAcceptAnything"}]}' >"$JUNIPER_TRUST_DIR_USR/loose.json"
+  dropin local-default.json default '[{"type": "reject"}]'
+  check "default: loosening refused" stderr_has "loose.json: the default can only be tightened" gen
+  check "default: local drop-in can't set it" stderr_has "local-default.json: only an image drop-in" gen
+  check "default: unchanged" test "$(pol '.default')" = '[{"type":"insecureAcceptAnything"}]'
+}
+
+test_containers_policy_logs_hand_edited_default_and_transports() {
+  trust_env
+  jq '.default = [{"type": "reject"}] | .transports["docker-daemon"][""] = [{"type": "reject"}]' "$T/policy.orig" >"$JUNIPER_POLICY"
+  check "hand edit: default change logged" stderr_has 'default \[{"type":"reject"}\] replaced' gen
+  jq '.transports["docker-daemon"][""] = [{"type": "reject"}]' "$T/policy.orig" >"$JUNIPER_POLICY"
+  check "hand edit: other transport logged" stderr_has 'different docker-daemon "" entry' gen
+  check "hand edit: base restored" cmp -s "$JUNIPER_POLICY" "$JUNIPER_POLICY_BASE"
+}
+
+test_containers_policy_check_warns_missing_key() {
+  trust_env
+  dropin nokey.json ghcr.io/you '[{"type": "sigstoreSigned", "keyPath": "/nonexistent/key.pub"}]'
+  check "--check: missing key warned" stderr_has "warning: key /nonexistent/key.pub doesn't exist" gen --check "$JUNIPER_TRUST_DIR/nokey.json"
+  check "--check: still accepted" gen --check "$JUNIPER_TRUST_DIR/nokey.json"
+}
+
+test_trust_images_refuses_namespace_of_other_dropin() {
+  trust_env
+  dropin hand.json ghcr.io/you
+  check "trust: other local drop-in for it refused" stderr_has "already trusted by .*hand.json" trust ghcr.io/you "$T/cosign.pub"
+  check "trust: nothing installed" test ! -e "$JUNIPER_KEY_DIR/ghcr.io+you.pub"
+}
+
+# The generated policy must be in place before anything pulls, and follow a new image's base.
+test_containers_policy_unit() {
+  local u=$ROOT/system_files/usr/lib/systemd/system/juniper-containers-policy.service
+  check "policy unit: runs the generator" grep -qx 'ExecStart=/usr/libexec/juniper/containers-policy' "$u"
+  check "policy unit: early, before every service" grep -q '^Before=.*sysinit.target' "$u"
+  check "policy unit: before updates and auto-update" grep -q '^Before=.*juniper-update.service.*podman-auto-update.service' "$u"
+  check "policy unit: enabled at build" grep -q 'juniper-containers-policy.service' "$ROOT/build_files/build.sh"
+  check "build: base policy shipped in /usr" grep -q '/usr/share/juniper/containers/policy.json' "$ROOT/build_files/build.sh"
 }
 
 ts_join_env() {

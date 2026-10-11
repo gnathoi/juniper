@@ -12,6 +12,7 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ### Added
 
+- `ujust trust-images NAMESPACE PUBKEY_FILE` requires your cosign signature for every image under a namespace (derived OS images via `bootc switch`/updates, and podman workload pulls including `podman auto-update`); `ujust trust-images` lists, `ujust untrust-images` removes. Juniper's own namespace can't be changed. The appliance example now pins its workload by digest and documents signed auto-update, readiness and keeping app data safe across a rollback (part of #55)
 - Status metrics for node_exporter: every image writes `juniper_*` metrics (booted and staged image digest, image build time, last healthy boot, update held or skipped, lockdown state, clock sync, kernel build time) to a textfile every 5 minutes. Re-run `ujust enable-metrics` on an existing device to serve them. README section "Monitoring" lists them with example alerts
 - The login banner warns "Clock not synchronised (NTP)" when the clock is not synced
 - The Pi kernel's age is now visible: release notes and the CI step summary state its build date (and any newer kernel waiting in AlmaLinux's Pi repo, with escalated wording past 14 days), and `ujust pi-status` shows the running kernel and how many days ago it was built. It never fails a release
@@ -35,6 +36,7 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ### Changed
 
+- `/etc/containers/policy.json` is now generated at every boot (`juniper-containers-policy.service`) from Juniper's base policy in `/usr/share/juniper/containers/policy.json`, which updates with the image, plus drop-ins: a derived image's in `/usr/lib/juniper/trusted-images.d`, then the local `trust-images` ones in `/etc/juniper/trusted-images.d`. No drop-in can touch a scope the base sets or anything under it. Hand edits to `policy.json`, including ones a derived image baked in, are dropped and logged: use `trust-images` on the device, or ship drop-ins under `/usr/lib/juniper/trusted-images.d` in your image (which may also tighten `default` to reject)
 - `ujust lan-ssh on` now allows SSH only from the networks the Pi is directly connected to
   (IPv4 and IPv6, link-local included), or from CIDRs you give it, instead of every source.
   New: `ujust lan-ssh for 2h` (temporary, gone on reboot), `ujust lan-ssh status`, and
