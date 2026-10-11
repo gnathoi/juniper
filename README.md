@@ -195,6 +195,26 @@ back may have been modified. Revoke in this order:
 What is verified: OS updates are signature-checked before they install. Nothing verifies
 the boot chain on the card itself.
 
+### Storage on long-running devices
+
+A full card is how an unattended device dies, so Juniper reserves some room and watches it:
+
+- **Update check.** Before staging an update, the daily download checks that the filesystem
+  holding the ostree repo has at least 2048 MiB free (override with `MIN_FREE_MB=<MiB>` in
+  `/etc/juniper/update.conf`). If not, it prunes dangling podman images and checks again;
+  if still short it skips that day's update (not a failure) and the next run retries. The
+  login banner and `ujust pi-status` say so.
+- **Weekly prune.** `juniper-image-prune.timer` runs `podman image prune -f` as root:
+  dangling images only. It never touches volumes, containers or tagged images.
+- **Journal.** Capped at 200M (`SystemMaxUse`), and it leaves the last 1G free
+  (`SystemKeepFree`).
+- **Warning.** The login banner and `ujust pi-status` warn when `/` has under 10% or 1 GiB
+  free.
+
+What the workload has to do itself: keep its data under `/var/lib/<app>`, apply retention
+in the app (rotate or expire old data; Juniper never deletes it), and put high-volume data
+(video, sensor logs, databases that grow without bound) on a separate USB disk.
+
 ### The experimental desktop
 
 `juniper-desktop` is experimental: it is built, tested in CI and published (signed image and
