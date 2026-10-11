@@ -64,7 +64,7 @@ issue.
   with `os_prefix`).
 - **LUKS:** the FAT partition is found by rewriting the `/sysroot` device name
   (`sed 's/[0-9]+$/1/'`), which fails for `/dev/mapper/*`; Juniper wraps it with
-  `MNTDEV` (#PR). Deriving
+  `MNTDEV` (#75). Deriving
   it from the disk under `/sysroot` (as Juniper's `cidata-device` does) would be more robust.
 - **Real-root emergency mode under tryboot never falls back** (PID 1 keeps the watchdog fed).
   Juniper's `juniper-emergency-fallback` (#32, tested on a Pi 5) could be offered upstream.
