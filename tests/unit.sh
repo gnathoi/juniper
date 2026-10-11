@@ -4464,13 +4464,13 @@ test_encryption_status_mount_failure_is_loud() {
   TMPDIR=$T "$LIBEXEC/encryption-status"
   check "encryption-status: mount failure -> unknown" grep -qx 'state=unknown' "$enc"
   check "encryption-status: mount failure is not quiet" grep -qx 'requested=yes' "$enc"
-  check "encryption-status: mount retried" test "$(grep -c '^mount' "$CALLS")" = 3
+  check "encryption-status: mount retried" test "$(grep -c '^mount' "$CALLS")" = 5
   check "encryption-status: not passed off as legacy" not_grep_dir 'flashed before' "$JUNIPER_STATE_DIR"
   check "encryption-status: print says unknown" stdout_has 'Storage: UNKNOWN' "$LIBEXEC/encryption-status" --print
   motd_env
   df_queue "30000 20000"
   check "motd: unknown status warns" stdout_has 'Storage encryption status unknown' "$LIBEXEC/motd"
-  check "unit: ordered after firstboot" grep -qx 'After=local-fs.target juniper-firstboot.service' "$ROOT/system_files/usr/lib/systemd/system/juniper-encryption-status.service"
+  check "unit: not ordered after firstboot (healthcheck cycle)" not_grep_dir 'juniper-firstboot' "$ROOT/system_files/usr/lib/systemd/system/juniper-encryption-status.service"
 }
 
 test_encryption_status_empty_reason_is_quiet() {
@@ -4542,7 +4542,7 @@ test_pi_status_board_only_wording() {
 
 test_encryption_status_unit() {
   local u=$ROOT/system_files/usr/lib/systemd/system/juniper-encryption-status.service
-  check "unit: after local-fs" grep -qx 'After=local-fs.target juniper-firstboot.service' "$u"
+  check "unit: after local-fs" grep -qx 'After=local-fs.target' "$u"
   check "unit: before healthcheck and metrics" grep -qx 'Before=juniper-healthcheck.service juniper-metrics.service' "$u"
   check "build.sh enables it" grep -q 'juniper-encryption-status.service' "$ROOT/build_files/build.sh"
 }

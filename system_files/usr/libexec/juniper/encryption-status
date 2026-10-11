@@ -105,13 +105,13 @@ trap cleanup EXIT
 trap 'exit 1' INT TERM
 if [[ -z $state ]]; then
   # No verdict from the initramfs: read the CIDATA marker, read-only. firstboot may hold the
-  # partition read-write at the same moment (EBUSY), so retry; a mount that still fails means
+  # partition read-write at the same moment (EBUSY; the unit cannot be ordered after it without a cycle through the health check), so retry; a mount that still fails means
   # we do not know, which is reported loudly, never as "flashed before encryption support".
   dir=${JUNIPER_CIDATA_DIR:-}
   if [[ -z $dir ]]; then
     if dev=$("${JUNIPER_CIDATA_DEVICE:-/usr/libexec/juniper/cidata-device}" 2>/dev/null) && [[ -n $dev ]]; then
       dir=$(mktemp -d) || exit 1
-      for _ in 1 2 3; do
+      for _ in 1 2 3 4 5; do
         if mount -o ro "$dev" "$dir" 2>/dev/null; then
           mounted=1
           break
