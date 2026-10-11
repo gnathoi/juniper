@@ -179,11 +179,23 @@ test_bootloader_wrapper_sets_mntdev() {
   check "bootloader: MNTDEV from cidata-device" called "MNTDEV=/dev/mmcblk0p1"
 }
 
-test_bootloader_wrapper_fails_without_cidata() {
+test_bootloader_wrapper_falls_back_without_cidata() {
   stub cidata-device 'exit 1'
-  stub rpi-bootc-bootloader ''
-  check "bootloader: no CIDATA, no guess" fails env JUNIPER_CIDATA_DEVICE="$T/bin/cidata-device" "$LIBEXEC/bootloader" sync
-  check "bootloader: script not run" not_called "rpi-bootc-bootloader"
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub rpi-bootc-bootloader 'echo "MNTDEV=${MNTDEV-unset}" >>"$CALLS"'
+  MNTDEV=/dev/stale JUNIPER_CIDATA_DEVICE=$T/bin/cidata-device "$LIBEXEC/bootloader" sync 2>/dev/null
+  check "bootloader: cidata failure still runs the tool" called "rpi-bootc-bootloader sync"
+  check "bootloader: fallback leaves MNTDEV unset" called "MNTDEV=unset"
+  check "bootloader: fallback warns" stderr_has "own detection" env JUNIPER_CIDATA_DEVICE="$T/bin/cidata-device" "$LIBEXEC/bootloader" sync
+}
+
+test_bootloader_wrapper_falls_back_on_empty_output() {
+  stub cidata-device 'true'
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub rpi-bootc-bootloader 'echo "MNTDEV=${MNTDEV-unset}" >>"$CALLS"'
+  JUNIPER_CIDATA_DEVICE=$T/bin/cidata-device "$LIBEXEC/bootloader" sync 2>/dev/null
+  check "bootloader: empty output runs the tool" called "rpi-bootc-bootloader sync"
+  check "bootloader: empty output leaves MNTDEV unset" called "MNTDEV=unset"
 }
 
 test_finalize_dropin_uses_wrapper() {
