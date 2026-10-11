@@ -128,16 +128,19 @@ trust() { # NAMESPACE PUBKEY_FILE
   ! grep -q 'PRIVATE KEY' "$src" || die "$src is a private key. Give the public one (cosign.pub)."
   pem=$(mktemp)
   tmps+=("$pem")
-  grep -q -- '-----BEGIN PUBLIC KEY-----' "$src" && openssl pkey -pubin -in "$src" -pubout -out "$pem" 2>/dev/null ||
+  if ! { grep -q -- '-----BEGIN PUBLIC KEY-----' "$src" &&
+    openssl pkey -pubin -in "$src" -pubout -out "$pem" 2>/dev/null; }; then
     die "$src isn't a PEM public key (-----BEGIN PUBLIC KEY-----, as in cosign.pub)."
+  fi
 
   key=$keydir/$(safe_name "$ns").pub
   yaml=$regd/$(safe_name "$ns").yaml
+  # shellcheck disable=SC2016 # jq variables
   new_policy --arg ns "$ns" --arg key "$key" '.transports.docker[$ns] = [{"type": "sigstoreSigned",
     "keyPath": $key, "signedIdentity": {"type": "matchRepository"}}]'
 
   # Key and attachments config first: the policy entry can't verify anything without them.
-  mkdir -p -m 0755 "$keydir"
+  install -d -m 0755 "$keydir"
   install_file "$pem" "$key"
   other=$(declared_in "$ns" "$yaml")
   if [[ -n $other ]]; then
@@ -159,6 +162,7 @@ untrust() { # NAMESPACE
   key=$(jq -r --arg ns "$ns" '.transports.docker[$ns][0].keyPath? // ""' "$policy")
   [[ $key == "$keydir/$(safe_name "$ns").pub" ]] ||
     die "$ns's entry was not added by trust-images; edit $policy by hand if you mean it."
+  # shellcheck disable=SC2016 # jq variables
   new_policy --arg ns "$ns" 'del(.transports.docker[$ns])'
   install_policy
   rm -f "$regd/$(safe_name "$ns").yaml" "$key"
