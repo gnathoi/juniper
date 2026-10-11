@@ -20,7 +20,7 @@ if [[ -n $exp ]]; then
   ts+=" - key expires ${exp%%T*}; disable key expiry for this machine in the Tailscale admin console"
 fi
 
-if [[ -e $state_dir/tailscale-join-gave-up ]]; then
+if [[ $ts == "not connected"* && -e $state_dir/tailscale-join-gave-up ]]; then
   ts="not joined: $(cat "$state_dir/tailscale-join-gave-up"); the key was deleted. Run: ujust tailscale-up"
 fi
 

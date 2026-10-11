@@ -3,7 +3,7 @@ pi-status:
     sudo vcgencmd measure_temp
     sudo vcgencmd get_throttled
     sudo vcgencmd measure_clock arm
-    @[ ! -e /var/lib/juniper/tailscale-join-gave-up ] || echo "Tailscale: gave up joining ($(cat /var/lib/juniper/tailscale-join-gave-up)); key deleted. Run: ujust tailscale-up"
+    @if [ -e /var/lib/juniper/tailscale-join-gave-up ] && ! tailscale ip -4 >/dev/null 2>&1; then echo "Tailscale: gave up joining ($(cat /var/lib/juniper/tailscale-join-gave-up)); key deleted. Run: ujust tailscale-up"; fi
 
 # Bootloader EEPROM: show status, or `apply` to stage the latest default release for the next
 # reboot. Manual on purpose: EEPROM writes have no tryboot fallback.
