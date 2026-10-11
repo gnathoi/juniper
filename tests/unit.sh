@@ -943,6 +943,8 @@ switch_env() {
   # shellcheck disable=SC2016 # expands inside the stub
   stub passwd 'if [[ $1 == -S ]]; then echo "nat ${PW_STATUS:-LK} 2026-10-10 0 99999 7 -1"; else echo set >"$T/pw-set"; fi'
   stub apply-update ''
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub getent '[[ "$1 $2" == "passwd 1000" && -z ${NO_UID_1000:-} ]] && echo "nat:x:1000:1000::/var/home/nat:/bin/bash" || exit 2'
 }
 
 test_switch_desktop_without_password_asks_first() {
@@ -961,6 +963,39 @@ test_switch_desktop_refuses_if_still_no_password() {
   stub passwd 'if [[ $1 == -S ]]; then echo "nat LK 2026-10-10 0 99999 7 -1"; fi'
   check "switch: still no password -> no switch" fails "$LIBEXEC/switch-image" ghcr.io/gnathoi/juniper-desktop:latest
   check "switch: nothing staged" not_called "bootc switch"
+}
+
+# The desktop logs in uid 1000 at the screen: that account's password counts, whoever runs it.
+test_switch_desktop_as_root_checks_uid_1000() {
+  switch_env
+  export USER=root
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub passwd 'if [[ $1 == -S ]]; then [[ -e $T/pw-set ]] && s=PS || s=LK; echo "$2 $s 2026-10-10 0 99999 7 -1"; else touch "$T/pw-set"; fi'
+  "$LIBEXEC/switch-image" ghcr.io/gnathoi/juniper-desktop:latest >/dev/null
+  check "switch as root: checks uid 1000's password" called "passwd -S nat"
+  check "switch as root: sets uid 1000's password" called "passwd nat"
+  check "switch as root: never root's" not_called "passwd root"
+  check "switch as root: then switched" called "bootc switch ghcr.io/gnathoi/juniper-desktop:latest"
+}
+
+test_switch_desktop_other_user_checks_uid_1000() {
+  switch_env
+  export USER=alice
+  # nat (uid 1000) has a password; alice doesn't matter.
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub passwd 'if [[ $1 == -S ]]; then [[ $2 == nat ]] && s=PS || s=LK; echo "$2 $s 2026-10-10 0 99999 7 -1"; else touch "$T/pw-set"; fi'
+  "$LIBEXEC/switch-image" ghcr.io/gnathoi/juniper-desktop:latest >/dev/null
+  check "switch, second user: checks uid 1000" called "passwd -S nat"
+  check "switch, second user: not the caller" not_called "passwd -S alice"
+  check "switch, second user: no password prompt" test ! -e "$T/pw-set"
+  check "switch, second user: switched" called "bootc switch ghcr.io/gnathoi/juniper-desktop:latest"
+}
+
+test_switch_desktop_refuses_without_uid_1000() {
+  switch_env
+  check "switch: no uid 1000 -> refused with a reason" stderr_has "uid 1000" \
+    env NO_UID_1000=1 "$LIBEXEC/switch-image" ghcr.io/gnathoi/juniper-desktop:latest
+  check "switch: no uid 1000 -> nothing staged" not_called "bootc switch"
 }
 
 test_switch_headless_needs_no_password() {
