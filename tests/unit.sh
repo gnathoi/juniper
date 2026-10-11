@@ -1152,6 +1152,14 @@ test_wifi_import_rejects_bad_regdom() {
     "$LIBEXEC/wifi-import" >/dev/null 2>&1
     check "wifi: regdom $bad not written" test ! -e "$JUNIPER_MODPROBE_DIR/juniper-wifi-regdom.conf"
   done
+  # Case folding must not turn non-ASCII into letters: "ß".upper() is "SS", "ﬀ".upper() is "FF".
+  for bad in '"ß"' '"ﬀ"' '"ıı"'; do
+    rm -rf "$JUNIPER_MODPROBE_DIR"
+    printf 'version: 2\nwifis:\n  wlan0:\n    regulatory-domain: %s\n    access-points:\n      a: {}\n' "$bad" \
+      >"$JUNIPER_CIDATA_DIR/network-config"
+    "$LIBEXEC/wifi-import" >/dev/null 2>&1
+    check "wifi: non-ASCII regdom $bad not written" test ! -e "$JUNIPER_MODPROBE_DIR/juniper-wifi-regdom.conf"
+  done
   printf 'version: 2\nwifis:\n  wlan0:\n    regulatory-domain: "de"\n    access-points:\n      a: {}\n' \
     >"$JUNIPER_CIDATA_DIR/network-config"
   "$LIBEXEC/wifi-import" >/dev/null
@@ -1239,7 +1247,7 @@ test_render_cidata_wifi_country() {
   check "cidata: lowercase country uppercased" \
     test "$(yget "$T/o1/network-config" 'd["network"]["wifis"]["wlan0"]["regulatory-domain"]')" = GB
   local c i=0
-  for c in '"GB\ninstall cfg80211 /bin/sh"' '"G\x01"' '"G\tB"' GBR '"G"' '"12"' 44; do
+  for c in '"GB\ninstall cfg80211 /bin/sh"' '"G\x01"' '"G\tB"' GBR '"G"' '"12"' 44 '"ß"' '"ﬀ"' '"ıı"'; do
     i=$((i + 1))
     # shellcheck disable=SC2059 # base is the format
     printf "$base" "$c" >"$T/bad$i.yaml"
@@ -1989,6 +1997,23 @@ test_lan_ssh_refresh_writes_legacy_status_file() {
   check "refresh: permanent legacy counts" test -e "$JUNIPER_RUN_DIR/lan-ssh-legacy"
   "$LIBEXEC/lan-ssh" off >/dev/null
   check "off: clears the status file" test ! -e "$JUNIPER_RUN_DIR/lan-ssh-legacy"
+}
+
+# The login user reads this file (the banner): a root caller's umask must not hide it.
+test_lan_ssh_refresh_pins_modes_whatever_the_umask() {
+  lan_setup
+  echo ssh >"$T/fw/run_svc"
+  (
+    umask 077
+    "$LIBEXEC/lan-ssh" refresh
+  )
+  check "refresh: run dir 0755 under umask 077" test "$(stat -c %a "$JUNIPER_RUN_DIR")" = 755
+  check "refresh: status file 0644 under umask 077" test "$(stat -c %a "$JUNIPER_RUN_DIR/lan-ssh-legacy")" = 644
+  chmod 700 "$JUNIPER_RUN_DIR"
+  chmod 600 "$JUNIPER_RUN_DIR/lan-ssh-legacy"
+  "$LIBEXEC/lan-ssh" refresh
+  check "refresh: existing run dir fixed to 0755" test "$(stat -c %a "$JUNIPER_RUN_DIR")" = 755
+  check "refresh: existing status file fixed to 0644" test "$(stat -c %a "$JUNIPER_RUN_DIR/lan-ssh-legacy")" = 644
 }
 
 test_lan_ssh_off_removes_everything() {

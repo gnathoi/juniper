@@ -117,8 +117,14 @@ sources() {
 
 # The banner runs as the login user, who can't query firewalld: root leaves a file for it.
 refresh() {
-  mkdir -p "$run_dir"
-  if has_legacy; then echo "$legacy_msg" >"$run_dir/lan-ssh-legacy"; else rm -f "$run_dir/lan-ssh-legacy"; fi
+  install -d -m 0755 "$run_dir"
+  chmod 0755 "$run_dir"
+  if has_legacy; then
+    echo "$legacy_msg" >"$run_dir/lan-ssh-legacy"
+    chmod 0644 "$run_dir/lan-ssh-legacy"
+  else
+    rm -f "$run_dir/lan-ssh-legacy"
+  fi
 }
 
 remove_legacy() {
