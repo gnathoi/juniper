@@ -461,7 +461,9 @@ test_healthcheck_deadline_below_unit_timeout() {
   local unit=$ROOT/system_files/usr/lib/systemd/system/juniper-healthcheck.service
   local t d k
   t=$(sed -n 's/^TimeoutStartSec=\([0-9]*\)min$/\1/p' "$unit")
+  # shellcheck disable=SC2016 # literal ${...} in the script's text
   d=$(sed -n 's/^deadline=${JUNIPER_HEALTH_DEADLINE:-\([0-9]*\)}$/\1/p' "$LIBEXEC/healthcheck")
+  # shellcheck disable=SC2016 # literal ${...} in the script's text
   k=$(sed -n 's/^hook_timeout=${JUNIPER_HEALTH_HOOK_TIMEOUT:-\([0-9]*\)}$/\1/p' "$LIBEXEC/healthcheck")
   check "health: per-hook timeout at most 15s" test "${k:-99}" -le 15
   # One more try can start just before the deadline: leave it a minute and more.
