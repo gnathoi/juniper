@@ -1,0 +1,8 @@
+# Juniper Desktop: KMS graphics (included from this deployment's boot entry, so a bad
+# setting falls back with the rest of the update)
+disable_splash=1
+camera_auto_detect=0
+display_auto_detect=1
+dtoverlay=vc4-kms-v3d
+max_framebuffers=2
+disable_fw_kms_setup=1

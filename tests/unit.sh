@@ -7,6 +7,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 # shellcheck disable=SC2034 # used by the tests added in later tasks
 LIBEXEC=$ROOT/system_files/usr/libexec/juniper
+LIBEXEC_DESKTOP=$ROOT/system_files_desktop/usr/libexec/juniper
 ORIG_PATH=$PATH
 fails=0
 
@@ -179,6 +180,21 @@ test_update_schedule_day_and_time() {
   check "schedule: timer re-enabled" called "systemctl enable --now juniper-reboot.timer"
   check "schedule: daemon-reload" called "systemctl daemon-reload"
   check "schedule: names day, time, timezone" grep -q 'Wed.*03:30.*Europe/London' <<<"$out"
+}
+
+# A deferral recorded before `off` must not count after a later `on`: the hourly retry would
+# see it as past the 7-day cap and reboot an in-use desktop.
+test_update_schedule_change_clears_deferral() {
+  export JUNIPER_DROPIN_DIR=$T/dropin
+  for args in off "tue 04:00" "05:00"; do
+    echo 1999000000 >"$JUNIPER_STATE_DIR/reboot-deferred-since"
+    echo 1999000000 >"$JUNIPER_STATE_DIR/reboot-notified"
+    # shellcheck disable=SC2086 # split into DAY and TIME on purpose
+    sched $args >/dev/null
+    check "schedule '$args': deferral marker cleared" test ! -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
+    check "schedule '$args': notice marker cleared" test ! -e "$JUNIPER_STATE_DIR/reboot-notified"
+  done
+  check "schedule: no state dir is fine" env JUNIPER_STATE_DIR="$T/none" "$LIBEXEC/update-schedule" off
 }
 
 test_update_schedule_daily() {
@@ -387,6 +403,84 @@ test_healthcheck_locked_sshd_is_healthy() {
   stub systemctl 'if [[ $1 == is-active ]]; then echo active; fi'
   "$LIBEXEC/healthcheck"
   check "health: locked + sshd (ujust tailscale-ssh off) -> healthy" called "rpi-bootc-bootloader sync"
+}
+
+test_healthcheck_hook_failure_falls_back_under_tryboot() {
+  health_env
+  export JUNIPER_HEALTH_D=$T/health.d
+  mkdir -p "$JUNIPER_HEALTH_D"
+  printf '#!/bin/sh\nexit 1\n' >"$JUNIPER_HEALTH_D/10-greetd" && chmod +x "$JUNIPER_HEALTH_D/10-greetd"
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  "$LIBEXEC/healthcheck" || true
+  check "health: failing hook under tryboot -> reboot" called "systemctl reboot"
+}
+
+test_healthcheck_names_failing_hook() {
+  health_env
+  export JUNIPER_HEALTH_D=$T/health.d
+  mkdir -p "$JUNIPER_HEALTH_D"
+  printf '#!/bin/sh\nexit 1\n' >"$JUNIPER_HEALTH_D/10-greetd" && chmod +x "$JUNIPER_HEALTH_D/10-greetd"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  check "health: failing hook named" stderr_has "health hook 10-greetd failed" "$LIBEXEC/healthcheck"
+  check "health: final message mentions image health hooks" stderr_has "image health hook" "$LIBEXEC/healthcheck"
+}
+
+# A hung hook must not stall the check past the unit's timeout (no fallback then).
+test_healthcheck_hung_hook_times_out() {
+  health_env
+  export JUNIPER_HEALTH_D=$T/health.d JUNIPER_HEALTH_HOOK_TIMEOUT=1
+  mkdir -p "$JUNIPER_HEALTH_D"
+  printf '#!/bin/sh\nexec sleep 30\n' >"$JUNIPER_HEALTH_D/10-hang" && chmod +x "$JUNIPER_HEALTH_D/10-hang"
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  local start=$SECONDS
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "health: hung hook killed after its timeout" test $((SECONDS - start)) -lt 10
+  check "health: hung hook under tryboot -> reboot" called "systemctl reboot"
+}
+
+# A hook that hangs on every try (say a wedged D-Bus) must still reach the tryboot fallback
+# before juniper-healthcheck.service's TimeoutStartSec kills the check. The hook ignores
+# SIGTERM, so only timeout's -k gets rid of it.
+test_healthcheck_always_hanging_hook_still_falls_back() {
+  health_env
+  export JUNIPER_HEALTH_D=$T/health.d JUNIPER_HEALTH_TRIES=1000 JUNIPER_HEALTH_HOOK_TIMEOUT=1 \
+    JUNIPER_HEALTH_HOOK_KILL=1 JUNIPER_HEALTH_DEADLINE=3
+  mkdir -p "$JUNIPER_HEALTH_D"
+  printf '#!/bin/bash\ntrap "" TERM\nsleep 30\n' >"$JUNIPER_HEALTH_D/10-hang" && chmod +x "$JUNIPER_HEALTH_D/10-hang"
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  local start=$SECONDS
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "health: always-hanging hook -> deadline reached in time" test $((SECONDS - start)) -lt 15
+  check "health: always-hanging hook under tryboot -> reboot" called "systemctl reboot"
+}
+
+test_healthcheck_deadline_below_unit_timeout() {
+  local unit=$ROOT/system_files/usr/lib/systemd/system/juniper-healthcheck.service
+  local t d k
+  t=$(sed -n 's/^TimeoutStartSec=\([0-9]*\)min$/\1/p' "$unit")
+  # shellcheck disable=SC2016 # literal ${...} in the script's text
+  d=$(sed -n 's/^deadline=${JUNIPER_HEALTH_DEADLINE:-\([0-9]*\)}$/\1/p' "$LIBEXEC/healthcheck")
+  # shellcheck disable=SC2016 # literal ${...} in the script's text
+  k=$(sed -n 's/^hook_timeout=${JUNIPER_HEALTH_HOOK_TIMEOUT:-\([0-9]*\)}$/\1/p' "$LIBEXEC/healthcheck")
+  check "health: per-hook timeout at most 15s" test "${k:-99}" -le 15
+  # One more try can start just before the deadline: leave it a minute and more.
+  check "health: deadline well below TimeoutStartSec" test $((${d:-9999} + 90)) -le $((${t:-0} * 60))
+}
+
+test_healthcheck_passing_hook_and_no_hooks() {
+  health_env
+  export JUNIPER_HEALTH_D=$T/health.d
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  "$LIBEXEC/healthcheck"
+  check "health: no hook dir -> healthy" called "rpi-bootc-bootloader sync"
+  mkdir -p "$JUNIPER_HEALTH_D"
+  printf '#!/bin/sh\nexit 0\n' >"$JUNIPER_HEALTH_D/10-ok" && chmod +x "$JUNIPER_HEALTH_D/10-ok"
+  : >"$CALLS"
+  "$LIBEXEC/healthcheck"
+  check "health: passing hook -> healthy" called "rpi-bootc-bootloader sync"
 }
 
 # Real-root emergency mode under tryboot: PID 1 keeps the watchdog fed, so nothing would
@@ -658,6 +752,61 @@ test_render_cidata_authkey_file() {
     "$(yget "$T/out/user-data" 'd["write_files"][0]["content"]')" = tskey-auth-fromfile
 }
 
+test_render_cidata_password_hash() {
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\nimage: juniper-desktop\n' >"$T/flash.yaml"
+  hash=$(printf '%s' 'a pass "word" with $ and ü' | openssl passwd -6 -stdin)
+  JUNIPER_PASSWORD_HASH=$hash "$ROOT/disk/render-cidata" "$T/flash.yaml" "$T/out" 2>/dev/null
+  check "cidata: hashed password set" test "$(yget "$T/out/user-data" 'd["users"][0]["passwd"]')" = "$hash"
+  check "cidata: password not locked" test "$(yget "$T/out/user-data" 'd["users"][0]["lock_passwd"]')" = False
+}
+
+# Owner decision 2026-10-11: with a password set, sudo asks for it; without, NOPASSWD.
+test_render_cidata_sudo_follows_password() {
+  local good
+  good=$(printf '%s' 'fake pass' | openssl passwd -6 -stdin)
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\nimage: juniper-desktop\n' >"$T/desk.yaml"
+  JUNIPER_PASSWORD_HASH=$good "$ROOT/disk/render-cidata" "$T/desk.yaml" "$T/o1" 2>/dev/null
+  check "cidata: password -> sudo asks for it" \
+    test "$(yget "$T/o1/user-data" 'd["users"][0]["sudo"]')" = "['ALL=(ALL) ALL']"
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\n' >"$T/headless.yaml"
+  "$ROOT/disk/render-cidata" "$T/headless.yaml" "$T/o2" 2>/dev/null
+  check "cidata: no password -> NOPASSWD sudo" \
+    test "$(yget "$T/o2/user-data" 'd["users"][0]["sudo"]')" = "['ALL=(ALL) NOPASSWD:ALL']"
+}
+
+test_render_cidata_desktop_needs_password() {
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\nimage: juniper-desktop\n' >"$T/flash.yaml"
+  check "cidata: desktop without a password refused" stderr_has "needs a password" \
+    "$ROOT/disk/render-cidata" "$T/flash.yaml" "$T/out"
+}
+
+test_render_cidata_refuses_plaintext_and_bad_hash() {
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\npassword: hunter2\n' >"$T/plain.yaml"
+  check "cidata: plain-text password refused" stderr_has "password: prompt" \
+    "$ROOT/disk/render-cidata" "$T/plain.yaml" "$T/out1"
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\n' >"$T/ok.yaml"
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\npassword: prompt\n' >"$T/okp.yaml"
+  # shellcheck disable=SC2016  # a literal crypt hash
+  check "cidata: non-SHA-512 hash refused" fails env JUNIPER_PASSWORD_HASH='$1$abc$def' \
+    "$ROOT/disk/render-cidata" "$T/okp.yaml" "$T/out2"
+  check "cidata: headless without password still fine" "$ROOT/disk/render-cidata" "$T/ok.yaml" "$T/out3"
+}
+
+test_render_cidata_hash_only_when_asked_for() {
+  local good
+  good=$(printf '%s' 'fake pass' | openssl passwd -6 -stdin)
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\n' >"$T/headless.yaml"
+  JUNIPER_PASSWORD_HASH=$good "$ROOT/disk/render-cidata" "$T/headless.yaml" "$T/o1" 2>/dev/null
+  check "cidata: stray hash ignored on a headless config" test "$(yget "$T/o1/user-data" '"passwd" in d["users"][0] or "lock_passwd" in d["users"][0]')" = False
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\npassword: prompt\n' >"$T/prompt.yaml"
+  JUNIPER_PASSWORD_HASH=$good "$ROOT/disk/render-cidata" "$T/prompt.yaml" "$T/o2" 2>/dev/null
+  check "cidata: password: prompt uses the hash" test "$(yget "$T/o2/user-data" 'd["users"][0]["passwd"]')" = "$good"
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\nimage: juniper-desktop\n' >"$T/desk.yaml"
+  # shellcheck disable=SC2016  # a literal crypt hash
+  check "cidata: short-body hash refused" fails env JUNIPER_PASSWORD_HASH='$6$salt$abc' "$ROOT/disk/render-cidata" "$T/desk.yaml" "$T/o3"
+  check "cidata: empty hash refused for desktop" fails env JUNIPER_PASSWORD_HASH= "$ROOT/disk/render-cidata" "$T/desk.yaml" "$T/o4"
+}
+
 test_render_cidata_rejects_bad_config() {
   printf 'ssh_keys: [ssh-ed25519 AAAAC3x me]\n' >"$T/nouser.yaml"
   printf 'user: me\n' >"$T/nokeys.yaml"
@@ -707,6 +856,269 @@ test_check_target_refuses_system_disks() {
   check "target: internal SATA refused" fails "$ROOT/disk/check-target" /dev/sda
   lsblk_json '{"blockdevices":[{"path":"/dev/mmcblk0p1","type":"part","rm":false,"tran":null,"mountpoints":[null]}]}'
   check "target: partition refused" fails "$ROOT/disk/check-target" /dev/mmcblk0p1
+}
+
+# greetd shows its text login (agreety) first; niri starts only after PAM authentication.
+test_greetd_login_prompt_first() {
+  local c=$ROOT/system_files_desktop/etc/greetd/config.toml
+  check "greetd: no auto-login (no initial_session)" fails grep -q initial_session "$c"
+  check "greetd: agreety starts niri-session" grep -qx 'command = "agreety --cmd niri-session"' "$c"
+  check "greetd: greeter runs as greetd" grep -qx 'user = "greetd"' "$c"
+  check "greetd: no lock-first spawn in niri defaults" fails grep -q lock-first \
+    "$ROOT/system_files_desktop/usr/share/juniper/niri/juniper.kdl"
+}
+
+test_desktop_idle_lock() {
+  export HOME=$T/home XDG_CONFIG_HOME=$T/home/.config
+  stub swayidle ''
+  "$LIBEXEC_DESKTOP/desktop-idle-lock"
+  check "idle-lock: locks after 10 min" called "swayidle -w timeout 600 swaylock -f"
+  mkdir -p "$XDG_CONFIG_HOME/juniper" && touch "$XDG_CONFIG_HOME/juniper/no-idle-lock"
+  : >"$CALLS"
+  "$LIBEXEC_DESKTOP/desktop-idle-lock"
+  check "idle-lock: off -> idle hint only" called "swayidle -w idlehint 1800"
+  check "idle-lock: off -> no lock" not_called "swaylock"
+}
+
+test_flatpak_setup_installs_apps_once() {
+  stub flatpak ''
+  stub runuser ''
+  "$LIBEXEC_DESKTOP/flatpak-setup" >/dev/null
+  check "flatpak: installs Firefox and Bazaar from flathub" \
+    called "flatpak install --system --noninteractive --or-update flathub org.mozilla.firefox io.github.kolunmi.Bazaar"
+  check "flatpak: marked done" test -e "$JUNIPER_STATE_DIR/flatpak-setup.done"
+}
+
+test_flatpak_setup_offline_retries() {
+  stub flatpak 'exit 1'
+  check "flatpak: failure is reported" fails "$LIBEXEC_DESKTOP/flatpak-setup"
+  check "flatpak: failure not marked done (retried next boot)" test ! -e "$JUNIPER_STATE_DIR/flatpak-setup.done"
+}
+
+idle_env() {
+  export JUNIPER_NOW=2000000000
+  stub bootc 'echo "{\"status\":{\"staged\":{}}}"'
+  stub runuser ''
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub loginctl 'case "$1" in
+    list-sessions) echo "3 1000 nat seat0 tty1" ;;
+    show-session) case "$4" in Type) echo wayland ;; Active) echo yes ;; IdleHint) echo "${IDLE:-no}" ;; esac ;;
+  esac'
+}
+
+test_desktop_idle_defers_active_session() {
+  idle_env
+  check "idle: active desktop -> skip" fails "$LIBEXEC_DESKTOP/desktop-idle"
+  check "idle: first deferral recorded" test "$(cat "$JUNIPER_STATE_DIR/reboot-deferred-since")" = 2000000000
+}
+
+test_desktop_idle_proceeds_when_idle_or_nothing_staged() {
+  idle_env
+  IDLE=yes "$LIBEXEC_DESKTOP/desktop-idle"
+  check "idle: idle session -> reboot" test $? = 0
+  stub bootc 'echo "{\"status\":{\"staged\":null}}"'
+  check "idle: nothing staged -> no deferral" "$LIBEXEC_DESKTOP/desktop-idle"
+  check "idle: nothing staged -> marker cleared" test ! -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
+}
+
+test_desktop_idle_cap() {
+  idle_env
+  mkdir -p "$JUNIPER_STATE_DIR"
+  echo $((2000000000 - 7 * 86400)) >"$JUNIPER_STATE_DIR/reboot-deferred-since"
+  check "idle: deferred 7 days -> reboot anyway" "$LIBEXEC_DESKTOP/desktop-idle"
+  check "idle: cap clears the marker" test ! -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
+}
+
+test_desktop_idle_under_cap_keeps_deferring() {
+  idle_env
+  echo $((2000000000 - 6 * 86400)) >"$JUNIPER_STATE_DIR/reboot-deferred-since"
+  check "idle: deferred 6 days -> still skip" fails "$LIBEXEC_DESKTOP/desktop-idle"
+  check "idle: marker kept" test -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
+}
+
+test_desktop_idle_idle_clears_marker() {
+  idle_env
+  echo $((2000000000 - 86400)) >"$JUNIPER_STATE_DIR/reboot-deferred-since"
+  check "idle: idle again -> reboot" env IDLE=yes "$LIBEXEC_DESKTOP/desktop-idle"
+  check "idle: idle -> marker cleared" test ! -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
+}
+
+test_desktop_idle_fails_toward_reboot() {
+  idle_env
+  echo garbage >"$JUNIPER_STATE_DIR/reboot-deferred-since"
+  check "idle: garbled marker -> reboot" "$LIBEXEC_DESKTOP/desktop-idle"
+  check "idle: garbled marker cleared" test ! -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
+  idle_env
+  stub loginctl 'exit 1'
+  check "idle: loginctl failing -> reboot" "$LIBEXEC_DESKTOP/desktop-idle"
+}
+
+test_desktop_idle_notify_is_best_effort() {
+  idle_env
+  stub runuser 'exit 1'
+  stub getent 'exit 2'
+  rc=0
+  "$LIBEXEC_DESKTOP/desktop-idle" >/dev/null || rc=$?
+  check "idle: notify trouble still exits 1 (skip, not error)" test $rc = 1
+}
+
+# One "update ready" notice when the deferral starts, then at most one a day (the hourly retry
+# runs the same check), with the real deadline: first deferral + 7 days.
+notify_env() {
+  idle_env
+  export JUNIPER_USER_BUS=$T/bus
+  python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$JUNIPER_USER_BUS"
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub getent '[[ "$1 $2" == "passwd 1000" ]] && echo "nat:x:1000:1000::/var/home/nat:/bin/bash"'
+}
+
+test_desktop_idle_notifies_once_with_deadline() {
+  notify_env
+  local deadline
+  deadline=$(date -d @$((2000000000 + 7 * 86400)) '+%a %-d %b %H:%M')
+  "$LIBEXEC_DESKTOP/desktop-idle" >/dev/null || true
+  check "notify: first deferral -> notice for uid 1000" called "runuser -u nat"
+  check "notify: on uid 1000's session bus" called "DBUS_SESSION_BUS_ADDRESS=unix:path=$T/bus"
+  check "notify: shows the deadline" called "$deadline"
+  : >"$CALLS"
+  JUNIPER_NOW=$((2000000000 + 3600)) "$LIBEXEC_DESKTOP/desktop-idle" >/dev/null || true
+  check "notify: hourly retry -> no repeat" not_called "runuser"
+  JUNIPER_NOW=$((2000000000 + 86400 + 60)) "$LIBEXEC_DESKTOP/desktop-idle" >/dev/null || true
+  check "notify: a day later -> one reminder" called "runuser -u nat"
+  check "notify: reminder keeps the first deadline" called "$deadline"
+}
+
+test_desktop_idle_notify_resets_after_reboot_allowed() {
+  notify_env
+  "$LIBEXEC_DESKTOP/desktop-idle" >/dev/null || true
+  IDLE=yes "$LIBEXEC_DESKTOP/desktop-idle" >/dev/null
+  check "notify: allowed reboot clears the notice marker" test ! -e "$JUNIPER_STATE_DIR/reboot-notified"
+  : >"$CALLS"
+  JUNIPER_NOW=$((2000000000 + 3600)) "$LIBEXEC_DESKTOP/desktop-idle" >/dev/null || true
+  check "notify: a new deferral notifies again" called "runuser -u nat"
+}
+
+test_desktop_idle_any_active_nonidle_session_defers() {
+  idle_env
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub loginctl 'case "$1" in
+    list-sessions) printf "3 1000 nat seat0 tty1\n4 1000 nat seat0 tty2\n" ;;
+    show-session) case "$4" in Type) echo wayland ;; Active) echo yes ;; IdleHint) [[ $2 == 3 ]] && echo yes || echo no ;; esac ;;
+  esac'
+  check "idle: one idle + one busy session -> skip" fails "$LIBEXEC_DESKTOP/desktop-idle"
+}
+
+test_desktop_idle_ignores_non_graphical_sessions() {
+  idle_env
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub loginctl 'case "$1" in
+    list-sessions) echo "5 1000 nat seat0 pts/0" ;;
+    show-session) case "$4" in Type) echo tty ;; Active) echo yes ;; IdleHint) echo no ;; esac ;;
+  esac'
+  check "idle: ssh/tty-only session -> reboot" "$LIBEXEC_DESKTOP/desktop-idle"
+}
+
+test_desktop_idle_future_marker() {
+  idle_env
+  echo $((2000000000 + 86400)) >"$JUNIPER_STATE_DIR/reboot-deferred-since"
+  check "idle: future marker -> reboot" "$LIBEXEC_DESKTOP/desktop-idle"
+  check "idle: future marker cleared" test ! -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
+}
+
+test_desktop_idle_cap_boundaries() {
+  idle_env
+  echo $((2000000000 - 7 * 86400 - 1800)) >"$JUNIPER_STATE_DIR/reboot-deferred-since"
+  check "idle: 7d+30min (hourly retry) -> reboot" "$LIBEXEC_DESKTOP/desktop-idle"
+  echo $((2000000000 - 7 * 86400 + 1)) >"$JUNIPER_STATE_DIR/reboot-deferred-since"
+  check "idle: 1s short of 7d -> skip" fails "$LIBEXEC_DESKTOP/desktop-idle"
+}
+
+test_desktop_idle_leading_zero_marker() {
+  idle_env
+  echo "0$((2000000000 - 86400))" >"$JUNIPER_STATE_DIR/reboot-deferred-since"
+  rc=0
+  "$LIBEXEC_DESKTOP/desktop-idle" >/dev/null || rc=$?
+  check "idle: leading-zero marker read as decimal (skip, marker kept)" test "$rc" = 1 -a -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
+}
+
+# `ujust update-schedule off` disables juniper-reboot.timer; the hourly retry must honour it.
+test_reboot_retry_honours_update_schedule_off() {
+  local u=$ROOT/system_files_desktop/usr/lib/systemd/system/juniper-reboot-retry.service
+  check "retry: skipped while automatic reboots are off" \
+    grep -qx 'ExecCondition=/usr/bin/systemctl is-enabled --quiet juniper-reboot.timer' "$u"
+  check "retry: that check comes before the idle check" \
+    test "$(grep -m1 '^ExecCondition=' "$u")" = 'ExecCondition=/usr/bin/systemctl is-enabled --quiet juniper-reboot.timer'
+  check "update-schedule off: disables juniper-reboot.timer" \
+    grep -q 'systemctl disable --now juniper-reboot.timer' "$LIBEXEC/update-schedule"
+}
+
+switch_env() {
+  export USER=nat T JUNIPER_APPLY_UPDATE=apply-update
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub sudo '"$@"'
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub passwd 'if [[ $1 == -S ]]; then echo "nat ${PW_STATUS:-LK} 2026-10-10 0 99999 7 -1"; else echo set >"$T/pw-set"; fi'
+  stub apply-update ''
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub getent '[[ "$1 $2" == "passwd 1000" && -z ${NO_UID_1000:-} ]] && echo "nat:x:1000:1000::/var/home/nat:/bin/bash" || exit 2'
+}
+
+test_switch_desktop_without_password_asks_first() {
+  switch_env
+  # Status flips to PS once passwd has run.
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub passwd 'if [[ $1 == -S ]]; then [[ -e $T/pw-set ]] && s=PS || s=LK; echo "nat $s 2026-10-10 0 99999 7 -1"; else touch "$T/pw-set"; fi'
+  "$LIBEXEC/switch-image" ghcr.io/gnathoi/juniper-desktop:latest >/dev/null
+  check "switch: asked for a password" called "passwd nat"
+  check "switch: then switched" called "bootc switch ghcr.io/gnathoi/juniper-desktop:latest"
+}
+
+test_switch_desktop_refuses_if_still_no_password() {
+  switch_env
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub passwd 'if [[ $1 == -S ]]; then echo "nat LK 2026-10-10 0 99999 7 -1"; fi'
+  check "switch: still no password -> no switch" fails "$LIBEXEC/switch-image" ghcr.io/gnathoi/juniper-desktop:latest
+  check "switch: nothing staged" not_called "bootc switch"
+}
+
+# The desktop logs in uid 1000 at the screen: that account's password counts, whoever runs it.
+test_switch_desktop_as_root_checks_uid_1000() {
+  switch_env
+  export USER=root
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub passwd 'if [[ $1 == -S ]]; then [[ -e $T/pw-set ]] && s=PS || s=LK; echo "$2 $s 2026-10-10 0 99999 7 -1"; else touch "$T/pw-set"; fi'
+  "$LIBEXEC/switch-image" ghcr.io/gnathoi/juniper-desktop:latest >/dev/null
+  check "switch as root: checks uid 1000's password" called "passwd -S nat"
+  check "switch as root: sets uid 1000's password" called "passwd nat"
+  check "switch as root: never root's" not_called "passwd root"
+  check "switch as root: then switched" called "bootc switch ghcr.io/gnathoi/juniper-desktop:latest"
+}
+
+test_switch_desktop_other_user_checks_uid_1000() {
+  switch_env
+  export USER=alice
+  # nat (uid 1000) has a password; alice doesn't matter.
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub passwd 'if [[ $1 == -S ]]; then [[ $2 == nat ]] && s=PS || s=LK; echo "$2 $s 2026-10-10 0 99999 7 -1"; else touch "$T/pw-set"; fi'
+  "$LIBEXEC/switch-image" ghcr.io/gnathoi/juniper-desktop:latest >/dev/null
+  check "switch, second user: checks uid 1000" called "passwd -S nat"
+  check "switch, second user: not the caller" not_called "passwd -S alice"
+  check "switch, second user: no password prompt" test ! -e "$T/pw-set"
+  check "switch, second user: switched" called "bootc switch ghcr.io/gnathoi/juniper-desktop:latest"
+}
+
+test_switch_desktop_refuses_without_uid_1000() {
+  switch_env
+  check "switch: no uid 1000 -> refused with a reason" stderr_has "uid 1000" \
+    env NO_UID_1000=1 "$LIBEXEC/switch-image" ghcr.io/gnathoi/juniper-desktop:latest
+  check "switch: no uid 1000 -> nothing staged" not_called "bootc switch"
+}
+
+test_switch_headless_needs_no_password() {
+  switch_env
+  "$LIBEXEC/switch-image" ghcr.io/gnathoi/juniper-minimal:latest >/dev/null
+  check "switch: headless -> no password check" not_called "passwd -S"
+  check "switch: headless switched" called "bootc switch ghcr.io/gnathoi/juniper-minimal:latest"
 }
 
 # --- runner ---

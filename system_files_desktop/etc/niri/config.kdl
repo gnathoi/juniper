@@ -1,0 +1,4 @@
+// niri reads this when you have no ~/.config/niri/config.kdl. It only pulls in Juniper's
+// defaults, so image updates can improve them. For your own settings run
+// `ujust desktop-config`, which creates ~/.config/niri/config.kdl with the same include.
+include "/usr/share/juniper/niri/juniper.kdl"

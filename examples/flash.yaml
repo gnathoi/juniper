@@ -3,8 +3,14 @@
 # then fill it in. A filled-in copy holds secrets (Tailscale key, Wi-Fi password): keep it
 # chmod 600. Applied once, on the Pi's first boot, then wiped from the card.
 
-# juniper (dev tools, Homebrew) or juniper-minimal (appliance base). Default: juniper.
+# juniper (dev tools, Homebrew), juniper-minimal (appliance base) or juniper-desktop
+# (experimental niri desktop). Default: juniper.
 image: juniper
+
+# juniper-desktop requires a password (just flash asks for it; only a hash is written). It's
+# for logging in, and sudo asks for it too. For the headless images it's optional: uncomment
+# to be asked (sudo then asks for it as well; without one, sudo needs no password).
+# password: prompt
 
 hostname: juniper
 user: me                        # your login; password login is off, so SSH keys are required

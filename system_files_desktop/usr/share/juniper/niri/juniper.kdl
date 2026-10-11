@@ -1,0 +1,30 @@
+// Juniper Desktop defaults, included by /etc/niri/config.kdl (and by the stub that
+// `ujust desktop-config` writes). Later settings in your own config override these.
+
+// niri starts after you log in at greetd's prompt. Notifications, the bar, and the idle lock.
+spawn-at-startup "swaync"
+spawn-at-startup "waybar"
+spawn-at-startup "/usr/libexec/juniper/desktop-idle-lock"
+
+xwayland-satellite {
+    path "xwayland-satellite"
+}
+
+prefer-no-csd
+
+binds {
+    Mod+Return { spawn "foot"; }
+    Mod+D { spawn "fuzzel"; }
+    Super+Alt+L { spawn "swaylock" "-f"; }
+    Mod+Q { close-window; }
+    Mod+Left { focus-column-left; }
+    Mod+Right { focus-column-right; }
+    Mod+Up { focus-window-up; }
+    Mod+Down { focus-window-down; }
+    Mod+Shift+Left { move-column-left; }
+    Mod+Shift+Right { move-column-right; }
+    Mod+F { maximize-column; }
+    Mod+Shift+F { fullscreen-window; }
+    Mod+Shift+E { quit; }
+    Mod+Shift+Slash { show-hotkey-overlay; }
+}

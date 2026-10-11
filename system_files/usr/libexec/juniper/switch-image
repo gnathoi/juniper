@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# ujust switch IMAGE: switch to another image and reboot into it now. juniper-desktop starts at
+# a login prompt for the first human user (uid 1000), so make sure that account has a password
+# before switching to it, whoever runs this (root included).
+set -euo pipefail
+image=${1:?usage: ujust switch IMAGE}
+apply=${JUNIPER_APPLY_UPDATE:-/usr/libexec/juniper/apply-update}
+
+if [[ $image == *juniper-desktop* ]]; then
+  user=$(getent passwd 1000 | cut -d: -f1) || user=
+  if [[ -z $user ]]; then
+    echo "juniper-desktop logs in the first user (uid 1000), and there is none; not switching." >&2
+    exit 1
+  fi
+  has_password() { [[ $(sudo passwd -S "$user" | awk '{print $2}') == P* ]]; }
+  if ! has_password; then
+    echo "juniper-desktop starts at a login prompt, so $user needs a password first."
+    sudo passwd "$user" || true
+    has_password || {
+      echo "No password set for $user; not switching." >&2
+      exit 1
+    }
+  fi
+fi
+sudo bootc switch "$image"
+sudo "$apply"

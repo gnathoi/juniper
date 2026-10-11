@@ -10,6 +10,21 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+### Added
+
+- Experimental `juniper-desktop` image (niri, Firefox and Bazaar from Flathub), published
+  (signed image and disk image) but untested on hardware, and not in Raspberry Pi Imager's
+  list. It boots to a text login prompt; niri starts after you log in. `just flash` can set
+  a password (required for the desktop), and `sudo` then asks for it; `ujust switch` to the
+  desktop asks for one. On it, a pending update's reboot waits while the desktop is in use,
+  at most 7 days.
+
+### Changed
+
+- SSH is explicitly key-only on every image (`/etc/ssh/sshd_config.d/40-juniper.conf`), now
+  that accounts can have a password.
+- The health check names a failing image health hook and stops a hung one after 60 seconds.
+
 ## build-20261010 (2026-10-10)
 
 ### Removed

@@ -1,0 +1,55 @@
+name: bump-desktop
+
+# Dependabot can't see the desktop's COPR packages (build_files/desktop.lock): bump them
+# weekly into a PR for a human to review. Third-party packages: never auto-merged.
+on:
+  schedule:
+    - cron: "0 6 * * 6"  # Saturdays, with Dependabot
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: bump-desktop
+
+jobs:
+  bump:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4.0.0
+      - name: Bump the lock file
+        run: just bump-desktop
+      - name: Open or update the PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet build_files/desktop.lock; then
+            echo "desktop.lock is current"
+            exit 0
+          fi
+          branch=bump/desktop-lock
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C "$branch"
+          git commit -qm "build(deps): bump desktop COPR packages" build_files/desktop.lock
+          git push -f origin "$branch"
+          fence='```'
+          {
+            echo "Weekly just bump-desktop. Third-party COPR packages: review, then merge."
+            printf '\n%sdiff\n' "$fence"
+            git diff HEAD~1 -- build_files/desktop.lock
+            printf '%s\n' "$fence"
+          } >"$RUNNER_TEMP/body.md"
+          # gh pr view would also find an old merged PR on this branch
+          if [[ $(gh pr list --head "$branch" --state open --json number --jq length) -gt 0 ]]; then
+            gh pr edit "$branch" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh pr create --head "$branch" --title "build(deps): bump desktop COPR packages" \
+              --body-file "$RUNNER_TEMP/body.md"
+          fi
+          # PRs from GITHUB_TOKEN don't trigger CI; a dispatch does. Branch builds never publish.
+          gh workflow run build.yml --ref "$branch"

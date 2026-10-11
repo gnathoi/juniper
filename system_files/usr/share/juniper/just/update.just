@@ -9,8 +9,4 @@ update-schedule day_or_time="" time="":
 
 # Switch to another image (e.g. ghcr.io/you/sensor-box:latest) and reboot into it now
 switch image:
-    #!/usr/bin/bash
-    set -euo pipefail
-    [[ -n {{ quote(image) }} ]] || { echo "usage: ujust switch IMAGE" >&2; exit 2; }
-    sudo bootc switch {{ quote(image) }}
-    sudo /usr/libexec/juniper/apply-update
+    /usr/libexec/juniper/switch-image {{ quote(image) }}

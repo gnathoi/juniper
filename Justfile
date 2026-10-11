@@ -1,7 +1,7 @@
 image := "juniper"
 image_ref := "localhost/" + image
 version := `date -u +%Y%m%d`
-target := if image == "juniper-minimal" { "minimal" } else { "juniper" }
+target := if image == "juniper-minimal" { "minimal" } else if image == "juniper-desktop" { "desktop" } else { "juniper" }
 
 # Lint and unit-test (same checks as CI's lint job)
 check:
@@ -60,6 +60,40 @@ bump-tools:
       -e "s|# v[0-9.]+, pinned: no auto-updates|# $v, pinned: no auto-updates|" "$f"
     git diff --stat disk/build-raw.sh Justfile "$f"
 
+# Pin the desktop's COPR packages to their newest builds (build_files/desktop.lock)
+bump-desktop:
+    #!/usr/bin/bash
+    set -euo pipefail
+    tmp=$(mktemp)
+    trap 'rm -f "$tmp"' EXIT
+    podman run --rm -v ./build_files:/b:ro,z quay.io/almalinuxorg/almalinux:10 bash -c '
+      set -euo pipefail
+      # Each package only from its own COPR, fenced like the build (desktop.sh): another COPR
+      # with a newer build of it (wlroots-epel also has niri) must not win.
+      while read -r proj list; do
+        [[ -z $proj || $proj == "#"* ]] && continue
+        id=${proj/\//-}
+        printf "[%s]\nname=%s\nbaseurl=https://download.copr.fedorainfracloud.org/results/%s/epel-10-\$basearch/\ngpgcheck=1\ngpgkey=file:///b/copr-keys/%s.gpg\nenabled=1\nincludepkgs=%s\n" \
+          "$id" "$proj" "$proj" "$id" "$list" >"/etc/yum.repos.d/$id.repo"
+        read -ra pkgs <<<"$list"
+        dnf -q --forcearch=aarch64 --repo="$id" \
+          repoquery --latest-limit 1 --qf "%{name}-%{evr}\n" "${pkgs[@]}" </dev/null
+      done </b/desktop-copr.txt
+    ' | sed -e '/^$/d' -e 's/-0:/-/' | LC_ALL=C sort -u >"$tmp"
+    # repoquery silently omits packages a COPR no longer has: fail rather than ship an image without them
+    missing=()
+    while read -r proj list; do
+      [[ -z $proj || $proj == "#"* ]] && continue
+      for p in $list; do grep -q "^$p-[0-9]" "$tmp" || missing+=("$p"); done
+    done <build_files/desktop-copr.txt
+    if ((${#missing[@]})); then
+      echo "bump-desktop: not found in the COPRs: ${missing[*]}" >&2
+      exit 1
+    fi
+    chmod 644 "$tmp"
+    mv "$tmp" build_files/desktop.lock
+    git diff --stat build_files/desktop.lock
+
 # Rechunk :build into :latest and :{{ version }} (rootful podman storage)
 rechunk:
     #!/usr/bin/bash
@@ -101,7 +135,7 @@ check-layers:
     hist=$(podman history --no-trunc --format '{{{{.Size}}\t{{{{.CreatedBy}}' {{ image_ref }}:latest)
     echo "$hist"
     want=(juniper)
-    [[ {{ image }} == juniper ]] && want+=(homebrew)
+    [[ {{ image }} == juniper || {{ image }} == juniper-desktop ]] && want+=(homebrew)
     for w in "${want[@]}"; do
       grep -qP "^(?!0B)[0-9.]+[kMG]?B\\s+$w\\s*$" <<<"$hist" || { echo "no $w layer" >&2; exit 1; }
     done

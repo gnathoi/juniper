@@ -1,0 +1,8 @@
+# Juniper Desktop: boot to greetd's text login (agreety); niri starts only after the password
+# is accepted (PAM). No auto-login. Replaces the greetd package's default config.
+[terminal]
+vt = 1
+
+[default_session]
+command = "agreety --cmd niri-session"
+user = "greetd"

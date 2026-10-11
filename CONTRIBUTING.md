@@ -21,6 +21,9 @@ the maintainer reviews and merges them.
 
 - Dependabot opens dependency PRs on Saturdays. Minor, patch and digest bumps merge
   themselves once CI is green (through the same rules); major bumps wait for review.
+- The desktop's COPR packages (`build_files/desktop.lock`) are outside Dependabot's reach:
+  `bump-desktop.yml` opens a PR every Saturday when they change. Review and merge by hand;
+  it's never auto-merged. Locally: `just bump-desktop`.
 - Pushes to `main` build and test but don't publish. The Monday 02:00 UTC run publishes both
   signed images, the disk images and a release, whose notes come from **Unreleased** in
   [CHANGELOG.md](CHANGELOG.md); the release job then moves those entries under its tag.

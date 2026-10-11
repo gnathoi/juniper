@@ -1,10 +1,12 @@
 # Juniper: headless bootc images for Raspberry Pi 4/5.
 #   --target minimal  -> juniper-minimal (appliance base: build FROM this)
 #   --target juniper  -> juniper (minimal + developer tools)
+#   --target desktop  -> juniper-desktop (juniper + niri desktop; experimental)
 FROM scratch AS ctx
 COPY build_files /build_files
 COPY system_files /system_files
 COPY system_files_dev /system_files_dev
+COPY system_files_desktop /system_files_desktop
 COPY LICENSE THIRD_PARTY.md /
 
 # Homebrew tarball + setup/update units (Bluefin's), pinned by digest. CI checks ublue's
@@ -32,5 +34,13 @@ RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=bind,from=brew,source=/system_files,target=/brew \
     --mount=type=tmpfs,target=/var \
     /ctx/build_files/dev.sh
+
+RUN bootc container lint --fatal-warnings
+
+FROM juniper AS desktop
+
+RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
+    --mount=type=tmpfs,target=/var \
+    /ctx/build_files/desktop.sh
 
 RUN bootc container lint --fatal-warnings

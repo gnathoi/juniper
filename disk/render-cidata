@@ -12,7 +12,7 @@ import sys
 import yaml
 
 KEYS = {"image", "hostname", "user", "timezone", "ssh_keys", "tailscale_authkey",
-        "tailscale_authkey_file", "wifi"}
+        "tailscale_authkey_file", "wifi", "password"}
 WIFI_KEYS = {"ssid", "password", "country"}
 KEY_PREFIXES = ("ssh-", "ecdsa-", "sk-ssh-", "sk-ecdsa-")
 
@@ -29,8 +29,18 @@ def load(path):
     unknown = set(cfg) - KEYS
     if unknown:
         fail(f"unknown keys: {', '.join(sorted(unknown))}")
-    if cfg.get("image", "juniper") not in ("juniper", "juniper-minimal"):
-        fail("image must be juniper or juniper-minimal")
+    if cfg.get("image", "juniper") not in ("juniper", "juniper-minimal", "juniper-desktop"):
+        fail("image must be juniper, juniper-minimal or juniper-desktop")
+    if "password" in cfg and cfg["password"] != "prompt":
+        fail("password: plain-text passwords aren't allowed here; use `password: prompt` "
+             "(just flash asks for it and stores only a hash)")
+    # Only when asked for: a stray exported variable must not add a password to a headless card.
+    wants_pw = cfg.get("image") == "juniper-desktop" or cfg.get("password") == "prompt"
+    pw_hash = os.environ.get("JUNIPER_PASSWORD_HASH") if wants_pw else None
+    if pw_hash is not None and not re.fullmatch(r"\$6\$[./A-Za-z0-9]{1,16}\$[./A-Za-z0-9]{86}", pw_hash):
+        fail("JUNIPER_PASSWORD_HASH must be a SHA-512 crypt hash ($6$...)")
+    if cfg.get("image") == "juniper-desktop" and not pw_hash:
+        fail("juniper-desktop needs a password: it starts at a login prompt (just flash asks for one)")
 
     user = cfg.get("user")
     if not isinstance(user, str) or not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", user):
@@ -61,7 +71,7 @@ def load(path):
         unknown = set(wifi) - WIFI_KEYS
         if unknown:
             fail(f"wifi: unknown keys: {', '.join(sorted(unknown))}")
-    return host, user, [str(k) for k in keys], cfg.get("timezone"), ts, wifi
+    return host, user, [str(k) for k in keys], cfg.get("timezone"), ts, wifi, pw_hash
 
 
 def write_private(path, data):
@@ -83,17 +93,21 @@ def main():
     if os.stat(config).st_mode & 0o077:
         print(f"render-cidata: warning: {config} is readable by others; chmod 600 it",
               file=sys.stderr)
-    host, user, keys, tz, ts, wifi = load(config)
+    host, user, keys, tz, ts, wifi, pw_hash = load(config)
 
     ud = {
         "hostname": host,
         "users": [{
             "name": user,
             "groups": ["wheel"],
-            "sudo": ["ALL=(ALL) NOPASSWD:ALL"],
+            # With a password, sudo asks for it (owner decision); key-only accounts can't answer.
+            "sudo": ["ALL=(ALL) ALL" if pw_hash else "ALL=(ALL) NOPASSWD:ALL"],
             "ssh_authorized_keys": keys,
         }],
     }
+    if pw_hash:
+        ud["users"][0]["passwd"] = pw_hash
+        ud["users"][0]["lock_passwd"] = False
     if tz:
         ud["timezone"] = str(tz)
     if ts:
