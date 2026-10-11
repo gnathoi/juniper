@@ -117,7 +117,7 @@ pw_key=$(python3 -c 'import sys, yaml; c = yaml.safe_load(open(sys.argv[1])) or 
 [[ $pw_key == prompt ]] || die "password: only 'prompt' is allowed; nothing is stored in the config"
 if [[ $want_pw == yes ]]; then
   # IFS= keeps leading/trailing spaces; a failed read (EOF, no terminal) must not fall through.
-  IFS= read -rsp "Password for the Pi's user (for the lock screen and sudo): " pw1 || die "a terminal is needed to ask for the password"
+  IFS= read -rsp "Password for the Pi's user (for logging in and sudo): " pw1 || die "a terminal is needed to ask for the password"
   echo
   IFS= read -rsp "Again: " pw2 || die "a terminal is needed to ask for the password"
   echo

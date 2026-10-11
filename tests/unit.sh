@@ -691,6 +691,20 @@ test_render_cidata_password_hash() {
   check "cidata: password not locked" test "$(yget "$T/out/user-data" 'd["users"][0]["lock_passwd"]')" = False
 }
 
+# Owner decision 2026-10-11: with a password set, sudo asks for it; without, NOPASSWD.
+test_render_cidata_sudo_follows_password() {
+  local good
+  good=$(printf '%s' 'fake pass' | openssl passwd -6 -stdin)
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\nimage: juniper-desktop\n' >"$T/desk.yaml"
+  JUNIPER_PASSWORD_HASH=$good "$ROOT/disk/render-cidata" "$T/desk.yaml" "$T/o1" 2>/dev/null
+  check "cidata: password -> sudo asks for it" \
+    test "$(yget "$T/o1/user-data" 'd["users"][0]["sudo"]')" = "['ALL=(ALL) ALL']"
+  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\n' >"$T/headless.yaml"
+  "$ROOT/disk/render-cidata" "$T/headless.yaml" "$T/o2" 2>/dev/null
+  check "cidata: no password -> NOPASSWD sudo" \
+    test "$(yget "$T/o2/user-data" 'd["users"][0]["sudo"]')" = "['ALL=(ALL) NOPASSWD:ALL']"
+}
+
 test_render_cidata_desktop_needs_password() {
   printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\nimage: juniper-desktop\n' >"$T/flash.yaml"
   check "cidata: desktop without a password refused" stderr_has "needs a password" \

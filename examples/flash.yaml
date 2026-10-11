@@ -7,8 +7,9 @@
 # (experimental niri desktop). Default: juniper.
 image: juniper
 
-# juniper-desktop requires a password (just flash asks for it; only a hash is written). For
-# the headless images it's optional: uncomment to be asked too.
+# juniper-desktop requires a password (just flash asks for it; only a hash is written). It's
+# for logging in, and sudo asks for it too. For the headless images it's optional: uncomment
+# to be asked (sudo then asks for it as well; without one, sudo needs no password).
 # password: prompt
 
 hostname: juniper

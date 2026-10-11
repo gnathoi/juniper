@@ -40,7 +40,7 @@ def load(path):
     if pw_hash is not None and not re.fullmatch(r"\$6\$[./A-Za-z0-9]{1,16}\$[./A-Za-z0-9]{86}", pw_hash):
         fail("JUNIPER_PASSWORD_HASH must be a SHA-512 crypt hash ($6$...)")
     if cfg.get("image") == "juniper-desktop" and not pw_hash:
-        fail("juniper-desktop needs a password: it starts at a lock screen (just flash asks for one)")
+        fail("juniper-desktop needs a password: it starts at a login prompt (just flash asks for one)")
 
     user = cfg.get("user")
     if not isinstance(user, str) or not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", user):
@@ -100,7 +100,8 @@ def main():
         "users": [{
             "name": user,
             "groups": ["wheel"],
-            "sudo": ["ALL=(ALL) NOPASSWD:ALL"],
+            # With a password, sudo asks for it (owner decision); key-only accounts can't answer.
+            "sudo": ["ALL=(ALL) ALL" if pw_hash else "ALL=(ALL) NOPASSWD:ALL"],
             "ssh_authorized_keys": keys,
         }],
     }
