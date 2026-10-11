@@ -10,6 +10,8 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+## build-20261011 (2026-10-11)
+
 ### Added
 
 - Opt-in encryption at rest (`encrypt: true` in flash.yaml, Pi 5 with bootloader EEPROM 2026-01-21 or later): the first boot encrypts the root with LUKS2, bound to the board's one-time-programmable key and the card's serial, with an age recovery keyslot sealed to your flash.yaml SSH keys (or `recovery_key:`). `just unlock-card DEVICE` opens a card on a laptop with your SSH private key. New metrics `juniper_encrypted`, `juniper_encryption_key_locked` and `juniper_encryption_recovery_sealed`. README section "Encryption at rest"
@@ -26,8 +28,6 @@ Unreleased as its release notes, then moves those entries under the release's ta
 - A second failed health check now writes the held note at once, so the login status, `ujust pi-status` and the `juniper_update_held` metric show it right after the fallback instead of at the next update check
 - `ujust lan-ssh on` no longer lists host routes (/32, /128) or prefixes covered by another listed network (e.g. `fe80::/64` under `fe80::/10`)
 - `juniper-reboot.service` (and the desktop's hourly retry) skip a run in the first 10 minutes after boot: on a Pi without a battery clock the time step at first boot made the weekly timer fire at once and reboot a fresh device
-
-## build-20261011 (2026-10-11)
 
 ### Added
 
