@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# ujust switch IMAGE: switch to another image and reboot into it now. juniper-desktop starts at
+# a lock screen, so make sure the user has a password before switching to it.
+set -euo pipefail
+image=${1:?usage: ujust switch IMAGE}
+apply=${JUNIPER_APPLY_UPDATE:-/usr/libexec/juniper/apply-update}
+
+has_password() { [[ $(sudo passwd -S "$USER" | awk '{print $2}') == P* ]]; }
+
+if [[ $image == *juniper-desktop* ]] && ! has_password; then
+  echo "juniper-desktop starts at a lock screen, so $USER needs a password first."
+  sudo passwd "$USER" || true
+  has_password || {
+    echo "No password set; not switching." >&2
+    exit 1
+  }
+fi
+sudo bootc switch "$image"
+sudo "$apply"

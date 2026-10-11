@@ -966,6 +966,40 @@ test_desktop_idle_leading_zero_marker() {
   check "idle: leading-zero marker read as decimal (skip, marker kept)" test "$rc" = 1 -a -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
 }
 
+switch_env() {
+  export USER=nat T JUNIPER_APPLY_UPDATE=apply-update
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub sudo '"$@"'
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub passwd 'if [[ $1 == -S ]]; then echo "nat ${PW_STATUS:-LK} 2026-10-10 0 99999 7 -1"; else echo set >"$T/pw-set"; fi'
+  stub apply-update ''
+}
+
+test_switch_desktop_without_password_asks_first() {
+  switch_env
+  # Status flips to PS once passwd has run.
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub passwd 'if [[ $1 == -S ]]; then [[ -e $T/pw-set ]] && s=PS || s=LK; echo "nat $s 2026-10-10 0 99999 7 -1"; else touch "$T/pw-set"; fi'
+  "$LIBEXEC/switch-image" ghcr.io/gnathoi/juniper-desktop:latest >/dev/null
+  check "switch: asked for a password" called "passwd nat"
+  check "switch: then switched" called "bootc switch ghcr.io/gnathoi/juniper-desktop:latest"
+}
+
+test_switch_desktop_refuses_if_still_no_password() {
+  switch_env
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub passwd 'if [[ $1 == -S ]]; then echo "nat LK 2026-10-10 0 99999 7 -1"; fi'
+  check "switch: still no password -> no switch" fails "$LIBEXEC/switch-image" ghcr.io/gnathoi/juniper-desktop:latest
+  check "switch: nothing staged" not_called "bootc switch"
+}
+
+test_switch_headless_needs_no_password() {
+  switch_env
+  "$LIBEXEC/switch-image" ghcr.io/gnathoi/juniper-minimal:latest >/dev/null
+  check "switch: headless -> no password check" not_called "passwd -S"
+  check "switch: headless switched" called "bootc switch ghcr.io/gnathoi/juniper-minimal:latest"
+}
+
 # --- runner ---
 for t in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do
   setup
