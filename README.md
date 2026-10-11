@@ -301,6 +301,10 @@ retried at the next window; one that fails twice is held: the login status and
 and the next release proceeds as usual. To retry a held image anyway, remove its line from
 `/var/lib/juniper/bad-digests`.
 
+The kernel and Pi firmware arrive only when AlmaLinux rebuilds its base image, not with the
+weekly updates; each release's notes state the kernel's build date and whether a newer one
+is waiting, and `ujust pi-status` shows the running kernel's age.
+
 ## Acknowledgements
 
 Juniper stands on other people's work:
