@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# The Pi's OTP device key through the firmware (rpi-fw-crypto, key id 1), for the LUKS root
+# (issue #50). Never reads the raw key; generates one only when the slot is blank; never
+# writes key usage. Secrets go to stdout only; no temporary files.
+#
+#   fwkey probe          ok | not-set | locked | unavailable:<detail>          (exit 0)
+#   fwkey ensure         ok | generated | unavailable:<detail>    (exit 0 if usable, else 1)
+#   fwkey card-id DISK   mmc:<cid> | nvme:<serial> | usb:<vid>:<pid>:<serial> | board:
+#   fwkey derive DISK    the passphrase: exactly 64 lowercase hex bytes, no newline
+#   fwkey lock           locked | unavailable                    (best-effort, always exit 0)
+set -euo pipefail
+sysfs=${JUNIPER_SYSFS:-/sys}
+vcio=${JUNIPER_VCIO:-/dev/vcio}
+fw=${RPI_FW_CRYPTO:-rpi-fw-crypto}
+label='juniper.luks.root.v1'
+
+hmac() { "$fw" hmac --in /dev/stdin --key-id 1 --outform hex; }
+fw_error() { printf '%s\n' "$1" | sed -n 's/^Last crypto error: \([0-9]*\).*/\1/p' | head -1; }
+
+probe() {
+  [[ -e $vcio ]] || {
+    echo "unavailable:no $vcio"
+    return
+  }
+  local both err
+  both=$(printf 'juniper.probe.v1' | hmac 2>&1) || true
+  if printf '%s\n' "$both" | grep -Eqx '[0-9a-f]{64}'; then
+    echo ok
+    return
+  fi
+  err=$(fw_error "$both")
+  case $err in
+    6) echo not-set ;;
+    4) echo locked ;;
+    *) echo "unavailable:firmware error ${err:-none}" ;;
+  esac
+}
+
+# genkey is an OTP write: only on KEY_NOT_SET, never on any other probe result.
+ensure() {
+  local state out
+  state=$(probe)
+  case $state in
+    ok)
+      echo ok
+      return
+      ;;
+    locked)
+      echo "unavailable:key locked"
+      return 1
+      ;;
+    not-set) ;;
+    *)
+      echo "$state"
+      return 1
+      ;;
+  esac
+  if ! out=$("$fw" genkey --key-id 1 --alg ec 2>&1); then
+    out=$(fw_error "$out")
+    echo "unavailable:genkey failed (firmware error ${out:-none})"
+    return 1
+  fi
+  state=$(probe)
+  if [[ $state == ok ]]; then
+    echo generated
+    return
+  fi
+  echo "unavailable:after genkey the probe says ${state#unavailable:}"
+  return 1
+}
+
+# read_id FILE: the attribute with all whitespace removed; fails if missing or empty.
+read_id() {
+  local v
+  [[ -r $1 ]] || return 1
+  v=$(tr -d '[:space:]' <"$1") || return 1
+  [[ -n $v ]] || return 1
+  printf '%s' "$v"
+}
+
+card_id() {
+  [[ $1 =~ ^[A-Za-z0-9]+$ ]] || return 1
+  local d=$sysfs/block/$1 v root p vid pid
+  [[ -e $d ]] || return 1
+  if v=$(read_id "$d/device/cid"); then
+    printf 'mmc:%s\n' "$v"
+    return
+  fi
+  if [[ $1 == nvme* ]] && v=$(read_id "$d/device/serial"); then
+    printf 'nvme:%s\n' "$v"
+    return
+  fi
+  # The USB device above the disk: the nearest ancestor with idVendor, inside sysfs.
+  root=$(readlink -f "$sysfs" 2>/dev/null || true)
+  p=$(readlink -f "$d/device" 2>/dev/null || true)
+  while [[ -n $root && $p == "$root"/* && ! -r $p/idVendor ]]; do p=${p%/*}; done
+  if [[ -n $root && $p == "$root"/* ]] && vid=$(read_id "$p/idVendor") &&
+    pid=$(read_id "$p/idProduct") && v=$(read_id "$p/serial"); then
+    printf 'usb:%s:%s:%s\n' "$vid" "$pid" "$v"
+    return
+  fi
+  # Ruling 1: a USB disk with no serial (or with no id we know) binds to the board only.
+  printf 'board:\n'
+}
+
+derive() {
+  local id out
+  id=$(card_id "$1") || return 1
+  out=$(printf '%s\0%s' "$label" "$id" | hmac 2>/dev/null) || return 1
+  [[ $out =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s' "$out"
+}
+
+# Ruling 4: the per-operation lock needs newer firmware; `unavailable` is expected today and
+# never an error. SIGN stays unlocked for Raspberry Pi Connect. HMAC_LOCKED is bit 11.
+lock() {
+  local st hex
+  if [[ -e $vcio ]] &&
+    "$fw" set-key-status 1 READ_LOCKED GEN_LOCKED HMAC_LOCKED USAGE_LOCKED >/dev/null 2>&1 &&
+    st=$("$fw" get-key-status 1 2>/dev/null); then
+    hex=$(printf '%s\n' "$st" | sed -n 's/^Key 1 status: 0x\([0-9a-fA-F]\{1,8\}\).*/\1/p' | head -1)
+    if [[ -n $hex ]] && ((16#$hex & 0x800)); then
+      echo locked
+      return 0
+    fi
+  fi
+  echo unavailable
+  return 0
+}
+
+usage() {
+  echo "usage: fwkey probe|ensure|lock|card-id DISK|derive DISK" >&2
+  exit 2
+}
+
+cmd=${1:-}
+case $cmd in
+  probe | ensure | lock) (($# == 1)) || usage ;;
+  card-id | derive) (($# == 2)) || usage ;;
+  *) usage ;;
+esac
+case $cmd in
+  card-id) card_id "$2" ;;
+  *) "$cmd" "${@:2}" ;;
+esac
