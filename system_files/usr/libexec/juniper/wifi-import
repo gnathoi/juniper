@@ -6,6 +6,7 @@ juniper-firstboot shreds network-config afterwards. Safe to re-run.
 """
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,28 @@ CIDATA_DIR = os.environ.get("JUNIPER_CIDATA_DIR")
 NM_DIR = os.environ.get("JUNIPER_NM_DIR", "/etc/NetworkManager/system-connections")
 MODPROBE_DIR = os.environ.get("JUNIPER_MODPROBE_DIR", "/etc/modprobe.d")
 CIDATA_DEVICE_CMD = os.environ.get("JUNIPER_CIDATA_DEVICE", "/usr/libexec/juniper/cidata-device")
+
+
+# Both go into files unescaped (the keyfile's interface-name, a root-owned modprobe config),
+# and the CIDATA may be hand-made: only well-formed values get through.
+IFACE_RE = re.compile(r"[A-Za-z0-9_.-]{1,15}")  # a Linux interface name (IFNAMSIZ - 1)
+REGDOM_RE = re.compile(r"[A-Z]{2}")  # ISO 3166-1 alpha-2
+
+
+def log(msg):
+    print(f"wifi-import: {msg}", file=sys.stderr)
+
+
+def valid_iface(name):
+    return isinstance(name, str) and IFACE_RE.fullmatch(name) and name not in (".", "..")
+
+
+def regulatory_domain(value):
+    code = value.upper() if isinstance(value, str) else ""
+    if REGDOM_RE.fullmatch(code):
+        return code
+    log(f"ignoring invalid regulatory-domain {value!r} (expected a two-letter country code)")
+    return None
 
 
 def kf_escape(value):
@@ -83,7 +106,11 @@ def import_from(cidata_dir):
     for iface, conf in wifis.items():
         if not isinstance(conf, dict):  # e.g. Imager's `renderer: networkd`
             continue
-        regdom = conf.get("regulatory-domain", regdom)
+        if not valid_iface(iface):
+            log(f"skipping Wi-Fi interface with an invalid name: {iface!r}")
+            continue
+        if conf.get("regulatory-domain") is not None:
+            regdom = regulatory_domain(conf["regulatory-domain"]) or regdom
         for ssid, ap in (conf.get("access-points") or {}).items():
             n += 1
             os.makedirs(NM_DIR, exist_ok=True)

@@ -71,7 +71,20 @@ def load(path):
         unknown = set(wifi) - WIFI_KEYS
         if unknown:
             fail(f"wifi: unknown keys: {', '.join(sorted(unknown))}")
+        if wifi.get("country") is not None:
+            wifi = dict(wifi, country=country_code(wifi["country"]))
     return host, user, [str(k) for k in keys], cfg.get("timezone"), ts, wifi, pw_hash
+
+
+def country_code(value):
+    """The Wi-Fi regulatory domain: an ISO 3166-1 alpha-2 code. The image writes it into a
+    root-owned modprobe config, so nothing else may get through."""
+    if isinstance(value, bool):  # YAML 1.1: unquoted NO (Norway) is false, ON is true
+        fail('wifi: country: quote the code, e.g. country: "NO" (YAML reads NO as false)')
+    code = str(value).upper() if isinstance(value, str) else None
+    if code is None or not re.fullmatch(r"[A-Z]{2}", code):
+        fail(f"wifi: country must be a two-letter ISO 3166-1 code such as GB, got {value!r}")
+    return code
 
 
 def write_private(path, data):
@@ -121,7 +134,7 @@ def main():
         ap = {"password": str(wifi["password"])} if wifi.get("password") is not None else {}
         wlan = {"dhcp4": True, "optional": True}
         if wifi.get("country"):
-            wlan["regulatory-domain"] = str(wifi["country"])
+            wlan["regulatory-domain"] = wifi["country"]
         wlan["access-points"] = {str(wifi["ssid"]): ap}
         write_private(nc_path, dump({"network": {"version": 2, "wifis": {"wlan0": wlan}}}))
     elif os.path.exists(nc_path):

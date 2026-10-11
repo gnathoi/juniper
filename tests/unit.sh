@@ -683,6 +683,41 @@ test_wifi_import_rerun_replaces() {
   check "wifi rerun: one keyfile" test "$(find "$JUNIPER_NM_DIR" -type f | wc -l)" = 1
 }
 
+# A regulatory domain lands in a root-owned modprobe config: a newline there would add an
+# `install` directive (a command run at the next module load). The cidata can be hand-made.
+test_wifi_import_rejects_bad_regdom() {
+  wifi_env
+  printf 'version: 2\nwifis:\n  wlan0:\n    regulatory-domain: "GB\\ninstall cfg80211 /bin/sh -c id"\n    access-points:\n      a:\n        password: "12345678"\n' \
+    >"$JUNIPER_CIDATA_DIR/network-config"
+  check "wifi: newline regdom -> no modprobe file" stderr_has "regulatory-domain" "$LIBEXEC/wifi-import"
+  check "wifi: newline regdom not written" test ! -e "$JUNIPER_MODPROBE_DIR/juniper-wifi-regdom.conf"
+  check "wifi: network still imported" test -f "$(nm_file 1)"
+  local bad
+  for bad in '"G\x01"' 'GBR' '"0B"' '""'; do
+    rm -rf "$JUNIPER_MODPROBE_DIR"
+    printf 'version: 2\nwifis:\n  wlan0:\n    regulatory-domain: %s\n    access-points:\n      a: {}\n' "$bad" \
+      >"$JUNIPER_CIDATA_DIR/network-config"
+    "$LIBEXEC/wifi-import" >/dev/null 2>&1
+    check "wifi: regdom $bad not written" test ! -e "$JUNIPER_MODPROBE_DIR/juniper-wifi-regdom.conf"
+  done
+  printf 'version: 2\nwifis:\n  wlan0:\n    regulatory-domain: "de"\n    access-points:\n      a: {}\n' \
+    >"$JUNIPER_CIDATA_DIR/network-config"
+  "$LIBEXEC/wifi-import" >/dev/null
+  check "wifi: lowercase regdom uppercased" grep -qx 'options cfg80211 ieee80211_regdom=DE' \
+    "$JUNIPER_MODPROBE_DIR/juniper-wifi-regdom.conf"
+}
+
+# The interface name is written into the keyfile unescaped: only real Linux names pass.
+test_wifi_import_rejects_bad_interface() {
+  wifi_env
+  printf 'version: 2\nwifis:\n  "wlan0\\n[ipv4]\\nmethod=manual":\n    access-points:\n      a: {}\n  wlan0123456789abc:\n    access-points:\n      b: {}\n  "..":\n    access-points:\n      c: {}\n  wlan1:\n    access-points:\n      d: {}\n' \
+    >"$JUNIPER_CIDATA_DIR/network-config"
+  check "wifi: bad interface logged" stderr_has "interface" "$LIBEXEC/wifi-import"
+  check "wifi: only the valid interface imported" test "$(find "$JUNIPER_NM_DIR" -type f | wc -l)" = 1
+  check "wifi: valid interface kept" test "$(kf "$(nm_file 1)" connection interface-name)" = wlan1
+  check "wifi: no injected section" not_grep_dir 'method=manual' "$JUNIPER_NM_DIR"
+}
+
 # fails CMD...: CMD exits non-zero (stderr hidden). stderr_has PATTERN CMD...: CMD's stderr matches.
 fails() { ! "$@" 2>/dev/null; }
 stderr_has() { { "${@:2}" 2>&1 >/dev/null || true; } | grep -q -- "$1"; }
@@ -734,6 +769,29 @@ test_render_cidata_network_config() {
   # The same importer path the image uses must accept it.
   JUNIPER_CIDATA_DIR=$T/out JUNIPER_NM_DIR=$T/nm JUNIPER_MODPROBE_DIR=$T/mp "$LIBEXEC/wifi-import" >/dev/null
   check "cidata: image imports it" grep -q '^id=My "Home" Network: 5G$' "$T/nm/juniper-wifi-1.nmconnection"
+}
+
+# wifi.country ends up in a root-owned modprobe config on the device: two letters only.
+test_render_cidata_wifi_country() {
+  local base='user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\nwifi:\n  ssid: home\n  country: %s\n'
+  # shellcheck disable=SC2059 # base is the format
+  printf "$base" gb >"$T/lower.yaml"
+  "$ROOT/disk/render-cidata" "$T/lower.yaml" "$T/o1" 2>/dev/null
+  check "cidata: lowercase country uppercased" \
+    test "$(yget "$T/o1/network-config" 'd["network"]["wifis"]["wlan0"]["regulatory-domain"]')" = GB
+  local c i=0
+  for c in '"GB\ninstall cfg80211 /bin/sh"' '"G\x01"' '"G\tB"' GBR '"G"' '"12"' 44; do
+    i=$((i + 1))
+    # shellcheck disable=SC2059 # base is the format
+    printf "$base" "$c" >"$T/bad$i.yaml"
+    check "cidata: country $c refused" stderr_has "wifi: country" \
+      "$ROOT/disk/render-cidata" "$T/bad$i.yaml" "$T/out$i"
+    check "cidata: country $c -> no network-config" test ! -e "$T/out$i/network-config"
+  done
+  # YAML 1.1 reads an unquoted NO (Norway) as false: say so instead of dropping it.
+  # shellcheck disable=SC2059 # base is the format
+  printf "$base" NO >"$T/no.yaml"
+  check "cidata: unquoted NO explained" stderr_has "quote" "$ROOT/disk/render-cidata" "$T/no.yaml" "$T/ono"
 }
 
 test_render_cidata_minimal_config() {

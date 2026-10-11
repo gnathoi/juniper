@@ -25,6 +25,12 @@ Unreleased as its release notes, then moves those entries under the release's ta
   that accounts can have a password.
 - The health check names a failing image health hook and stops a hung one after 60 seconds.
 
+### Fixed
+
+- `wifi.country` must be a two-letter country code: `just flash` refuses anything else, and
+  the image ignores (and logs) a malformed Wi-Fi regulatory domain or interface name in
+  CIDATA instead of writing it into system configuration.
+
 ## build-20261010 (2026-10-10)
 
 ### Removed
