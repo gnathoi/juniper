@@ -133,6 +133,7 @@ read -r st </proc/$$/stat
 read -r _ _ pg _ <<<"${st##*) }"
 [[ $pg != "$TEST_PGID" ]] || { echo "hook: refusing to kill the test's own group" >&2; exit 1; }
 killgroup() {
+  echo "$pg" >"$KILL_DONE.pg"
   printf '%s %s\n' "$1" "$name $2" >"$KILL_DONE"
   kill -9 -- "-$pg"
   sleep 10
@@ -176,11 +177,20 @@ attach() {
   local i
   LOOP=$(losetup -fP --show "$W/disk.img")
   P3=${LOOP}p3
-  for ((i = 0; i < 50; i++)); do
-    [[ -b ${LOOP}p1 && -b $P3 ]] && return 0
+  for ((i = 0; i < 100; i++)); do
+    node_ready "${LOOP}p1" && node_ready "$P3" && return 0
     sleep 0.1
   done
   die "no partitions on $LOOP"
+}
+# node_ready DEV: the kernel has the partition and the /dev node is its current one (after a
+# detach the old node can linger a moment, and a mount through it fails "Can't lookup blockdev").
+node_ready() {
+  local sys=/sys/class/block/${1##*/}/dev want maj min
+  [[ -r $sys && -b $1 ]] || return 1
+  want=$(<"$sys") || return 1
+  read -r maj min < <(stat -c '%t %T' "$1") || return 1
+  [[ $want == "$((16#$maj)):$((16#$min))" ]]
 }
 # detach: close and unmount whatever uses the disk, then drop the loop device.
 detach() {
@@ -202,14 +212,41 @@ detach() {
     sleep 0.1
   done
   [[ -z $(losetup -j "$W/disk.img") ]] || die "$LOOP is still attached (held by: $(ls /sys/block/"${LOOP##*/}"/holders 2>/dev/null))"
+  for ((i = 0; i < 50; i++)); do
+    compgen -G "/sys/class/block/${LOOP##*/}p*" >/dev/null || compgen -G "${LOOP}p*" >/dev/null || break
+    sleep 0.1
+  done
   LOOP=
   P3=
 }
 # reboot: a power cycle as far as cryptroot can tell (the disk's writes all survive, though).
 reboot() {
+  group_gone
   detach
   rm -rf "$W/run"
   attach
+}
+
+# group_alive PGID: a member of the process group is still running (zombies hold nothing).
+group_alive() {
+  local f st state g
+  for f in /proc/[0-9]*/stat; do
+    st=$(cat "$f" 2>/dev/null) || continue
+    read -r state _ g _ <<<"${st##*) }"
+    [[ $g == "$1" && $state != Z ]] && return 0
+  done
+  return 1
+}
+# group_gone: wait until the SIGKILLed process group has fully exited.
+group_gone() {
+  local pg i
+  [[ -r $KILL_DONE.pg ]] || return 0
+  pg=$(<"$KILL_DONE.pg")
+  for ((i = 0; i < 100; i++)); do
+    group_alive "$pg" || return 0
+    sleep 0.1
+  done
+  echo "     process group $pg still running 10 s after the kill" >&2
 }
 
 # The plaintext disk, made once: GPT written on GPT_SIZE then the file grown to DISK_SIZE
@@ -246,14 +283,14 @@ fresh() {
   rm -rf "$W/run"
   cp --sparse=always "$W/template.img" "$W/disk.img"
   attach
-  mount -t vfat "${LOOP}p1" "$W/c"
+  c_mount
   [[ $1 == - ]] || echo "$1" >"$W/c/juniper-encrypt"
   case $2 in
     ed25519) cp "$W/id_ed25519.pub" "$W/c/juniper-recovery.txt" ;;
     ecdsa) cp "$W/id_ecdsa.pub" "$W/c/juniper-recovery.txt" ;;
     none) ;;
   esac
-  umount "$W/c"
+  c_umount
   : >"$W/hook.log"
   : >"$W/fwkey.log"
   P3_SIZE0=$(blockdev --getsz "$P3")
@@ -281,17 +318,43 @@ cr() {
   fi
 }
 
-# cidata FILE: a file from CIDATA (empty if missing).
+# c_mount [OPT]: CIDATA at $W/c, retried with a short backoff; c_umount likewise.
+c_mount() {
+  local i
+  for ((i = 1; i <= 10; i++)); do
+    mount ${1:+-o "$1"} -t vfat "${LOOP}p1" "$W/c" 2>"$W/mount.err" && return 0
+    sleep "0.$i"
+  done
+  echo "     could not mount CIDATA ${LOOP}p1: $(cat "$W/mount.err")" >&2
+  return 1
+}
+c_umount() {
+  local i
+  for ((i = 1; i <= 10; i++)); do
+    umount "$W/c" 2>/dev/null && return 0
+    sleep "0.$i"
+  done
+  echo "     CIDATA busy; detaching it lazily" >&2
+  umount -l "$W/c"
+}
+# cidata FILE: a file from CIDATA. Says so, loudly, when it can't be read.
 cidata() {
-  mount -o ro -t vfat "${LOOP}p1" "$W/c"
-  cat "$W/c/$1" 2>/dev/null || true
-  umount "$W/c"
+  if ! c_mount ro; then
+    echo "<CIDATA unreadable: mount failed>"
+    return 0
+  fi
+  if [[ -e $W/c/$1 ]]; then
+    cat "$W/c/$1" || echo "<CIDATA unreadable: $1>"
+  else
+    echo "<no $1 on CIDATA>"
+  fi
+  c_umount
 }
 cidata_has() {
   local r=1
-  mount -o ro -t vfat "${LOOP}p1" "$W/c"
+  c_mount ro || die "cannot read CIDATA"
   [[ -e $W/c/$1 ]] && r=0
-  umount "$W/c"
+  c_umount
   return "$r"
 }
 header_sum() { head -c 16M "$P3" | sha256sum; }
@@ -312,10 +375,10 @@ no_leak() { # STRING PATH...: not in any file
 }
 recovery_from_cidata() {
   local r=0
-  mount -o ro -t vfat "${LOOP}p1" "$W/c"
+  c_mount ro || return 1
   age -d -i "$W/id_ed25519" "$W/c/juniper-recovery.age" |
     cryptsetup open --test-passphrase --key-file - "$P3" || r=1
-  umount "$W/c"
+  c_umount
   return "$r"
 }
 recovery_from_token() {
@@ -412,8 +475,8 @@ s_happy() {
 
   local r h
   r=$(
-    mount -o ro -t vfat "${LOOP}p1" "$W/c" && age -d -i "$W/id_ed25519" "$W/c/juniper-recovery.age"
-    umount "$W/c"
+    c_mount ro && age -d -i "$W/id_ed25519" "$W/c/juniper-recovery.age"
+    c_umount
   )
   check "recovery key is 64 hex" is_hex64 "$r"
   check "board key not on the disk image" no_leak "$KEY" "$W/disk.img"
