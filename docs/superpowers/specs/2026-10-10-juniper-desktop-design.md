@@ -1,7 +1,7 @@
 # Juniper Desktop — design (sub-project D)
 
-Status: decisions taken by the owner on 2026-10-10 (see "Owner decisions"); awaiting review
-of this written spec before the implementation plan. A build spike (draft PR #40, branch
+Status: decisions taken by the owner on 2026-10-10, revised on 2026-10-11 (login prompt
+first, sudo asks for the password, published as experimental; see "Owner decisions"). A build spike (draft PR #40, branch
 `spike/juniper-desktop`) backs the package and build claims below; nothing here has run on
 hardware yet.
 
@@ -16,8 +16,8 @@ updates, tryboot fallback) stays as it is.
 Success looks like:
 
 1. Flash `juniper-desktop` with `just flash` (which asks for a password), plug in a screen,
-   and the first boot ends at a graphical lock screen; unlock with that password, and Firefox
-   and the Bazaar app store are there. Or `ujust switch ghcr.io/gnathoi/juniper-desktop:latest`
+   and the first boot ends at a login prompt; log in with that password, niri starts, and
+   Firefox and the Bazaar app store are there. Or `ujust switch ghcr.io/gnathoi/juniper-desktop:latest`
    from `juniper`, which asks you to set a password first if you have none.
 2. The update and rollback story is unchanged: a desktop update that breaks the boot falls
    back like any other.
@@ -40,8 +40,8 @@ Success looks like:
 | Image | `ghcr.io/gnathoi/juniper-desktop`, `IMAGE_ID`/`VARIANT_ID` `juniper-desktop`, `PRETTY_NAME` "Juniper Desktop …"; signed by the same key, covered by the existing namespace policy |
 | Hardware | Pi 5 first (the owner's 4 GB board); Pi 4 best-effort |
 | Compositor | niri, `niri-session` (systemd user units shipped by the package) |
-| Session start | greetd auto-starts niri for uid 1000 and niri locks the screen with swaylock before anything else: the first thing on screen, every boot, is a lock screen |
-| Password | **Required** for `juniper-desktop`: `just flash` prompts for it; `ujust switch` to the desktop asks you to set one first |
+| Session start | greetd shows its text login (agreety); niri starts only after PAM accepts the password. No auto-login (owner decision 2026-10-11; a graphical greeter later) |
+| Password | **Required** for `juniper-desktop`: `just flash` prompts for it; `ujust switch` to the desktop asks you to set one first (for uid 1000). With a password set at flash time, `sudo` asks for it |
 | Bar, launcher, terminal, notifications, lock | waybar, fuzzel, foot, SwayNotificationCenter, swaylock + swayidle (lock on idle) |
 | Apps | Flatpak with Flathub; **Firefox** (`org.mozilla.firefox`) and the **Bazaar** app store (`io.github.kolunmi.Bazaar`) installed from Flathub on first boot; Flatpaks updated daily |
 | X11 apps | xwayland-satellite (niri starts it on demand) |
@@ -51,7 +51,7 @@ Success looks like:
 | Reboot window | Kept, but deferred while someone is using the desktop, at most 7 days (below) |
 | Health check | Under tryboot, the desktop image also requires `greetd.service` active (a `health.d/` hook) |
 | COPRs | Option 1 below: pinned keys, `includepkgs` fences, exact versions from a lock file, `just bump-desktop` |
-| Distribution | Built in CI from the start; **published** (signed image, disk image, OS list entry) only after the hardware test plan passes on the owner's Pi 5 |
+| Distribution | Built in CI in its own job chain; **published as experimental** (signed image, disk image, release assets; not in `os-list.json`) when its own build and tests pass. Untested on hardware until the owner's Pi 5 run (owner decision 2026-10-11) |
 
 ## Package sources and trust
 
@@ -109,33 +109,32 @@ default unless hardware testing shows otherwise.
 
 ## Session
 
-- **Lock screen first.** greetd (`display-manager.service`) starts `niri-session` for the
-  uid-1000 user as its `initial_session`; Juniper's niri defaults make `swaylock` the first
-  `spawn-at-startup`, so the session locks before the bar, apps or anything else starts.
-  niri implements `ext-session-lock`: if swaylock dies, the screen stays locked (it does not
-  unlock). After logout, greetd falls back to `agreety` (text). The auto-start user only
-  exists on the device, so a `greetd.service` drop-in runs
-  `/usr/libexec/juniper/greetd-config` as `ExecStartPre`, writing `/run/juniper/greetd.toml`
-  (no uid 1000 → no auto-start, agreety only). `/etc/greetd/config.toml` stays the package
-  default; a tmpfiles line creates `/var/lib/greetd`.
-- **Why auto-start + lock rather than a greeter:** the only greeter in EL10 and these COPRs
-  is agreety (text); a graphical one would mean GDM/SDDM (heavy) or packaging one. Auto-start
-  + immediate lock gives a graphical login with the same password via PAM. To check on
-  hardware: that nothing of the desktop is visible before swaylock takes the screen (niri can
-  hold the first frame until the lock surface is up).
-- **Lock on idle** (swayidle, 10 min) is on by default, since a password always exists.
+- **Login prompt first** (owner decision 2026-10-11, replacing auto-login + lock-first).
+  greetd (`display-manager.service`) runs its text greeter, agreety, on tty1:
+  `/etc/greetd/config.toml` (Juniper's, replacing the package default) has only a
+  `default_session` of `agreety --cmd niri-session` as the `greetd` user, and no
+  `initial_session`. niri starts only after PAM accepts the password, so no session exists
+  before authentication; after logout, agreety asks again. A tmpfiles line creates
+  `/var/lib/greetd`.
+- **Why not auto-start + lock:** reviews found it fails open: the session exists before
+  swaylock maps its surface (a HID device can type into it), a personal niri config without
+  Juniper's include skips the lock, and swaylock failing to start leaves the session
+  unlocked. The only greeter in EL10 and these COPRs is agreety; a graphical greeter
+  (packaging one, or GDM/SDDM) comes later.
+- **Lock on idle** (swayidle, 10 min) is on by default (`ujust desktop-lock-idle on|off`);
+  everyone who logs in has a password. swayidle also sets logind's idle hint after 30 min,
+  which the reboot window uses.
 - **niri config.** niri reads `~/.config/niri/config.kdl`, else `/etc/niri/config.kdl`,
   else its built-in default. Juniper ships its defaults read-only at
-  `/usr/share/juniper/niri/juniper.kdl` (swaylock first, keybinds, waybar/swaync/
+  `/usr/share/juniper/niri/juniper.kdl` (keybinds, waybar/swaync/idle-lock/
   xwayland-satellite spawn, Juniper wallpaper). A first-login user unit (like
   `juniper-brew-tools`) creates `~/.config/niri/config.kdl` only if missing, containing
   `include "/usr/share/juniper/niri/juniper.kdl"` followed by a commented "your overrides
   below" section: image updates still change the defaults, user changes win. Needs niri's
-  `include` (25.11+) and later-wins merging, to be confirmed on hardware. The lock-first
-  spawn must survive user overrides (keep it in the included file; document it).
-- **Keyring.** gnome-keyring with the PAM lines the greetd package already has; unlocking
-  swaylock doesn't unlock the keyring, so the first app that needs secrets asks once.
-  Acceptable for v1; revisit (pam_gnome_keyring on swaylock's PAM stack) after testing.
+  `include` (25.11+) and later-wins merging, to be confirmed on hardware. Security doesn't
+  depend on the user's config: authentication happens at greetd, before niri starts.
+- **Keyring.** gnome-keyring with the PAM lines the greetd package already has
+  (`pam_gnome_keyring`), so logging in at agreety should unlock it; check on hardware.
 - **Waybar** gets a small Juniper module: Tailscale state and "update staged, reboot
   Tue 04:00" (reusing the MOTD's helpers).
 
@@ -145,9 +144,11 @@ default unless hardware testing shows otherwise.
   (`/etc/flatpak/remotes.d/flathub.flatpakrepo`, which carries Flathub's GPG key). Flatpaks
   live under `/var/lib/flatpak`, outside the image: they survive OS updates and are not
   rolled back with them.
-- `juniper-flatpak-setup.service` (system, first boot, `After=network-online.target`,
-  marked done only on success, retried on the next boot) installs `org.mozilla.firefox` and
-  `io.github.kolunmi.Bazaar` system-wide. Both publish aarch64 builds (Flathub, checked
+- `juniper-flatpak-setup.service` (system, `After=network-online.target`, marked done only
+  on success) installs `org.mozilla.firefox` and `io.github.kolunmi.Bazaar` system-wide. Its
+  timer starts it 3 minutes after boot, outside the boot transaction, so a slow download never
+  holds up `multi-user.target` (cloud-final and the first-boot secret scrub wait for that);
+  it retries every 30 minutes on failure, and on the next boot, until done. Both publish aarch64 builds (Flathub, checked
   2026-10-10). First boot downloads their runtimes (several hundred MB), so the apps appear
   a few minutes after the desktop on a slow link; a swaync notification says when they're
   ready.
@@ -166,11 +167,18 @@ default unless hardware testing shows otherwise.
   (`password: prompt` in the config asks for one). The hash lives on CIDATA only until the
   first-boot scrub, like the other secrets. `render-cidata` refuses a plain-text password in
   the config.
-- **`ujust switch IMAGE`**: if `IMAGE` is `juniper-desktop` and the user has no usable
-  password (`passwd -S` reports locked or none), it explains why, runs `passwd`, and only then
-  switches. Switching to the headless images is unchanged.
-- SSH stays key-only (`PasswordAuthentication no` is the base default); the password is for
-  the local lock screen and `sudo` prompts on the desktop.
+- **`ujust switch IMAGE`**: if `IMAGE` is `juniper-desktop` and the first human user (uid
+  1000, the account that logs in at the screen) has no usable password (`passwd -S` reports
+  locked or none), it explains why, runs `passwd` for that user, and only then switches. This
+  holds whoever runs it, root included; with no uid-1000 user it refuses. Switching to the
+  headless images is unchanged.
+- **sudo** (owner decision 2026-10-11): when `just flash` writes a password hash,
+  `render-cidata` gives the user `ALL=(ALL) ALL`, so sudo asks for the password; key-only
+  accounts keep `NOPASSWD:ALL`. Devices that switched from `juniper` keep their flashed rule.
+- SSH is key-only on every image: `/etc/ssh/sshd_config.d/40-juniper.conf` sets
+  `PasswordAuthentication no` and `KbdInteractiveAuthentication no`, before cloud-init's
+  `50-cloud-init.conf` (sshd keeps the first value). The password is for the local login and
+  `sudo`.
 
 ## Interaction with the headless machinery
 
@@ -179,7 +187,7 @@ default unless hardware testing shows otherwise.
 | Lockdown (`drop` zone + tailscale0 trusted) | Unchanged; the desktop opens no ports |
 | Health check | Under tryboot, also require `greetd.service` active (desktop-only `health.d/` hook; the headless images ship no hook) |
 | Daily stage (`juniper-update`) | Unchanged |
-| Weekly reboot window | Desktop-only drop-in adds `ExecCondition=/usr/libexec/juniper/desktop-idle` to `juniper-reboot.service`: skip the reboot while a seat0 session is active and not idle (logind `IdleHint`, set by swayidle after 30 min) unless the update has been staged for 7 days. A skipped reboot shows a swaync notification ("update ready, reboot when convenient"). The headless images don't ship the drop-in |
+| Weekly reboot window | Desktop-only drop-in adds `ExecCondition=/usr/libexec/juniper/desktop-idle` to `juniper-reboot.service`: skip the reboot while a seat0 session is active and not idle (logind `IdleHint`, set by swayidle after 30 min) unless the update has been staged for 7 days. A deferral shows a swaync notification ("update ready", with the deadline) when it starts and at most once a day after. An hourly timer retries a deferred reboot once the desktop is idle, only while automatic reboots are on (`ujust update-schedule off` stops it too). The headless images don't ship either |
 | `ujust update` | Unchanged (explicit, reboots now) |
 | MOTD/fastfetch | Unchanged (SSH logins and foot) |
 
@@ -205,18 +213,19 @@ default unless hardware testing shows otherwise.
 - Updates: rechunking gives the new RPMs their own layers, so the weekly delta is still
   "what changed"; the desktop adds AppStream errata for Mesa/GTK/PipeWire, which change more
   often than the headless set. CI's update-size report covers it once it publishes.
-- CI: a third entry in the build matrix (~6.5 min arm64). Until the Pi 5 hardware test
-  passes, the image is built and smoke-tested only (the spike's publish guard stays). Then
-  it joins the `sign`, `disk` and `release` matrices: a signed image, a
-  `juniper-desktop-*.raw.xz` disk image (~1.3 GB compressed) and an `os-list.json` entry, so
-  people can flash the desktop directly. `just flash` handles `image: juniper-desktop`.
+- CI: its own job chain (`build-desktop` → `sign-desktop` → `disk-desktop`, ~6.5 min arm64
+  build), with the same steps as the headless jobs, so a desktop failure never blocks the
+  headless images' signing, disk images or release. Owner decision 2026-10-11: published now
+  as experimental, when its own build and tests pass: a signed image and a
+  `juniper-desktop-*.raw.xz` disk image (~1.3 GB compressed) in the release, but no
+  `os-list.json` entry. `just flash` handles `image: juniper-desktop`.
 - First boot of the desktop also downloads the Flatpak runtimes for Firefox and Bazaar
   (several hundred MB, not part of the image or its updates).
 - `tests/image.sh` treats `juniper-desktop` as `juniper` plus: desktop binaries present,
   greetd enabled, `graphical.target`, overlay line in every per-kernel `rpi-config.txt`,
-  vc4/v3d DRI drivers and modules present, no COPR repo files left, greetd config
-  generation. The headless images gain negative checks: no niri, no KMS overlay,
-  `display_auto_detect=0`, not `graphical.target`.
+  vc4/v3d DRI drivers and modules present, no COPR repo files left, greetd's config (agreety
+  starts niri-session; no `initial_session`). The headless images gain negative checks: no
+  niri, no KMS overlay, `display_auto_detect=0`, not `graphical.target`.
 
 ## Shared hooks this needs (no behaviour change for the headless images)
 
@@ -246,30 +255,31 @@ The PR that ships `juniper-desktop` must, in that same PR:
 3. Add `juniper-desktop` to the image dropdown of
    `.github/ISSUE_TEMPLATE/hardware-report.yml`.
 4. Pass CI: `bootc container lint --fatal-warnings`, `tests/image.sh` for all three images
-   (including the headless images' new negative checks), `tests/unit.sh` with a test for
-   `greetd-config` and `desktop-idle`.
+   (including the headless images' new negative checks), `tests/unit.sh` with tests for
+   the greetd config and `desktop-idle`.
 5. `just flash` password support (required for `juniper-desktop`, prompted, hashed) and
    the `ujust switch` password check, with unit tests (`render-cidata` hash handling and
    plain-text refusal; the switch check against a stubbed `passwd -S`).
-6. Flatpak: Flathub remote, `juniper-flatpak-setup.service`, the update timer, and image
+6. Flatpak: Flathub remote, `juniper-flatpak-setup.service` and its timer, the update timer, and image
    tests (remote present, units enabled); the install itself is checked on hardware.
 7. CHANGELOG entry under Unreleased (Added: experimental `juniper-desktop`).
-8. A second, later PR (after the hardware run) flips publishing on: `sign`/`disk`/`release`
-   matrices, the os-list entry, and the Tested-hardware cell.
+8. Publishing as experimental (owner decision 2026-10-11, in this PR): signed image, disk
+   image and release assets; no os-list entry. After the hardware run: the Tested-hardware
+   cell (and, if wanted, the os-list entry).
 
 ## Hardware test plan (owner's Pi 5, micro-HDMI; then Pi 4)
 
 1. `just flash` `juniper-desktop` (built locally or from a branch build) with a password:
-   first boot shows the lock screen on HDMI; nothing of the desktop is visible before it;
-   unlock with the password works; Firefox and Bazaar appear once online; a Flatpak installs
+   first boot shows greetd's login prompt on HDMI; logging in with the password starts niri; Firefox and Bazaar appear once online; a Flatpak installs
    from Bazaar.
 2. GPU: `glxinfo -B` / `vulkaninfo --summary` show V3D, not llvmpipe; Firefox video plays.
 3. `ujust switch` from `juniper` without a password: the recipe makes you set one, then
-   switches; boots via tryboot, healthy, lock screen first.
+   switches; boots via tryboot, healthy, login prompt first.
 4. Dual monitors (both micro-HDMI), hot-plug; audio over HDMI (PipeWire picks the vc4-hdmi
    sink); USB headset.
 5. Xwayland app via xwayland-satellite; screencast via the GNOME portal; file chooser.
-6. Lock on idle; logout → agreety; SELinux: no AVCs from greetd/xdm_t (`ausearch -m avc`).
+6. Lock on idle; logout → agreety; SELinux: no AVCs from greetd/xdm_t (`ausearch -m avc`);
+   `sshd -T` shows `passwordauthentication no`; sudo asks for the password.
 7. Lockdown still applies; `ujust update` and a deliberately broken desktop update fall back;
    killing greetd under tryboot fails the health check.
 8. Reboot window: active session defers, idle session reboots, 7-day cap reboots.
@@ -295,15 +305,15 @@ The PR that ships `juniper-desktop` must, in that same PR:
 
 1. **COPR availability and trust** (above). COPR also prunes old builds, which breaks an
    exact-NEVRA lock until bumped.
-2. **SELinux**: greetd-selinux is a third-party policy module; greetd reading a config from
-   `/run/juniper` and starting a user session may need tweaks.
+2. **SELinux**: greetd-selinux is a third-party policy module; starting a user session from
+   agreety may need tweaks.
 3. **GPU**: Mesa from RHEL is tuned for servers/VMs; v3d works but is untested here at
    desktop scale. 4 GB Pis may swap (zram helps).
 4. **Pi 4 firmware**: the FAT partition's `start4.elf` is never updated after flashing
    (known follow-up); KMS mostly bypasses it, but a firmware/kernel mismatch is possible.
-5. **A user without a password** would be locked out by the lock screen. Prevented at both
-   entry points (`just flash` requires one; `ujust switch` asks for one); a desktop installed
-   some other way without a password would need SSH (key) access to run `passwd`.
+5. **A user without a password** can't log in at the screen. Prevented at both entry points
+   (`just flash` requires one; `ujust switch` asks for one); a desktop installed some other
+   way without a password needs SSH (key) access to run `passwd`.
 6. **Scope creep**: every "small" desktop app request pulls GTK/Qt stacks into the image.
    Rule: apps come from Flatpak (Flathub), Homebrew, distrobox or quadlets, not the image.
 7. **Flathub dependency**: first-boot apps need Flathub reachable; Flatpaks don't roll back
@@ -314,16 +324,29 @@ The PR that ships `juniper-desktop` must, in that same PR:
 1. COPRs: option 1 (pin, fence, lock file).
 2. Reboot window: defer while the desktop is in use, 7-day cap.
 3. Password required; lock screen first on every boot (auto-start + immediate swaylock).
+   Superseded on 2026-10-11 (decision 8).
 4. Browser: Firefox from Flathub, with the Bazaar store and Flathub set up (not Firefox ESR in
    the image).
 5. Health check: a dead greetd fails a tryboot on the desktop image.
 6. Built in CI now; published, including a disk image, only after it works on the owner's
-   Pi 5.
+   Pi 5. Superseded on 2026-10-11 (decision 10).
 7. `just flash` sets the password; `ujust switch` to the desktop requires one.
+
+## Owner decisions (2026-10-11), after the whole-branch reviews
+
+8. Boots to a login prompt; niri after authentication; graphical greeter later. No
+   auto-login, no lock-first.
+9. With a password set at flash time, sudo asks for it (`ALL=(ALL) ALL`); key-only accounts
+   keep NOPASSWD.
+10. Publish `juniper-desktop` now as experimental: signed image, disk image and release
+    assets, not `os-list.json`; only when its own build and tests pass, and never blocking
+    the headless images. Untested on hardware until the Pi 5 run.
+11. Key-only SSH, explicitly, on all images (`sshd_config.d/40-juniper.conf`).
 
 ## Still to confirm on hardware
 
-- Nothing of the desktop is visible before swaylock locks the session.
-- greetd's third-party SELinux policy accepts the generated config under `/run/juniper`.
-- niri's `include` + later-wins merging lets user overrides win without dropping the lock.
+- agreety starts `niri-session` after login, and logind registers it as a `wayland` session
+  on seat0 (the reboot window's in-use check needs that).
+- greetd's third-party SELinux policy lets agreety start the session.
+- niri's `include` + later-wins merging lets user overrides win.
 - First-boot Flatpak install time on a Pi 5 over Wi-Fi.

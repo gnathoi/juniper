@@ -45,7 +45,7 @@ Appliance base, to build `FROM`:
 ghcr.io/gnathoi/juniper-minimal:latest
 ```
 
-Desktop (experimental, not published yet; `juniper` plus niri, a lock screen, Firefox and
+Desktop (experimental, published but untested on hardware; `juniper` plus niri, Firefox and
 Bazaar):
 
 ```
@@ -98,14 +98,15 @@ The config ([`examples/flash.yaml`](examples/flash.yaml)) holds the image (`juni
 Tailscale key and Wi-Fi. `just flash` downloads the latest release (or pass a tag or a local
 `.raw.xz` as a third argument), checks its cosign signature, refuses anything but a
 removable, USB or SD card disk, shows what it will write and asks for a y/N before erasing
-it. For `juniper-desktop` it also asks for a password (the headless images ask only if the
-config has `password: prompt`); only a hash is written.
+it. For `juniper-desktop` it also asks for a password, for logging in and for `sudo` (the
+headless images ask only if the config has `password: prompt`); only a hash is written.
+With a password, `sudo` asks for it; without one, `sudo` needs none (SSH is key-only on
+every image either way).
 
 ### Flash by hand (any OS)
 
-`juniper-desktop` has no disk image yet (it isn't published), so this is for the other two.
-
-Download `juniper-*.raw.xz` or `juniper-minimal-*.raw.xz` and its `.bundle` from
+Download `juniper-*.raw.xz`, `juniper-minimal-*.raw.xz` or (experimental)
+`juniper-desktop-*.raw.xz` and its `.bundle` from
 [Releases](https://github.com/gnathoi/juniper/releases), verify it, and flash it with any
 tool:
 
@@ -125,19 +126,24 @@ upgrades your brew packages automatically (`brew-update.timer`, `brew-upgrade.ti
 
 ### The experimental desktop
 
-`juniper-desktop` logs in automatically to a niri session that is locked at once, so the
-password is the lock screen. `just flash` and `ujust switch` both require a password. If an
-image has no usable password (say it was installed by a raw `bootc switch`), greetd still
-logs in with no lock screen and a notification asks you to set one.
+`juniper-desktop` is experimental: it is built, tested in CI and published (signed image and
+disk image), but nobody has run it on hardware yet, and it isn't in Raspberry Pi Imager's
+list.
 
-- `ujust desktop-config` writes a personal niri config that keeps Juniper's defaults.
+It boots to a text login prompt (greetd's agreety); niri starts after you log in with your
+password. Graphical greeter later. `just flash` and `ujust switch` both require a password
+for the first user (uid 1000), and on a flashed desktop `sudo` asks for it too.
+
+- `ujust desktop-config` writes a personal niri config that includes Juniper's defaults (bar,
+  notifications, idle lock, key bindings).
 - `ujust desktop-lock-idle on|off` turns the lock after 10 minutes idle on or off.
 - `ujust flatpak-setup` retries the first-boot install of Firefox and Bazaar.
 
 A pending update's reboot waits while the desktop is in use (not idle for 30 minutes), for at
 most 7 days after the first deferral. A deferred update is retried hourly and applies once
-the desktop is idle, which can be outside the reboot window. Under tryboot the update also
-needs greetd to be running, or it falls back.
+the desktop is idle, which can be outside the reboot window; a notification says so, with the
+deadline. `ujust update-schedule off` turns these reboots off too. Under tryboot the update
+also needs greetd to be running, or it falls back.
 
 ## Build your own appliance
 
@@ -190,7 +196,7 @@ Juniper stands on other people's work:
 - [Universal Blue](https://universal-blue.org)'s [Bluefin](https://github.com/ublue-os/bluefin)
   and [Bazzite](https://github.com/ublue-os/bazzite), where the overall approach and `ujust`
   come from, and [ublue-os/brew](https://github.com/ublue-os/brew) for Homebrew on bootc.
-- [Zirconium](https://github.com/zirconium-dev/zirconium), whose niri setup informs the planned
+- [Zirconium](https://github.com/zirconium-dev/zirconium), whose niri setup informs the
   desktop image.
 
 ## License
