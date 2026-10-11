@@ -11,6 +11,7 @@ held=$state_dir/update-held
 # Digests with a recorded strike (first column; the file is "DIGEST COUNT BOOT_ID").
 cleared=$(awk '$1 ~ /^sha256:[0-9a-f]+$/ {print $1}' "$list" 2>/dev/null || true)
 
+mapfile -t digests <<<"$cleared"
 if [[ -z $cleared && ! -e $held ]]; then
   echo "nothing held"
   exit 0
@@ -18,7 +19,7 @@ fi
 rm -f "$list" "$list.tmp" "$held"
 if [[ -n $cleared ]]; then
   echo "Cleared (will be tried again at the next update window):"
-  sed 's/^/  /' <<<"$cleared"
+  printf '  %s\n' "${digests[@]}"
 else
   echo "Cleared the held-update note."
 fi
