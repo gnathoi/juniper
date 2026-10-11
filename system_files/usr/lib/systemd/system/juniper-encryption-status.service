@@ -1,6 +1,6 @@
 [Unit]
 Description=Record whether the root filesystem is encrypted, for the login banner, pi-status and metrics
-After=local-fs.target
+After=local-fs.target juniper-firstboot.service
 Before=juniper-healthcheck.service juniper-metrics.service
 
 [Service]

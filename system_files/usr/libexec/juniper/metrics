@@ -87,12 +87,19 @@ ev() { sed -n "s/^$1=//p" "$enc" 2>/dev/null | head -1; }
 v=0
 [[ $(ev state) == encrypted ]] && v=1
 gauge juniper_encrypted "1 if the root filesystem is on LUKS2 (dm-crypt), else 0." "$v"
+# A plain card that never asked for encryption is 0 here, so alert on requested == 1 and encrypted == 0.
 v=0
-[[ $(ev key_lock) == locked ]] && v=1
-gauge juniper_encryption_key_locked "1 if the firmware HMAC is locked after unlock (needs Pi 5 EEPROM >= 2026-06-17)." "$v"
-v=0
-[[ $(ev recovery) == sealed:* ]] && v=1
-gauge juniper_encryption_recovery_sealed "1 if an age-sealed recovery keyslot exists." "$v"
+[[ $(ev requested) == yes ]] && v=1
+gauge juniper_encryption_requested "1 if encryption was requested at flash time (or the root is encrypted), else 0." "$v"
+# The next two describe an encrypted root, so they are left out of a plain one.
+if [[ $(ev state) == encrypted ]]; then
+  v=0
+  [[ $(ev key_lock) == locked ]] && v=1
+  gauge juniper_encryption_key_locked "1 if the firmware HMAC is locked after unlock (needs Pi 5 EEPROM >= 2026-06-17)." "$v"
+  v=0
+  [[ $(ev recovery) == sealed:* ]] && v=1
+  gauge juniper_encryption_recovery_sealed "1 if an age-sealed recovery keyslot exists." "$v"
+fi
 
 # Clock: yes/no from timedatectl; anything else leaves the metric out.
 sync=$(timeout -k 5 "$probe_timeout" timedatectl show -p NTPSynchronized --value 2>/dev/null) || sync=

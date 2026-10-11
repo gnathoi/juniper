@@ -4445,10 +4445,41 @@ test_encryption_status_mounts_cidata_read_only() {
   unset JUNIPER_CIDATA_DIR
   stub lsblk 'printf "part\ndisk\n"'
   stub cidata-device 'echo /dev/mmcblk0p1'
-  export JUNIPER_CIDATA_DEVICE=cidata-device
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub mount 'echo on >"${@: -1}/juniper-encrypt"'
+  export JUNIPER_CIDATA_DEVICE=cidata-device JUNIPER_MOUNT_RETRY_DELAY=0
   TMPDIR=$T "$LIBEXEC/encryption-status" || true
   check "encryption-status: mounts boot disk CIDATA read-only" called "mount -o ro /dev/mmcblk0p1"
   check "encryption-status: unmounts it" called "umount"
+  check "encryption-status: really read the marker" grep -qx 'reason=prepare did not run' "$enc"
+}
+
+test_encryption_status_mount_failure_is_loud() {
+  enc_env
+  unset JUNIPER_CIDATA_DIR
+  stub lsblk 'printf "part\ndisk\n"'
+  stub cidata-device 'echo /dev/mmcblk0p1'
+  stub mount 'exit 32'
+  export JUNIPER_CIDATA_DEVICE=cidata-device JUNIPER_MOUNT_RETRY_DELAY=0
+  TMPDIR=$T "$LIBEXEC/encryption-status"
+  check "encryption-status: mount failure -> unknown" grep -qx 'state=unknown' "$enc"
+  check "encryption-status: mount failure is not quiet" grep -qx 'requested=yes' "$enc"
+  check "encryption-status: mount retried" test "$(grep -c '^mount' "$CALLS")" = 3
+  check "encryption-status: not passed off as legacy" not_grep_dir 'flashed before' "$JUNIPER_STATE_DIR"
+  check "encryption-status: print says unknown" stdout_has 'Storage: UNKNOWN' "$LIBEXEC/encryption-status" --print
+  motd_env
+  df_queue "30000 20000"
+  check "motd: unknown status warns" stdout_has 'Storage encryption status unknown' "$LIBEXEC/motd"
+  check "unit: ordered after firstboot" grep -qx 'After=local-fs.target juniper-firstboot.service' "$ROOT/system_files/usr/lib/systemd/system/juniper-encryption-status.service"
+}
+
+test_encryption_status_empty_reason_is_quiet() {
+  enc_env
+  stub lsblk 'printf "part\ndisk\n"'
+  enc_run state=not-encrypted reason=
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: empty reason, quiet" grep -qx 'requested=no' "$enc"
+  check "encryption-status: empty reason noted in pi-status" stdout_has 'not encrypted (reason not recorded)' "$LIBEXEC/encryption-status" --print
 }
 
 test_metrics_encryption_gauges() {
@@ -4465,7 +4496,13 @@ test_metrics_encryption_gauges() {
   rm "$JUNIPER_STATE_DIR/encryption"
   "$LIBEXEC/metrics"
   check "metrics: no file -> encrypted 0" grep -qx 'juniper_encrypted 0' "$prom"
-  check "metrics: no file -> recovery 0" grep -qx 'juniper_encryption_recovery_sealed 0' "$prom"
+  check "metrics: no file -> requested 0" grep -qx 'juniper_encryption_requested 0' "$prom"
+  check "metrics: no file -> recovery series absent" not_grep_dir juniper_encryption_recovery_sealed "$JUNIPER_METRICS_DIR"
+  check "metrics: no file -> key lock series absent" not_grep_dir juniper_encryption_key_locked "$JUNIPER_METRICS_DIR"
+  printf 'state=not-encrypted\nrequested=yes\n' >"$JUNIPER_STATE_DIR/encryption"
+  "$LIBEXEC/metrics"
+  check "metrics: failed request -> requested 1" grep -qx 'juniper_encryption_requested 1' "$prom"
+  check "metrics: failed request -> encrypted 0" grep -qx 'juniper_encrypted 0' "$prom"
 }
 
 test_metrics_keeps_existing_series() {
@@ -4505,7 +4542,7 @@ test_pi_status_board_only_wording() {
 
 test_encryption_status_unit() {
   local u=$ROOT/system_files/usr/lib/systemd/system/juniper-encryption-status.service
-  check "unit: after local-fs" grep -qx 'After=local-fs.target' "$u"
+  check "unit: after local-fs" grep -qx 'After=local-fs.target juniper-firstboot.service' "$u"
   check "unit: before healthcheck and metrics" grep -qx 'Before=juniper-healthcheck.service juniper-metrics.service' "$u"
   check "build.sh enables it" grep -q 'juniper-encryption-status.service' "$ROOT/build_files/build.sh"
 }

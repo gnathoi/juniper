@@ -65,6 +65,8 @@ if [[ ${1:-} == --print ]]; then
     esac
     printf 'Storage: encrypted (LUKS2 %s, %s; key lock: %s; recovery: %s)\n' \
       "$(kv "$out" cipher)" "$bind" "$(kv "$out" key_lock)" "$rec"
+  elif [[ $state == unknown ]]; then
+    printf 'Storage: UNKNOWN (%s). %s\n' "$(kv "$out" friendly)" "$(kv "$out" advice)"
   elif [[ $(kv "$out" requested) == yes ]]; then
     printf 'Storage: NOT ENCRYPTED (%s). %s\n' "$(kv "$out" friendly)" "$(kv "$out" advice)"
   else
@@ -89,15 +91,37 @@ src=${src%%[[]*}
 if [[ -n $src ]] && lsblk -no TYPE -s "$src" 2>/dev/null | grep -qx crypt; then live=crypt; fi
 
 marker=
+unreadable=
+dir=
+mounted=
+cleanup() {
+  if [[ -n $mounted ]]; then
+    umount "$dir" 2>/dev/null
+    rmdir "$dir" 2>/dev/null
+    mounted=
+  fi
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM
 if [[ -z $state ]]; then
-  # No verdict from the initramfs: read the CIDATA marker, read-only.
+  # No verdict from the initramfs: read the CIDATA marker, read-only. firstboot may hold the
+  # partition read-write at the same moment (EBUSY), so retry; a mount that still fails means
+  # we do not know, which is reported loudly, never as "flashed before encryption support".
   dir=${JUNIPER_CIDATA_DIR:-}
-  mounted=
   if [[ -z $dir ]]; then
     if dev=$("${JUNIPER_CIDATA_DEVICE:-/usr/libexec/juniper/cidata-device}" 2>/dev/null) && [[ -n $dev ]]; then
-      dir=$(mktemp -d) && if mount -o ro "$dev" "$dir" 2>/dev/null; then mounted=1; else
+      dir=$(mktemp -d) || exit 1
+      for _ in 1 2 3; do
+        if mount -o ro "$dev" "$dir" 2>/dev/null; then
+          mounted=1
+          break
+        fi
+        sleep "${JUNIPER_MOUNT_RETRY_DELAY:-2}"
+      done
+      if [[ -z $mounted ]]; then
         rmdir "$dir"
         dir=
+        unreadable=1
       fi
     fi
   fi
@@ -105,11 +129,11 @@ if [[ -z $state ]]; then
     marker=$(head -n1 "$dir/juniper-encrypt" | tr -cd '[:print:]')
     marker=${marker%"${marker##*[![:space:]]}"}
   fi
-  if [[ -n $mounted ]]; then
-    umount "$dir" 2>/dev/null
-    rmdir "$dir" 2>/dev/null
-  fi
-  if [[ -z $marker ]]; then
+  cleanup
+  if [[ -n $unreadable ]]; then
+    state=unknown
+    reason='could not read the CIDATA marker (mount failed)'
+  elif [[ -z $marker ]]; then
     state=not-encrypted
     reason='flashed before encryption support'
   else
@@ -128,6 +152,11 @@ fi
 
 if [[ $state == encrypted ]]; then
   requested=yes
+elif [[ $state == unknown ]]; then
+  requested=yes
+elif [[ -z $reason ]]; then
+  # No reason recorded (cryptroot unlock found no verdict): unknown, not a warning.
+  requested=no
 elif [[ $reason == 'prepare did not run' ]]; then
   case $marker in on | converting) requested=yes ;; *) requested=no ;; esac
 elif asked_for "$reason"; then
@@ -140,7 +169,10 @@ friendly=
 advice=
 if [[ $state != encrypted ]]; then
   friendly=$(human "$reason")
-  if retries "$reason"; then advice="The next boot retries."; else advice="Reflash to encrypt."; fi
+  [[ -n $reason ]] || friendly='reason not recorded'
+  if [[ $state == unknown ]]; then
+    advice="It is checked again on the next boot."
+  elif retries "$reason"; then advice="The next boot retries."; else advice="Reflash to encrypt."; fi
 fi
 
 mkdir -p "$state_dir" || exit 1

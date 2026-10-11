@@ -58,6 +58,9 @@ if [[ -r $enc ]]; then
     if [[ $rec != sealed:* ]]; then
       row Warning "Storage recovery key not sealed (${rec:-unknown}): only this Pi can unlock this card."
     fi
+  elif [[ $(ev state) == unknown ]]; then
+    printf '  \e[1;32m%-10s\e[0m \e[1;31m%s\e[0m\n' Warning \
+      "Storage encryption status unknown ($(ev friendly)): it may not be encrypted. $(ev advice)"
   elif [[ $(ev requested) == yes ]]; then
     printf '  \e[1;32m%-10s\e[0m \e[1;31m%s\e[0m\n' Warning \
       "Storage NOT ENCRYPTED ($(ev friendly)): anyone holding this card can read its secrets. $(ev advice)"
