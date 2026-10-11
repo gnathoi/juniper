@@ -150,6 +150,16 @@ flash device config source="latest":
     cd {{ quote(invocation_directory()) }}
     {{ quote(justfile_directory()) }}/disk/flash.sh {{ quote(device) }} {{ quote(config) }} {{ quote(source) }}
 
+# Open an encrypted card on this laptop, read-only, with your SSH key (or --close to undo)
+unlock-card device identity="":
+    #!/usr/bin/bash
+    set -euo pipefail
+    cd {{ quote(invocation_directory()) }}
+    if [[ {{ quote(device) }} == --close ]]; then
+      exec {{ quote(justfile_directory()) }}/disk/unlock-card --close
+    fi
+    exec {{ quote(justfile_directory()) }}/disk/unlock-card {{ quote(device) }} {{ quote(identity) }}
+
 # Build a flashable GPT .raw from a pushed image ref, optionally pinned to a verified digest (root: loop devices)
 build-raw ref out="juniper.raw" digest="":
     disk/build-raw.sh {{ ref }} {{ out }} {{ digest }}

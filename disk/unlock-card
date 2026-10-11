@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# Opens an encrypted Juniper card on this Linux laptop, read-only, with your SSH private key.
+#   unlock-card DEVICE [IDENTITY]   e.g. unlock-card /dev/sdb ~/.ssh/id_ed25519
+#   unlock-card --close             unmount and close it again
+# The recovery passphrase is age-encrypted to your SSH keys (flash.yaml). It is read from CIDATA
+# (juniper-recovery.age), else from LUKS token 1 on the root partition, decrypted by age and
+# piped into cryptsetup. It never touches a file or a command line.
+set -euo pipefail
+
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+name=juniper-recovered
+user=${USER:-$(id -un)}
+media=${JUNIPER_MEDIA_DIR:-/run/media/$user}
+dest=$media/$name
+
+die() {
+  echo "unlock-card: $*" >&2
+  exit 1
+}
+
+# run0 (systemd/polkit) works for admins without sudo rights; JUNIPER_AS_ROOT overrides.
+if [[ -n ${JUNIPER_AS_ROOT:-} ]]; then
+  read -ra as_root <<<"$JUNIPER_AS_ROOT"
+elif command -v run0 >/dev/null; then
+  as_root=(run0)
+else
+  as_root=(sudo)
+fi
+
+if [[ ${1:-} == --close ]]; then
+  "${as_root[@]}" umount "$dest" 2>/dev/null || true
+  "${as_root[@]}" cryptsetup close "$name"
+  "${as_root[@]}" rmdir "$dest" 2>/dev/null || true
+  echo "Closed."
+  exit 0
+fi
+
+dev=${1:?usage: unlock-card DEVICE [IDENTITY] | --close}
+ident=${2:-}
+bash "$here/check-target" "$dev"
+
+# The juniper-root and CIDATA partitions of the card.
+part=
+cidata=
+while read -r path label; do
+  case $label in
+    juniper-root) part=$path ;;
+    CIDATA) cidata=$path ;;
+  esac
+done < <(lsblk -nrpo PATH,LABEL "$dev")
+[[ -n $part ]] || die "no recovery data on this card (not encrypted, or both copies lost)"
+
+if [[ -z $ident ]]; then
+  for f in ~/.ssh/id_ed25519 ~/.ssh/id_rsa; do
+    [[ -r $f ]] && ident=$f && break
+  done
+fi
+[[ -r $ident ]] || die "no SSH private key found; give one: unlock-card $dev IDENTITY"
+
+# The ciphertext: the CIDATA copy first, else the copy in LUKS token 1 (I10).
+ct=
+if [[ -n $cidata ]]; then
+  out=$(udisksctl mount -b "$cidata" -o ro 2>&1 || true)
+  # "Mounted /dev/sdb1 at /run/media/u/CIDATA", or "...is already mounted at `/path'."
+  m=
+  if [[ $out == *" at "* ]]; then
+    m=${out##* at }
+    m=${m#[\`\']}
+    m=${m%.}
+    m=${m%\'}
+  fi
+  if [[ -n $m && -r $m/juniper-recovery.age ]]; then
+    ct=$(<"$m/juniper-recovery.age")
+  fi
+  [[ $out != Mounted* ]] || udisksctl unmount -b "$cidata" >/dev/null 2>&1 || true
+fi
+if [[ -z $ct ]]; then
+  tok=$("${as_root[@]}" cryptsetup token export --token-id 1 "$part" 2>/dev/null || true)
+  ct=$(jq -r '.age // empty' <<<"$tok" 2>/dev/null || true)
+fi
+[[ -n $ct ]] || die "no recovery data on this card (not encrypted, or both copies lost)"
+
+# The only place the passphrase exists is this pipe.
+age -d -i "$ident" <<<"$ct" |
+  "${as_root[@]}" cryptsetup open --readonly --key-file - "$part" "$name" ||
+  die "could not open the card (wrong SSH key?)"
+"${as_root[@]}" mkdir -p "$dest"
+"${as_root[@]}" mount -o ro "/dev/mapper/$name" "$dest" || {
+  "${as_root[@]}" cryptsetup close "$name"
+  die "could not mount the opened card"
+}
+echo "Mounted read-only at $dest"
+echo "When done: just unlock-card --close"

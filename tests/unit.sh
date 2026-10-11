@@ -4424,6 +4424,78 @@ test_initramfs_installs_every_script_command() {
   done
 }
 
+# unlock_env [with-cidata-file]: a removable card with CIDATA and juniper-root; age yields the
+# passphrase (built so no stub or log contains it literally); cryptsetup checks its stdin.
+unlock_env() {
+  export JUNIPER_MEDIA_DIR=$T/media HOME=$T/home
+  mkdir -p "$T/media/CIDATA" "$HOME/.ssh"
+  : >"$HOME/.ssh/id_ed25519"
+  [[ ${1:-} == nofile ]] || echo "CIPHERTEXT-FILE" >"$T/media/CIDATA/juniper-recovery.age"
+  stub lsblk 'if [[ $1 == -J ]]; then
+  echo "{\"blockdevices\":[{\"path\":\"/dev/sdb\",\"type\":\"disk\",\"rm\":true,\"tran\":\"usb\",\"mountpoints\":[null]}]}"
+else
+  printf "/dev/sdb \n/dev/sdb1 CIDATA\n/dev/sdb2 \n/dev/sdb3 juniper-root\n"
+fi'
+  stub udisksctl 'if [[ $1 == mount ]]; then echo "Mounted $3 at '"$T"'/media/CIDATA."; fi'
+  stub age 'cat >/dev/null; echo "hunter2-""secret"'
+  stub run0 'exec "$@"'
+  stub cryptsetup 'case $1 in
+  open) [[ $(cat) == "hunter2-""secret" ]] && echo "key-arrived-on-stdin" >>"$CALLS" ;;
+  token) echo "{\"type\":\"juniper-recovery\",\"age\":\"CIPHERTEXT-TOKEN\"}" ;;
+esac'
+}
+
+test_unlock_card_pipes_age_into_readonly_cryptsetup() {
+  unlock_env
+  check "unlock: runs" "$ROOT/disk/unlock-card" /dev/sdb
+  check "unlock: age decrypts with the identity" called "age -d -i $T/home/.ssh/id_ed25519"
+  check "unlock: readonly open from stdin" called "run0 cryptsetup open --readonly --key-file - /dev/sdb3 juniper-recovered"
+  check "unlock: the key arrived on stdin" called "key-arrived-on-stdin"
+  check "unlock: age before cryptsetup" test "$(grep -n -m1 '^age ' "$CALLS" | cut -d: -f1)" -lt "$(grep -n -m1 '^cryptsetup open' "$CALLS" | cut -d: -f1)"
+  check "unlock: mounts read-only" called "run0 mount -o ro /dev/mapper/juniper-recovered $T/media/juniper-recovered"
+  check "unlock: used the CIDATA copy, not the token" not_called "token export"
+  check "unlock: passphrase nowhere under T" not_grep_dir "hunter2-secret" "$T"
+}
+
+test_unlock_card_explicit_identity() {
+  unlock_env
+  : >"$T/other"
+  "$ROOT/disk/unlock-card" /dev/sdb "$T/other" >/dev/null
+  check "unlock: given identity wins" called "age -d -i $T/other"
+}
+
+test_unlock_card_falls_back_to_the_token() {
+  unlock_env nofile
+  check "unlock: runs without the FAT copy" "$ROOT/disk/unlock-card" /dev/sdb
+  check "unlock: exported token 1" called "run0 cryptsetup token export --token-id 1 /dev/sdb3"
+  check "unlock: still opened" called "key-arrived-on-stdin"
+}
+
+test_unlock_card_no_recovery_data() {
+  unlock_env nofile
+  stub cryptsetup 'exit 1'
+  check "unlock: error text" stderr_has "no recovery data on this card (not encrypted, or both copies lost)" "$ROOT/disk/unlock-card" /dev/sdb
+  check "unlock: nothing opened" not_called "cryptsetup open"
+}
+
+test_unlock_card_refuses_non_removable() {
+  unlock_env
+  stub lsblk 'echo "{\"blockdevices\":[{\"path\":\"/dev/sda\",\"type\":\"disk\",\"rm\":false,\"tran\":\"sata\",\"mountpoints\":[null]}]}"'
+  check "unlock: internal disk refused" fails "$ROOT/disk/unlock-card" /dev/sda
+  check "unlock: nothing opened" not_called "cryptsetup open"
+}
+
+test_unlock_card_close() {
+  unlock_env
+  "$ROOT/disk/unlock-card" --close >/dev/null
+  check "unlock: unmounts" called "run0 umount $T/media/juniper-recovered"
+  check "unlock: closes" called "run0 cryptsetup close juniper-recovered"
+}
+
+test_unlock_card_recipe() {
+  check "unlock: Justfile recipe" grep -q '^unlock-card device identity' "$ROOT/Justfile"
+}
+
 for t in $(declare -F | awk -v f="${UNIT_FILTER:-.}" '$3 ~ /^test_/ && $3 ~ f {print $3}'); do
   setup
   "$t"
