@@ -13,8 +13,8 @@ set -xeuo pipefail
 # holds only repo files and the key (its release number moves a few times a year and says
 # nothing about security), so a floor would need a manual bump after every EPEL release and
 # fail builds without closing anything. What a downgrade can change is the repo file, which
-# is still gpgcheck=1 with the local pinned key, and the image test (tests/repo-audit.sh) fails CI if
-# not. Every package EPEL installs is signature-checked against that same key.
+# is still gpgcheck=1 with a local key file, and the image test (tests/repo-audit.sh) fails CI if
+# not; it also compares the fingerprints in the shipped key files with the pinned ones. Every package EPEL installs is signature-checked against that same key.
 epel=$(mktemp -d)
 curl -fsSLo "$epel/epel-release.rpm" https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
 rpmkeys --dbpath "$epel/db" --import /ctx/build_files/keys/RPM-GPG-KEY-EPEL-10
