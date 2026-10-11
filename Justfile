@@ -137,6 +137,11 @@ rechunk:
 test-image image=(image_ref + ":build"):
     podman run --rm --pull=never -v ./tests:/tests:ro,z {{ image }} /tests/image.sh
 
+# Run tests/cryptroot-loop.sh inside an image: first-boot encryption with the image's real
+# cryptroot and cryptsetup on loop devices. Needs root (sudo just ...): privileged, host /dev
+test-cryptroot image=(image_ref + ":build"):
+    podman run --rm --pull=never --privileged -v /dev:/dev -v ./tests:/tests:ro,z {{ image }} /tests/cryptroot-loop.sh
+
 # Flash a signed release (latest, a tag, or a local .raw.xz) to an SD card/USB disk with
 # first-boot settings from config (template: examples/flash.yaml)
 flash device config source="latest":
