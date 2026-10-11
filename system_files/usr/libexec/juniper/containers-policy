@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+# Generate /etc/containers/policy.json from Juniper's base policy, which ships in the image and so
+# updates with it, plus trust drop-ins: first the image's (/usr/lib/juniper/trusted-images.d,
+# shipped by derived images), then the local admin's (/etc/juniper/trusted-images.d, written by
+# `ujust trust-images`). Runs at every boot before anything pulls
+# (juniper-containers-policy.service), and after every trust-images change.
+#   containers-policy                regenerate; install atomically, previous kept as .bak
+#   containers-policy --check FILE   exit 0 if drop-in FILE would be applied, else say why
+#   containers-policy --protected NS print why NS can't be trusted (exit 0), or exit 1 if it can
+# A drop-in is {"NAMESPACE": [REQUIREMENT, ...]}: one namespace, every requirement sigstoreSigned
+# or signedBy. An image drop-in may instead be {"default": [{"type": "reject"}]}, to tighten the
+# default (never to loosen it). No drop-in may touch a scope the base policy sets, in any
+# transport, or anything under one: Juniper's namespace and every vendor entry stay exactly as
+# shipped. A drop-in that fails a check is skipped and logged; the result is the base plus the
+# drop-ins that pass, validated (jq, then skopeo's strict parser), never a broken policy. If
+# generation fails, the previous policy.json stays in force.
+set -euo pipefail
+
+base=${JUNIPER_POLICY_BASE:-/usr/share/juniper/containers/policy.json}
+policy=${JUNIPER_POLICY:-/etc/containers/policy.json}
+usrdir=${JUNIPER_TRUST_DIR_USR:-/usr/lib/juniper/trusted-images.d}
+etcdir=${JUNIPER_TRUST_DIR:-/etc/juniper/trusted-images.d}
+own_key=${JUNIPER_OWN_KEY:-/usr/share/pki/containers/juniper.pub}
+skopeo=${JUNIPER_SKOPEO:-skopeo}
+
+tmps=()
+trap 'rm -f "${tmps[@]}"' EXIT
+log() { echo "containers-policy: $*" >&2; }
+die() {
+  log "$*"
+  exit 1
+}
+
+# Same grammar as trust-images: a registry host and a lowercase path; no tag, digest or wildcard.
+label='[a-z0-9]([a-z0-9-]*[a-z0-9])?'
+ns_re="^(($label(\\.$label)+|localhost)(:[0-9]+)?|$label:[0-9]+)(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)*$"
+
+# protected NS: why NS can't be trusted, if it equals or sits under a scope the base sets (any
+# transport, any key format; path components, so ghcr.io/gnathoi covers ghcr.io/gnathoi/x but
+# not ghcr.io/gnathoi2; *.example.com covers its subdomains). Prints nothing if NS is free.
+protected() {
+  # shellcheck disable=SC2016 # jq variables
+  jq -r --arg ns "$1" --arg k "$own_key" '
+    [.transports // {} | to_entries[] | .key as $t | .value | to_entries[]
+      | select(.key != "") | .key as $s
+      | select($ns == $s or ($ns | startswith($s + "/"))
+          or (($s | startswith("*.")) and ($ns | split("/")[0] | endswith($s[1:]))))
+      | {$t, $s, juniper: any(.value[]?; .keyPath? == $k or any((.keyPaths? // [])[]; . == $k))}]
+    | first // empty
+    | "\($ns) is at or under \(.s), which the image'"'"'s base policy sets\(if .t != "docker" then " (\(.t))" else "" end)\(if .juniper then ": Juniper'"'"'s own namespace" else "" end)"' "$base"
+}
+
+# valid_policy FILE: the shape podman needs, then skopeo's strict parse (it loads the policy
+# before it trips over the dummy image name).
+valid_policy() {
+  local out
+  jq -e '(.default | type == "array") and (.transports.docker | type == "object")' "$1" >/dev/null 2>&1 ||
+    return 1
+  command -v "$skopeo" >/dev/null || return 0
+  out=$("$skopeo" --policy "$1" copy juniper-policy-check: juniper-policy-check: 2>&1 || true)
+  [[ $out == *"Invalid source name"* ]] || {
+    log "skopeo: ${out##*msg=}"
+    return 1
+  }
+}
+
+# merge DROPIN...: the base with each drop-in's namespace added under transports.docker, or the
+# default replaced by an image drop-in's reject.
+merge() {
+  jq -s '.[0] as $base | reduce .[1:][] as $d ($base;
+    if $d | has("default") then .default = $d.default else .transports.docker += $d end)' "$base" "$@"
+}
+
+# base_intact FILE: every scope the base sets, in every transport, is unchanged; the default is
+# the base's or reject.
+base_intact() {
+  jq -e --slurpfile b "$base" '. as $n | ($b[0].transports // {} | to_entries
+    | all(.key as $t | .value | to_entries | all(.key as $s | $n.transports[$t][$s] == .value)))
+    and (.default == $b[0].default or .default == [{"type": "reject"}])' "$1" >/dev/null
+}
+
+# check_dropin FILE: print its scope if it can be applied; otherwise log why and fail. Image
+# drop-ins live under $usrdir; anything else counts as local.
+check_dropin() {
+  local f=$1 ns why t p
+  ns=$(jq -r 'if type == "object" and length == 1 then keys[0] else "" end' "$f" 2>/dev/null) || ns=
+  [[ -n $ns ]] || {
+    log "$f: not a JSON object with exactly one namespace; skipped."
+    return 1
+  }
+  if [[ $ns == default ]]; then
+    if [[ $f != "$usrdir"/* ]]; then
+      log "$f: only an image drop-in ($usrdir) can set the default; skipped."
+      return 1
+    fi
+    jq -e '.default == [{"type": "reject"}]' "$f" >/dev/null || {
+      log "$f: the default can only be tightened to [{\"type\": \"reject\"}]; skipped."
+      return 1
+    }
+  else
+    [[ $ns =~ $ns_re ]] || {
+      log "$f: '$ns' is not a namespace (registry/path, lowercase, no tag); skipped."
+      return 1
+    }
+    why=$(protected "$ns")
+    if [[ -n $why ]]; then
+      log "$f: $why; a drop-in can't change it; skipped."
+      return 1
+    fi
+    jq -e --arg ns "$ns" '.[$ns] | type == "array" and length > 0
+      and all(.[]; type == "object" and (.type == "sigstoreSigned" or .type == "signedBy"))' "$f" >/dev/null || {
+      log "$f: every requirement must be sigstoreSigned or signedBy; skipped."
+      return 1
+    }
+    while read -r p; do
+      [[ -z $p || -e $p ]] || log "$f: warning: key $p doesn't exist; pulls under $ns fail until it does."
+    done < <(jq -r --arg ns "$ns" '.[$ns][] | (.keyPath? // empty), (.keyPaths? // [] | .[])' "$f")
+  fi
+  t=$(mktemp)
+  tmps+=("$t")
+  merge "$f" >"$t"
+  valid_policy "$t" || {
+    log "$f: the policy with it is invalid; skipped."
+    return 1
+  }
+  echo "$ns"
+}
+
+jq empty "$base" 2>/dev/null || die "The base policy $base is missing or invalid; $policy left as it is."
+
+case ${1:-} in
+  --check)
+    (($# == 2)) || die "usage: containers-policy [--check DROPIN | --protected NAMESPACE]"
+    check_dropin "$2" >/dev/null
+    exit
+    ;;
+  --protected)
+    (($# == 2)) || die "usage: containers-policy [--check DROPIN | --protected NAMESPACE]"
+    why=$(protected "$2")
+    [[ -n $why ]] && echo "$why"
+    exit
+    ;;
+esac
+(($# == 0)) || die "usage: containers-policy [--check DROPIN | --protected NAMESPACE]"
+
+# Image drop-ins first, then local ones: a local drop-in for the same scope wins, and says so.
+declare -A from=()
+order=()
+for dir in "$usrdir" "$etcdir"; do
+  for f in "$dir"/*.json; do
+    [[ -f $f ]] || continue
+    ns=$(check_dropin "$f") || continue
+    if [[ -n ${from[$ns]:-} ]]; then
+      if [[ $dir == "$etcdir" && ${from[$ns]} == "$usrdir"/* ]]; then
+        log "$f: overrides the image's ${from[$ns]} for $ns."
+        from[$ns]=$f
+      else
+        log "$f: $ns is already set by ${from[$ns]}; skipped."
+      fi
+      continue
+    fi
+    from[$ns]=$f
+    order+=("$ns")
+  done
+done
+good=()
+for ns in "${order[@]}"; do good+=("${from[$ns]}"); done
+
+new=$(mktemp "$policy.XXXXXX.tmp")
+tmps+=("$new")
+# The base alone is copied byte for byte, so a device without drop-ins matches a fresh one.
+if ((${#good[@]})); then merge "${good[@]}" >"$new"; else cat "$base" >"$new"; fi
+if ! base_intact "$new"; then # by construction; checked anyway, as this guards every update
+  log "The merge changed a scope the base policy sets; using the base policy alone."
+  cat "$base" >"$new"
+elif ! valid_policy "$new"; then
+  log "The merged policy is invalid; using the base policy alone."
+  cat "$base" >"$new"
+fi
+valid_policy "$new" || die "The base policy $base is invalid; $policy left as it is."
+
+# Say what changes compared with the current policy.json that nobody asked for here: hand edits,
+# or what a derived image baked in. Docker scopes that come and go with drop-ins aren't news.
+if jq empty "$policy" 2>/dev/null; then
+  while read -r line; do
+    log "$line"
+  done < <(jq -r --slurpfile n "$new" --slurpfile b "$base" '. as $c | $n[0] as $n | $b[0] as $b
+    | (if $c.default != $n.default then "policy.json default \($c.default | tojson) replaced by \($n.default | tojson)." else empty end),
+      ($c.transports // {} | to_entries[] | .key as $t | .value | to_entries[] | .key as $s
+        | (($n.transports[$t] // {}) | has($s)) as $kept
+        | select($n.transports[$t][$s] != .value)
+        | select($t != "docker" or ($kept | not) or ($b.transports.docker // {} | has($s)))
+        | if $kept
+          then "policy.json had a different \($t) \($s | tojson) entry than the base policy; replaced by the base one."
+          else "dropping \($t) \($s | tojson) from policy.json: not in the base policy or a drop-in (use ujust trust-images)." end)' "$policy")
+fi
+
+if [[ -f $policy && $(<"$new") == "$(<"$policy")" ]]; then
+  exit 0
+fi
+chmod 0644 "$new"
+[[ ! -f $policy ]] || cp -p "$policy" "$policy.bak"
+mv -f "$new" "$policy"
+if command -v restorecon >/dev/null; then restorecon "$policy" 2>/dev/null || true; fi
+log "installed $policy: the base policy and ${#good[@]} drop-in(s)."

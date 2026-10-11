@@ -1,0 +1,17 @@
+[Unit]
+Description=Generate the container signature policy (Juniper's base plus trusted-images drop-ins)
+# Early in boot, so a new image's base policy is in force before anything can pull: every normal
+# service (quadlets, podman-auto-update, juniper-update, bootc's own updater) comes after
+# sysinit.target. A failure leaves the previous policy.json in place.
+DefaultDependencies=no
+After=local-fs.target
+Before=sysinit.target juniper-update.service bootc-fetch-apply-updates.service podman-auto-update.service shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/juniper/containers-policy
+
+[Install]
+WantedBy=sysinit.target
