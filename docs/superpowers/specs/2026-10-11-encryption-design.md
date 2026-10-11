@@ -489,6 +489,13 @@ First runs on a Pi 5 changed three parts of the design above:
 - **Probe with `pubkey`.** Exit 250 means the key is not set, the only case that runs
   `genkey`. Every `rpi-fw-crypto` call has a deadline; one that overruns writes a wedged
   marker and the boot fails open.
+- **Superseded 2026-10-11: the config lock.** `lock_device_private_key=1` in `rpi-config.txt`
+  (Ruling 4 and the "Never read raw" bullet) is gone. It sets the old global key lock (status
+  bit 8, READ_LOCKED), which on EEPROM 2026-05-11 also blocks `genkey`: the serial log showed
+  "genkey failed (firmware error 4)" and `get-key-status 1` read 0x101. A board with no key
+  could never be provisioned. Per-operation locks (READ, GEN, HMAC) exist from 2026-06-17, and
+  `fwkey lock` applies them at runtime after unlock. `fwkey` reports a status with bit 8 set
+  on older firmware as `unavailable:key-locked-by-config` and doesn't try `genkey`.
 - **Token 0 follows the conversion.** cryptsetup refuses `token import` while the header is
   marked for reencryption. The token is imported after the conversion completes. Until then
   the candidate is found by the `converting` marker, the GPT root type (root-arm64) and the
