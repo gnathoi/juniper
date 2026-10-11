@@ -105,12 +105,11 @@ The OTP research (issue #50, 2026-10-11) settles the details:
   > 2025-11-05. The key is probed with `rpi-fw-crypto pubkey` (exit 250 = not set, the only
   > case that runs `genkey`). See "Hardware findings".
 
-  `rpi-fw-crypto hmac --key-id 1` runs on
-  `juniper.probe.v1`:
-  - success: reuse the key;
-  - `KEY_NOT_SET` (error 6): `rpi-fw-crypto genkey --key-id 1 --alg ec`, then probe again;
-  - `KEY_LOCKED` (4), any other error, or no `/dev/vcio`: **never write**. Fail open with
-    the reason.
+  ~~`rpi-fw-crypto hmac --key-id 1` runs on `juniper.probe.v1`: success reuses the key;
+  `KEY_NOT_SET` (error 6) runs `genkey --key-id 1 --alg ec` and probes again.~~
+  **Superseded 2026-10-11:** the probe is `rpi-fw-crypto pubkey`; exit 250 (not set) is the
+  only case that runs `genkey`, then it probes again. `KEY_LOCKED` (4), any other error, or
+  no `/dev/vcio`: **never write**. Fail open with the reason.
 
   The CLI exits with `-error` (250 for error 6) and prints `Last crypto error: N (…)`. Parse
   that line. **The probe and `genkey` run last among the first-boot preconditions,** so no

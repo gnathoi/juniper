@@ -80,12 +80,17 @@ if [[ -z $ct ]]; then
 fi
 [[ -n $ct ]] || die "no recovery data on this card (not encrypted, or both copies lost)"
 
+if [[ -e /dev/mapper/$name ]]; then
+  die "$name is already open; run: just unlock-card --close"
+fi
+
 # The only place the passphrase exists is this pipe.
 age -d -i "$ident" <<<"$ct" |
   "${as_root[@]}" cryptsetup open --readonly --key-file - "$part" "$name" ||
-  die "could not open the card (wrong SSH key?)"
+  die "could not open the card (wrong SSH key, or not this card's recovery key)"
 "${as_root[@]}" mkdir -p "$dest"
 "${as_root[@]}" mount -o ro "/dev/mapper/$name" "$dest" || {
+  "${as_root[@]}" rmdir "$dest" 2>/dev/null || true
   "${as_root[@]}" cryptsetup close "$name"
   die "could not mount the opened card"
 }

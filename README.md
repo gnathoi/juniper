@@ -214,7 +214,7 @@ few extra minutes; don't cut the power (it resumes if you do). `ujust pi-status`
 - **Hardware.** Pi 5 only, with a bootloader EEPROM built 2026-01-21 or later (older ones
   have an HMAC lock-up bug). Otherwise the card stays plain, with a "NOT ENCRYPTED" warning.
   Update with `sudo rpi-eeprom-update -a` (the image ships 2026-05-11); an EEPROM update has
-  no tryboot fallback. Pi 4 is unverified, so it stays plain. A card not written by
+  no tryboot fallback. Pi 4 is unverified in v1: `fwkey` fails open, so the card stays plain. A card not written by
   `just flash`, or flashed with no usable recovery key, stays plain too.
 - **Limits.** Anyone holding both the board and the card can unlock it until secure boot
   (#73); a card that is modified and returned can capture the key (evil maid, #73); root on
