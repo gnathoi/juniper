@@ -59,5 +59,9 @@ read -r total avail < <(df -Pm "$fs" 2>/dev/null | awk 'NR == 2 {print $2, $4}')
 if [[ ${total:-0} =~ ^[0-9]+$ && ${avail:-} =~ ^[0-9]+$ ]] && ((total > 0 && (avail * 10 < total || avail < 1024))); then
   row Warning "Low disk space: ${avail} MiB free of ${total} MiB on ${fs}; free some or move data to a USB disk"
 fi
+# Measurement timestamps and TLS can't be trusted before the clock syncs (no RTC on a Pi).
+if [[ $(timedatectl show -p NTPSynchronized --value 2>/dev/null) == no ]]; then
+  row Warning "Clock not synchronised (NTP)"
+fi
 row Tip "$(cat /usr/share/juniper/tips*.txt 2>/dev/null | shuf -n1)"
 printf '\n  ujust for commands · ujust toggle-motd to hide this\n\n'

@@ -2422,6 +2422,146 @@ test_kernel_age_script() {
   unset NOW
 }
 
+metrics_env() {
+  export JUNIPER_METRICS_DIR=$T/metrics JUNIPER_RUN_DIR=$T/run JUNIPER_OS_RELEASE=$T/os-release
+  mkdir -p "$JUNIPER_RUN_DIR"
+  echo 'IMAGE_VERSION=10.1.20330518' >"$T/os-release"
+  stub bootc 'cat <<JSON
+{"status":{"booted":{"image":{"image":{"image":"ghcr.io/gnathoi/juniper-minimal:latest"},"imageDigest":"sha256:aaa","timestamp":"2033-05-18T03:00:00Z"}},
+"staged":{"image":{"image":{"image":"x"},"imageDigest":"sha256:bbb"}}}}
+JSON'
+  stub timedatectl 'echo yes'
+  stub rpm 'echo 1900000000'
+  prom=$JUNIPER_METRICS_DIR/juniper.prom
+}
+
+test_metrics_writes_image_and_staged() {
+  metrics_env
+  "$LIBEXEC/metrics"
+  check "metrics: image info" grep -qx 'juniper_image_info{image="ghcr.io/gnathoi/juniper-minimal:latest",digest="sha256:aaa",version="10.1.20330518"} 1' "$prom"
+  check "metrics: staged info" grep -qx 'juniper_staged_image_info{digest="sha256:bbb"} 1' "$prom"
+  check "metrics: image timestamp" grep -qx "juniper_image_timestamp_seconds $(date -d 2033-05-18T03:00:00Z +%s)" "$prom"
+  check "metrics: kernel build time" grep -qx 'juniper_kernel_build_timestamp_seconds 1900000000' "$prom"
+  check "metrics: time synced" grep -qx 'juniper_time_synced 1' "$prom"
+  check "metrics: gauges default 0" grep -qx 'juniper_update_held 0' "$prom"
+  check "metrics: locked 0" grep -qx 'juniper_locked 0' "$prom"
+  check "metrics: file mode 0644" test "$(stat -c %a "$prom")" = 644
+  check "metrics: no temp files left" test "$(find "$JUNIPER_METRICS_DIR" -name '.juniper.prom.*' | wc -l)" = 0
+}
+
+test_metrics_no_staged_image() {
+  metrics_env
+  stub bootc 'echo "{\"status\":{\"booted\":{\"image\":{\"image\":{\"image\":\"i\"},\"imageDigest\":\"sha256:aaa\"}}}}"'
+  "$LIBEXEC/metrics"
+  check "metrics: no staged -> metric absent" not_grep_dir juniper_staged_image_info "$JUNIPER_METRICS_DIR"
+  check "metrics: no image timestamp -> metric absent" not_grep_dir juniper_image_timestamp_seconds "$JUNIPER_METRICS_DIR"
+  check "metrics: image info still there" grep -q '^juniper_image_info' "$prom"
+}
+
+test_metrics_flags_from_markers() {
+  metrics_env
+  touch "$JUNIPER_STATE_DIR/locked" "$JUNIPER_STATE_DIR/tailscale-join-gave-up"
+  echo "held" >"$JUNIPER_STATE_DIR/update-held"
+  echo "skipped" >"$JUNIPER_STATE_DIR/update-skipped-space"
+  echo "open" >"$JUNIPER_RUN_DIR/lan-ssh-legacy"
+  "$LIBEXEC/metrics"
+  local m
+  for m in update_held update_skipped_space tailscale_join_gave_up lan_ssh_legacy locked; do
+    check "metrics: $m is 1" grep -qx "juniper_$m 1" "$prom"
+  done
+  rm "$JUNIPER_STATE_DIR/locked"
+  "$LIBEXEC/metrics"
+  check "metrics: legacy lan-ssh needs lockdown" grep -qx 'juniper_lan_ssh_legacy 0' "$prom"
+  : >"$JUNIPER_STATE_DIR/update-held"
+  "$LIBEXEC/metrics"
+  check "metrics: empty held marker is 0" grep -qx 'juniper_update_held 0' "$prom"
+}
+
+test_metrics_health_last_ok_from_mtime() {
+  metrics_env
+  "$LIBEXEC/metrics"
+  check "metrics: no health-last-ok -> metric absent" not_grep_dir juniper_health_last_ok "$JUNIPER_METRICS_DIR"
+  touch -d @1900000123 "$JUNIPER_STATE_DIR/health-last-ok"
+  "$LIBEXEC/metrics"
+  check "metrics: health-last-ok mtime" grep -qx 'juniper_health_last_ok_timestamp_seconds 1900000123' "$prom"
+}
+
+test_metrics_missing_inputs_leave_metrics_out() {
+  metrics_env
+  stub bootc 'exit 1'
+  stub timedatectl 'exit 1'
+  stub rpm 'exit 1'
+  check "metrics: still succeeds" "$LIBEXEC/metrics"
+  check "metrics: no image info" not_grep_dir juniper_image_info "$JUNIPER_METRICS_DIR"
+  check "metrics: no time metric" not_grep_dir juniper_time_synced "$JUNIPER_METRICS_DIR"
+  check "metrics: no kernel metric" not_grep_dir juniper_kernel_build "$JUNIPER_METRICS_DIR"
+  check "metrics: marker gauges still written" grep -qx 'juniper_update_held 0' "$prom"
+  stub timedatectl 'echo no'
+  stub rpm 'echo notanumber'
+  "$LIBEXEC/metrics"
+  check "metrics: unsynced is 0" grep -qx 'juniper_time_synced 0' "$prom"
+  check "metrics: garbage build time dropped" not_grep_dir juniper_kernel_build "$JUNIPER_METRICS_DIR"
+}
+
+test_metrics_escapes_label_values() {
+  metrics_env
+  cat >"$T/evil.json" <<'JSON'
+{"status":{"booted":{"image":{"image":{"image":"a\\b\"c\nd"},"imageDigest":"sha256:aaa"}}}}
+JSON
+  stub bootc "cat $T/evil.json"
+  "$LIBEXEC/metrics"
+  check "metrics: backslash, quote and newline escaped" grep -qF 'image="a\\b\"c\nd"' "$prom"
+  check "metrics: one line per sample" test "$(grep -c '^juniper_image_info' "$prom")" = 1
+}
+
+test_metrics_failed_write_keeps_old_file() {
+  metrics_env
+  "$LIBEXEC/metrics"
+  cp "$prom" "$T/old.prom"
+  chmod 0555 "$JUNIPER_METRICS_DIR"
+  if [[ $(id -u) != 0 ]]; then
+    check "metrics: unwritable dir fails" fails "$LIBEXEC/metrics"
+    check "metrics: old file untouched" cmp -s "$prom" "$T/old.prom"
+  fi
+  chmod 0755 "$JUNIPER_METRICS_DIR"
+}
+
+test_healthcheck_touches_last_ok() {
+  health_env
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  "$LIBEXEC/healthcheck"
+  check "healthcheck: success touches health-last-ok" test -e "$JUNIPER_STATE_DIR/health-last-ok"
+  rm -f "$JUNIPER_STATE_DIR/health-last-ok"
+  stub ip ''
+  "$LIBEXEC/healthcheck" || true
+  check "healthcheck: failure does not touch it" test ! -e "$JUNIPER_STATE_DIR/health-last-ok"
+}
+
+test_motd_warns_when_clock_unsynced() {
+  motd_env
+  df_queue "30000 20000"
+  stub timedatectl 'echo no'
+  check "motd: unsynced clock warned" stdout_has "Clock not synchronised (NTP)" "$LIBEXEC/motd"
+  stub timedatectl 'echo yes'
+  check "motd: synced clock, no warning" not_stdout_has "Clock not synchronised" "$LIBEXEC/motd"
+  stub timedatectl 'exit 1'
+  check "motd: unknown clock state, no warning" not_stdout_has "Clock not synchronised" "$LIBEXEC/motd"
+}
+
+test_enable_metrics_reads_textfile_dir() {
+  local j=$ROOT/system_files/usr/share/juniper/just/services.just
+  check "enable-metrics: textfile collector on the host dir" grep -q '^    Exec=.*--collector.textfile.directory=/host/var/lib/juniper/metrics$' "$j"
+  check "enable-metrics: re-run restarts the exporter" grep -q 'systemctl restart node-exporter.service' "$j"
+}
+
+test_metrics_timer_defaults() {
+  local d=$ROOT/system_files/usr/lib/systemd/system
+  check "metrics timer: every 5 minutes" grep -qx 'OnUnitActiveSec=5min' "$d/juniper-metrics.timer"
+  check "metrics timer: first run 2 min after boot" grep -qx 'OnBootSec=2min' "$d/juniper-metrics.timer"
+  check "metrics service: runs the script" grep -qx 'ExecStart=/usr/libexec/juniper/metrics' "$d/juniper-metrics.service"
+  check "metrics: enabled in build.sh" grep -q 'juniper-metrics.timer' "$ROOT/build_files/build.sh"
+}
+
 # --- runner ---
 for t in $(declare -F | awk '$3 ~ /^test_/ {print $3}'); do
   setup

@@ -160,6 +160,8 @@ esac
 for ((i = 0; i < tries && SECONDS < deadline; i++)); do
   if healthy; then
     rpi-bootc-bootloader sync
+    # Read by juniper-metrics (juniper_health_last_ok_timestamp_seconds); best effort.
+    { mkdir -p "$state_dir" && touch "$state_dir/health-last-ok"; } 2>/dev/null || true
     exit 0
   fi
   ((SECONDS + interval < deadline)) || break
