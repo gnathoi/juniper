@@ -5,5 +5,7 @@ ConditionPathExists=/var/lib/juniper/reboot-deferred-since
 
 [Service]
 Type=oneshot
+# `ujust update-schedule off` disables juniper-reboot.timer: then no automatic reboots at all.
+ExecCondition=/usr/bin/systemctl is-enabled --quiet juniper-reboot.timer
 ExecCondition=/usr/libexec/juniper/desktop-idle
 ExecStart=/usr/libexec/juniper/apply-update

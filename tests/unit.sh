@@ -936,6 +936,17 @@ test_desktop_idle_leading_zero_marker() {
   check "idle: leading-zero marker read as decimal (skip, marker kept)" test "$rc" = 1 -a -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
 }
 
+# `ujust update-schedule off` disables juniper-reboot.timer; the hourly retry must honour it.
+test_reboot_retry_honours_update_schedule_off() {
+  local u=$ROOT/system_files_desktop/usr/lib/systemd/system/juniper-reboot-retry.service
+  check "retry: skipped while automatic reboots are off" \
+    grep -qx 'ExecCondition=/usr/bin/systemctl is-enabled --quiet juniper-reboot.timer' "$u"
+  check "retry: that check comes before the idle check" \
+    test "$(grep -m1 '^ExecCondition=' "$u")" = 'ExecCondition=/usr/bin/systemctl is-enabled --quiet juniper-reboot.timer'
+  check "update-schedule off: disables juniper-reboot.timer" \
+    grep -q 'systemctl disable --now juniper-reboot.timer' "$LIBEXEC/update-schedule"
+}
+
 switch_env() {
   export USER=nat T JUNIPER_APPLY_UPDATE=apply-update
   # shellcheck disable=SC2016 # expands inside the stub

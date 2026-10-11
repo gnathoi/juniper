@@ -199,6 +199,9 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
   test -x /usr/libexec/juniper/desktop-idle
   need_enabled juniper-reboot-retry.timer
   systemd-analyze verify juniper-reboot-retry.service
+  # ...and only while automatic reboots are on (`ujust update-schedule off` disables the timer).
+  grep -qx 'ExecCondition=/usr/bin/systemctl is-enabled --quiet juniper-reboot.timer' \
+    /usr/lib/systemd/system/juniper-reboot-retry.service
   # niri accepts Juniper's defaults, the /etc config, and the stub desktop-config writes.
   niri validate -c /usr/share/juniper/niri/juniper.kdl
   niri validate -c /etc/niri/config.kdl
