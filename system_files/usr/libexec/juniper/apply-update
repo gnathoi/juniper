@@ -52,4 +52,4 @@ if ((strikes >= 2)); then
 fi
 ((strikes == 0)) || [[ -n $mode ]] || echo "Update $digest had 1 failed attempt; trying it once more."
 not_held
-exec rpi-bootc-bootloader tryreboot
+exec "${JUNIPER_BOOTLOADER:-/usr/libexec/juniper/bootloader}" tryreboot

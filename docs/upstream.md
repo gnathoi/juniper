@@ -63,8 +63,8 @@ issue.
   `start_file`/`fixup_file` in `tryboot.txt` and the default config (check how they interact
   with `os_prefix`).
 - **LUKS:** the FAT partition is found by rewriting the `/sysroot` device name
-  (`sed 's/[0-9]+$/1/'`), which fails for `/dev/mapper/*`; `MNTDEV` works around it. Deriving
-  it from the disk under `/sysroot` (as Juniper's `cidata-device` does) would be more robust.
+  (`sed 's/[0-9]+$/1/'`), which fails for `/dev/mapper/*`; Juniper wraps it and sets
+  `MNTDEV` (#75). Deriving it from the disk under `/sysroot` (as Juniper's `cidata-device` does) would be more robust.
 - **Real-root emergency mode under tryboot never falls back** (PID 1 keeps the watchdog fed).
   Juniper's `juniper-emergency-fallback` (#32, tested on a Pi 5) could be offered upstream.
 - `config.txt` is only written if missing, so template changes never reach existing devices.
