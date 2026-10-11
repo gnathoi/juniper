@@ -11,11 +11,18 @@ set -euo pipefail
 
 state_dir=${JUNIPER_STATE_DIR:-/var/lib/juniper}
 zone=drop
+# shellcheck disable=SC2016 # literal backticks
 legacy_msg='LAN SSH is open to every network; run `ujust lan-ssh on` to scope it.'
 rule_re='^rule family="ipv[46]" source address="([^"]+)" service name="ssh" accept$'
 
-die() { echo "lan-ssh: $*" >&2; exit 2; }
-usage() { echo "usage: ujust lan-ssh [on [CIDR...] | for DURATION [CIDR...] | off | status] [--force]" >&2; exit 2; }
+die() {
+  echo "lan-ssh: $*" >&2
+  exit 2
+}
+usage() {
+  echo "usage: ujust lan-ssh [on [CIDR...] | for DURATION [CIDR...] | off | status] [--force]" >&2
+  exit 2
+}
 
 fw() { firewall-cmd --zone=$zone "$@"; }
 
@@ -151,7 +158,10 @@ case $cmd in
     echo "LAN SSH off."
     ;;
   legacy)
-    has_legacy && { echo "$legacy_msg"; exit 0; }
+    has_legacy && {
+      echo "$legacy_msg"
+      exit 0
+    }
     exit 1
     ;;
   status)
@@ -159,7 +169,10 @@ case $cmd in
     mapfile -t perm < <(lan_rules --permanent)
     mapfile -t run < <(lan_rules)
     shown=0
-    if has_legacy; then echo "WARNING: $legacy_msg"; shown=1; fi
+    if has_legacy; then
+      echo "WARNING: $legacy_msg"
+      shown=1
+    fi
     for r in "${perm[@]}"; do
       [[ -n $r ]] || continue
       ((shown == 2)) || echo "LAN SSH is on, from:"
