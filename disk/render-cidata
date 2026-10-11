@@ -12,7 +12,7 @@ import sys
 import yaml
 
 KEYS = {"image", "hostname", "user", "timezone", "ssh_keys", "tailscale_authkey",
-        "tailscale_authkey_file", "wifi", "password"}
+        "tailscale_authkey_file", "wifi", "password", "encrypt", "recovery_key"}
 WIFI_KEYS = {"ssid", "password", "country"}
 KEY_PREFIXES = ("ssh-", "ecdsa-", "sk-ssh-", "sk-ecdsa-")
 
@@ -55,6 +55,23 @@ def load(path):
         if not str(k).startswith(KEY_PREFIXES):
             fail(f"ssh_keys: not an OpenSSH public key: {str(k)[:20]}...")
 
+    encrypt = cfg.get("encrypt", False)  # opt-in; Task 14 flips the default
+    if not isinstance(encrypt, bool):
+        fail("encrypt: true or false")
+    recovery_key = cfg.get("recovery_key")
+    if recovery_key is not None:
+        recovery_key = str(recovery_key)
+        if recovery_key.startswith("AGE-SECRET-KEY-1"):
+            fail("recovery_key: that's an age private key; use its public key (age1...)")
+        if not re.fullmatch(r"age1[02-9ac-hj-np-z]{58}", recovery_key):
+            fail("recovery_key: expected an age public key (age1 followed by 58 characters)")
+    # age can't encrypt to ecdsa or FIDO (sk-) SSH keys, only ssh-ed25519 and ssh-rsa.
+    recipients = [recovery_key] if recovery_key else [
+        str(k) for k in keys if str(k).startswith(("ssh-ed25519 ", "ssh-rsa "))]
+    if encrypt and not recipients:
+        fail("encrypt: no recovery recipient: age can't encrypt to ecdsa or FIDO (sk-) SSH keys; "
+             "add an ssh-ed25519 or ssh-rsa key to ssh_keys, or set recovery_key: age1...")
+
     ts = cfg.get("tailscale_authkey")
     if "tailscale_authkey_file" in cfg:
         kf = os.path.join(os.path.dirname(os.path.abspath(path)),
@@ -73,7 +90,8 @@ def load(path):
             fail(f"wifi: unknown keys: {', '.join(sorted(unknown))}")
         if wifi.get("country") is not None:
             wifi = dict(wifi, country=country_code(wifi["country"]))
-    return host, user, [str(k) for k in keys], cfg.get("timezone"), ts, wifi, pw_hash
+    return (host, user, [str(k) for k in keys], cfg.get("timezone"), ts, wifi, pw_hash,
+            encrypt, recipients)
 
 
 def country_code(value):
@@ -95,6 +113,13 @@ def write_private(path, data):
     os.chmod(path, 0o600)
 
 
+def write_public(path, data):
+    """Not secret (an opt-in marker, public recipients); the image reads them from CIDATA."""
+    with open(path, "w") as f:
+        f.write(data)
+    os.chmod(path, 0o644)
+
+
 def dump(data):
     return yaml.safe_dump(data, sort_keys=False, default_flow_style=False, allow_unicode=True,
                           width=4096)
@@ -107,7 +132,7 @@ def main():
     if os.stat(config).st_mode & 0o077:
         print(f"render-cidata: warning: {config} is readable by others; chmod 600 it",
               file=sys.stderr)
-    host, user, keys, tz, ts, wifi, pw_hash = load(config)
+    host, user, keys, tz, ts, wifi, pw_hash, encrypt, recipients = load(config)
 
     ud = {
         "hostname": host,
@@ -130,6 +155,12 @@ def main():
 
     os.makedirs(out, mode=0o700, exist_ok=True)
     write_private(os.path.join(out, "user-data"), "#cloud-config\n" + dump(ud))
+    write_public(os.path.join(out, "juniper-encrypt"), "on\n" if encrypt else "off\n")
+    rec_path = os.path.join(out, "juniper-recovery.txt")
+    if encrypt:
+        write_public(rec_path, "".join(r + "\n" for r in recipients))
+    elif os.path.exists(rec_path):
+        os.remove(rec_path)
     nc_path = os.path.join(out, "network-config")
     if wifi:
         ap = {"password": str(wifi["password"])} if wifi.get("password") is not None else {}

@@ -1389,6 +1389,71 @@ test_render_cidata_rejects_bad_config() {
   done
 }
 
+enc_config() { # enc_config FILE 'extra yaml lines'
+  printf 'user: me\nssh_keys:\n  - ssh-ed25519 AAAAC3ed25519 a@b\n  - ecdsa-sha2-nistp256 AAAAE2ecdsa c@d\n  - sk-ssh-ed25519@openssh.com AAAAsk e@f\n%s\n' "$2" >"$1"
+  chmod 600 "$1"
+}
+AGE_PUB=age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqx
+
+test_render_cidata_encrypt_default_off() {
+  enc_config "$T/e.yaml" ""
+  "$ROOT/disk/render-cidata" "$T/e.yaml" "$T/o"
+  check "encrypt: marker off" test "$(cat "$T/o/juniper-encrypt")" = off
+  check "encrypt: no recovery file when off" test ! -e "$T/o/juniper-recovery.txt"
+  check "encrypt: marker mode 0644" test "$(stat -c %a "$T/o/juniper-encrypt")" = 644
+}
+
+test_render_cidata_encrypt_on_uses_ssh_recipients() {
+  enc_config "$T/e.yaml" "encrypt: true"
+  "$ROOT/disk/render-cidata" "$T/e.yaml" "$T/o"
+  check "encrypt: marker on" test "$(cat "$T/o/juniper-encrypt")" = on
+  check "encrypt: only the ed25519 key" test "$(cat "$T/o/juniper-recovery.txt")" = "ssh-ed25519 AAAAC3ed25519 a@b"
+  check "encrypt: recovery mode 0644" test "$(stat -c %a "$T/o/juniper-recovery.txt")" = 644
+  enc_config "$T/rsa.yaml" "encrypt: true"
+  sed -i 's/^  - ssh-ed25519.*/  - ssh-rsa AAAArsa r@s/' "$T/rsa.yaml"
+  "$ROOT/disk/render-cidata" "$T/rsa.yaml" "$T/o2"
+  check "encrypt: ssh-rsa accepted" test "$(cat "$T/o2/juniper-recovery.txt")" = "ssh-rsa AAAArsa r@s"
+}
+
+test_render_cidata_recovery_key_overrides() {
+  enc_config "$T/e.yaml" "encrypt: true
+recovery_key: $AGE_PUB"
+  "$ROOT/disk/render-cidata" "$T/e.yaml" "$T/o"
+  check "recovery_key replaces SSH recipients" test "$(cat "$T/o/juniper-recovery.txt")" = "$AGE_PUB"
+}
+
+test_render_cidata_encrypt_refuses_without_recipient() {
+  printf 'user: me\nencrypt: true\nssh_keys:\n  - ecdsa-sha2-nistp256 AAAAE2ecdsa c@d\n  - sk-ssh-ed25519@openssh.com AAAAsk e@f\n' >"$T/n.yaml"
+  chmod 600 "$T/n.yaml"
+  check "encrypt: no recipient refused" fails "$ROOT/disk/render-cidata" "$T/n.yaml" "$T/o"
+  check "encrypt: no-recipient message" stderr_has "no recovery recipient" "$ROOT/disk/render-cidata" "$T/n.yaml" "$T/o"
+  sed -i 's/^encrypt: true/encrypt: false/' "$T/n.yaml"
+  check "encrypt: false with only FIDO keys is fine" "$ROOT/disk/render-cidata" "$T/n.yaml" "$T/o3"
+}
+
+test_render_cidata_rejects_bad_recovery_key() {
+  enc_config "$T/e1.yaml" "encrypt: true
+recovery_key: age1short"
+  check "recovery_key: short refused" fails "$ROOT/disk/render-cidata" "$T/e1.yaml" "$T/o1"
+  enc_config "$T/e2.yaml" "encrypt: true
+recovery_key: AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ"
+  check "recovery_key: private key refused" fails "$ROOT/disk/render-cidata" "$T/e2.yaml" "$T/o2"
+  check "recovery_key: private key message" stderr_has "that's an age private key" "$ROOT/disk/render-cidata" "$T/e2.yaml" "$T/o2"
+}
+
+test_render_cidata_encrypt_must_be_bool() {
+  local v
+  for v in '"yes"' maybe; do
+    enc_config "$T/b.yaml" "encrypt: $v"
+    check "encrypt: $v refused" fails "$ROOT/disk/render-cidata" "$T/b.yaml" "$T/ob"
+    check "encrypt: $v message" stderr_has "encrypt: true or false" "$ROOT/disk/render-cidata" "$T/b.yaml" "$T/ob"
+  done
+  for v in true yes; do
+    enc_config "$T/b.yaml" "encrypt: $v"
+    check "encrypt: $v accepted" "$ROOT/disk/render-cidata" "$T/b.yaml" "$T/ok-$v"
+  done
+}
+
 # lsblk_json JSON: stub lsblk to print JSON (the -J output check-target asks for)
 lsblk_json() { stub lsblk "cat <<'EOF'
 $1

@@ -20,6 +20,14 @@ ssh_keys:
   - ssh-ed25519 AAAA...replace-me me@laptop
   # Your GitHub keys: gh api user/keys --jq '.[] | "\(.key) \(.title)"'
 
+# First-boot disk encryption (LUKS2 root). Opt-in: off unless you set `encrypt: true`.
+# The recovery key is sealed to the ssh-ed25519 / ssh-rsa keys in ssh_keys above, so your SSH
+# key FILE (private key) is the recovery key. FIDO (sk-) and ECDSA keys can't be recipients,
+# and a key that lives only in an agent can't decrypt: keep the key file somewhere safe.
+# With no usable key here, encrypt: true refuses; add one or set recovery_key.
+# encrypt: true
+# recovery_key: age1...          # optional: an age PUBLIC key, used instead of ssh_keys
+
 # A one-off, pre-approved, TAGGED auth key (https://login.tailscale.com/admin/settings/keys).
 # Tagged devices don't expire, so the firewall lockdown can't lock you out. The key turns on
 # Tailscale SSH: your tailnet policy needs an "ssh" rule allowing you into that tag.
