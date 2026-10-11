@@ -3243,12 +3243,17 @@ test_fwkey_probe_without_cli() {
 # Hardware finding: pre-2026-01-21 Pi 5 firmware wedges the mailbox on hmac. No call at all.
 test_fwkey_firmware_too_old_makes_no_calls() {
   local n
-  for n in 1762364238 1769002726 missing short; do # 2025-11-05 (the board), one below the fix
+  # 2025-11-05 (the board), one below the fix, and files that aren't exactly 4 bytes (GNU od
+  # zero-pads a short word: \xff\xff would read as 4294901760)
+  for n in 1762364238 1769002726 missing short short2 short3 long; do
     fwkey_env
     echo not-set >"$T/fw.mode"
     case $n in
       missing) rm -f "$JUNIPER_DT/chosen/bootloader/build-timestamp" ;;
       short) printf '\001\002' >"$JUNIPER_DT/chosen/bootloader/build-timestamp" ;;
+      short2) printf '\377\377' >"$JUNIPER_DT/chosen/bootloader/build-timestamp" ;;
+      short3) printf '\377\377\377' >"$JUNIPER_DT/chosen/bootloader/build-timestamp" ;;
+      long) printf '\377\377\377\377\000' >"$JUNIPER_DT/chosen/bootloader/build-timestamp" ;;
       *) fw_build "$n" ;;
     esac
     check "fwkey ($n): probe too old" test "$("$LIBEXEC/fwkey" probe)" = unavailable:firmware-too-old
@@ -3298,6 +3303,22 @@ test_fwkey_hung_firmware_is_wedged() {
   check "fwkey: after wedge, instant" test $((SECONDS - start)) -le 1
   check "fwkey: no call after the wedge" test "$(fw_calls)" = 1
   check "fwkey: no genkey" not_called "rpi-fw-crypto genkey"
+}
+
+# A NUL in the output ends `read -d ''` early: never wait on a child that may still run.
+test_fwkey_nul_output_is_not_waited_on() {
+  local start
+  fwkey_env
+  export JUNIPER_FWKEY_DEADLINE=2
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub rpi-fw-crypto 'printf "x\0y"; sleep 4'
+  start=$SECONDS
+  "$LIBEXEC/fwkey" probe >"$T/out" 2>/dev/null
+  check "fwkey: NUL output returns at once" test $((SECONDS - start)) -le 1
+  check "fwkey: NUL output is unavailable" grep -q '^unavailable:' "$T/out"
+  check "fwkey: NUL output is not a wedge" test ! -e "$JUNIPER_FWKEY_WEDGED"
+  check "fwkey: NUL output never generates" fails "$LIBEXEC/fwkey" ensure
+  check "fwkey: NUL output, no genkey" not_called "rpi-fw-crypto genkey"
 }
 
 test_fwkey_hung_genkey_and_hmac_are_wedged() {

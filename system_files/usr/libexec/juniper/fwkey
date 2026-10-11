@@ -47,7 +47,7 @@ build=0
 why=
 # gate: 0 if rpi-fw-crypto may be called; else 1 with $why set. Reads files only.
 gate() {
-  local c ts
+  local c ts f
   if [[ -e $wedged ]]; then
     why=firmware-wedged
     return 1
@@ -56,7 +56,7 @@ gate() {
     why="no $vcio"
     return 1
   fi
-  c=$(tr '\0' ' ' <"$dt/compatible" 2>/dev/null) || c=
+  c=$(tr '\0' ' ' 2>/dev/null <"$dt/compatible") || c=
   case " $c " in
     *" brcm,bcm2712"*) ;;
     *" brcm,bcm2711"*)
@@ -68,8 +68,13 @@ gate() {
       return 1
       ;;
   esac
-  # Big-endian u32, read like rpi-eeprom-update / the healthcheck's tryboot flag.
-  ts=$(od -An -tu4 --endian=big -N4 "$dt/chosen/bootloader/build-timestamp" 2>/dev/null | tr -d ' \n') || ts=
+  # Big-endian u32, read like rpi-eeprom-update / the healthcheck's tryboot flag. Exactly 4
+  # bytes: GNU od zero-pads a short word and exits 0 (\xff\xff would read as 4294901760).
+  f=$dt/chosen/bootloader/build-timestamp
+  ts=
+  if [[ -r $f && $(wc -c 2>/dev/null <"$f") == 4 ]]; then
+    ts=$(od -An -tu4 --endian=big -N4 "$f" 2>/dev/null | tr -d ' \n') || ts=
+  fi
   if [[ ! $ts =~ ^[0-9]{1,10}$ ]] || ((10#$ts < min_build)); then
     why=firmware-too-old
     return 1
@@ -88,7 +93,7 @@ derive_input() { printf '%s\0%s' "$label" "$msg_id"; }
 # holds none of our stdio (so a stuck child can't hold up a caller's $(...)). Sets fw_out
 # (stdout and stderr) and fw_rc. Returns 1, after writing the wedged marker, if it overran.
 fw_call() {
-  local input=$1 fd pid
+  local input=$1 fd pid rc=0
   shift
   fw_out=
   fw_rc=0
@@ -97,9 +102,17 @@ fw_call() {
     "$input" | "$fw" "$@"
   )
   pid=$!
-  if IFS= read -r -d '' -t "$deadline" -u "$fd" fw_out || (($? <= 128)); then
+  IFS= read -r -d '' -t "$deadline" -u "$fd" fw_out || rc=$?
+  if ((rc == 1)); then # EOF: the child is done
     exec {fd}<&-
     wait "$pid" || fw_rc=$?
+    return 0
+  fi
+  if ((rc <= 128)); then
+    # A NUL (rc 0) or a read error: not an answer, and the child may still run. Don't wait.
+    exec {fd}<&-
+    fw_out=
+    fw_rc=255
     return 0
   fi
   exec {fd}<&-
