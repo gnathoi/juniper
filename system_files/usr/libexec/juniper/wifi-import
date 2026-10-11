@@ -35,7 +35,8 @@ def valid_iface(name):
 
 
 def regulatory_domain(value):
-    code = value.upper() if isinstance(value, str) else ""
+    # isascii() first: "ß".upper() is "SS" and "ﬀ".upper() is "FF", not codes anyone typed.
+    code = value.upper() if isinstance(value, str) and value.isascii() else ""
     if REGDOM_RE.fullmatch(code):
         return code
     log(f"ignoring invalid regulatory-domain {value!r} (expected a two-letter country code)")
