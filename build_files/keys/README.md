@@ -21,6 +21,13 @@ Sources (checked 2026-10-11):
   by `keyserver.ubuntu.com` and `keys.openpgp.org` (second fetch paths, not an attestation
   by Tailscale).
 
+What is and isn't signed: package signatures are checked against the keys above for every
+repository (`gpgcheck=1`), but only the Tailscale repository's metadata is signed too
+(`repo_gpgcheck=1`). EPEL, AlmaLinux and CRB metadata isn't gpg-checked; it is authenticated
+only by the metalink/HTTPS transport. A compromised mirror or TLS path can therefore withhold
+or roll back updates, or hide a fix, but cannot get an unsigned or wrongly signed package
+installed.
+
 How they're used:
 
 - EPEL: `build.sh` downloads `epel-release`, verifies its signature against

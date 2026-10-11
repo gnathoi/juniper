@@ -83,7 +83,8 @@ even if everything just worked.
    it. Tagged devices never expire, so the lockdown can't lock you out later. The key turns on Tailscale SSH, so your
    [tailnet policy](https://tailscale.com/kb/1337/policy-syntax) needs to let you in to that
    tag. Keep it narrow: an admin group, SSH as your login user only (no root: use `sudo`),
-   and only the ports you use, in place of the default allow-all rule. For example
+   and only the ports you use, in place of the default allow-all rule (a `tcp:22`-only grant
+   also blocks ICMP and every other port, so add the ports for the services you run). For example
    (`you` is the `user` in your flash config):
 
    ```json

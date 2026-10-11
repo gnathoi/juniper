@@ -81,7 +81,8 @@ def country_code(value):
     root-owned modprobe config, so nothing else may get through."""
     if isinstance(value, bool):  # YAML 1.1: unquoted NO (Norway) is false, ON is true
         fail('wifi: country: quote the code, e.g. country: "NO" (YAML reads NO as false)')
-    code = str(value).upper() if isinstance(value, str) else None
+    # isascii() first: "ß".upper() is "SS" and "ﬀ".upper() is "FF", not codes anyone typed.
+    code = value.upper() if isinstance(value, str) and value.isascii() else None
     if code is None or not re.fullmatch(r"[A-Z]{2}", code):
         fail(f"wifi: country must be a two-letter ISO 3166-1 code such as GB, got {value!r}")
     return code
