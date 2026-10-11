@@ -93,14 +93,17 @@ and `run0` or `sudo` for the write.
     install -Dm600 examples/flash.yaml ~/.config/juniper/flash.yaml   # fill it in
     just flash /dev/sdX ~/.config/juniper/flash.yaml
 
-The config ([`examples/flash.yaml`](examples/flash.yaml)) holds the image (`juniper` or
-`juniper-minimal`), hostname, user, SSH keys, timezone, Tailscale key and Wi-Fi. `just flash`
-downloads the latest release (or pass a tag or a local `.raw.xz` as a third argument),
-checks its cosign signature, refuses anything but a removable, USB or SD card disk, shows
-what it will write and asks for a y/N before erasing it. For `juniper-desktop` it also asks
-for a password (the headless images ask only if the config has `password: prompt`); only a hash is written.
+The config ([`examples/flash.yaml`](examples/flash.yaml)) holds the image (`juniper`,
+`juniper-minimal` or the experimental `juniper-desktop`), hostname, user, SSH keys, timezone,
+Tailscale key and Wi-Fi. `just flash` downloads the latest release (or pass a tag or a local
+`.raw.xz` as a third argument), checks its cosign signature, refuses anything but a
+removable, USB or SD card disk, shows what it will write and asks for a y/N before erasing
+it. For `juniper-desktop` it also asks for a password (the headless images ask only if the
+config has `password: prompt`); only a hash is written.
 
 ### Flash by hand (any OS)
+
+`juniper-desktop` has no disk image yet (it isn't published), so this is for the other two.
 
 Download `juniper-*.raw.xz` or `juniper-minimal-*.raw.xz` and its `.bundle` from
 [Releases](https://github.com/gnathoi/juniper/releases), verify it, and flash it with any
