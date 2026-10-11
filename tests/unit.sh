@@ -4426,6 +4426,7 @@ test_initramfs_installs_every_script_command() {
 
 # unlock_env [with-cidata-file]: a removable card with CIDATA and juniper-root; age yields the
 # passphrase (built so no stub or log contains it literally); cryptsetup checks its stdin.
+# shellcheck disable=SC2016 # the stubs expand when they run
 unlock_env() {
   export JUNIPER_MEDIA_DIR=$T/media HOME=$T/home
   mkdir -p "$T/media/CIDATA" "$HOME/.ssh"

@@ -180,8 +180,8 @@ upgrades your brew packages automatically (`brew-update.timer`, `brew-upgrade.ti
 
 ### If a device is lost or stolen
 
-The root filesystem is not encrypted (encryption is tracked in #50). Whoever holds the card
-can read the Tailscale node state (a working tailnet node), SSH host keys, Wi-Fi passwords,
+The root filesystem is not encrypted unless you opted in (see "Encryption at rest" below).
+Whoever holds a plain card can read the Tailscale node state (a working tailnet node), SSH host keys, Wi-Fi passwords,
 password hashes and workload data. The boot partition is unsigned too, so a card that comes
 back may have been modified. Revoke in this order:
 
@@ -195,6 +195,40 @@ back may have been modified. Revoke in this order:
 
 What is verified: OS updates are signature-checked before they install. Nothing verifies
 the boot chain on the card itself.
+
+### Encryption at rest
+
+Opt-in for now: set `encrypt: true` in flash.yaml (it becomes the default after the first
+hardware run). On first boot the Pi encrypts the root filesystem (LUKS2) before anything
+secret is written. It is bound to this board and this card, so it unlocks by itself only
+here. A stolen card yields nothing: Wi-Fi passwords, SSH host keys, the Tailscale node
+state, password hashes and workload data sit inside the encrypted root. First boot takes a
+few extra minutes; don't cut the power (it resumes if you do). `ujust pi-status` says
+"Storage: encrypted".
+
+- **The one-time key.** If the board has no device key, first boot writes one into the Pi's
+  one-time-programmable memory, once per board. It is permanent. Raspberry Pi tools reuse
+  this key rather than replace it, and secure boot later (#73) can still use it.
+  Never run `rpi-otp-private-key -w -f`: it corrupts the key and the card is then
+  recoverable only with your recovery key.
+- **Hardware.** Pi 5 only, with a bootloader EEPROM built 2026-01-21 or later (older ones
+  have an HMAC lock-up bug). Otherwise the card stays plain, with a "NOT ENCRYPTED" warning.
+  Update with `sudo rpi-eeprom-update -a` (the image ships 2026-05-11); an EEPROM update has
+  no tryboot fallback. Pi 4 is unverified, so it stays plain. A card not written by
+  `just flash`, or flashed with no usable recovery key, stays plain too.
+- **Limits.** Anyone holding both the board and the card can unlock it until secure boot
+  (#73); a card that is modified and returned can capture the key (evil maid, #73); root on
+  the running device can derive the key. A USB disk with no serial binds to the board only,
+  and an SD card in a USB reader binds to the reader.
+- **Recovery.** The recovery key is age-encrypted to the SSH keys in flash.yaml (or
+  `recovery_key:`, an age public key, instead). If the board dies, put the card in a Linux
+  laptop and run `just unlock-card /dev/sdX [IDENTITY]` (default `~/.ssh/id_ed25519`, then
+  `id_rsa`): it mounts the root read-only at `/run/media/$USER/juniper-recovered`;
+  `just unlock-card --close` undoes it. Keep that SSH private key as a file: age can't use an
+  agent or a hardware key. Moving a card to a new board (re-binding) isn't built yet (#76);
+  copy the data off and reflash.
+- **Alert.** `juniper_encrypted == 0 or juniper_encryption_recovery_sealed == 0` catches a
+  device that is plain or whose recovery key isn't sealed yet.
 
 ### Storage on long-running devices
 
