@@ -89,6 +89,8 @@ test -x /usr/libexec/juniper/metrics
 need_enabled juniper-update.timer juniper-image-prune.timer juniper-metrics.timer juniper-reboot.timer juniper-healthcheck.service juniper-lan-ssh-status.service
 need_cmds rpi-bootc-bootloader
 grep -qx 'TRYBOOT=1' /etc/rpi-bootc-bootloader/tryboot.conf
+test -x /usr/libexec/juniper/bootloader
+systemctl cat ostree-finalize-staged.service | grep -qx 'ExecStop=/usr/libexec/juniper/bootloader finalize-staged'
 grep -qx 'OnCalendar=Tue \*-\*-\* 04:00:00' /usr/lib/systemd/system/juniper-reboot.timer || {
   echo "reboot timer default is not Tue 04:00" >&2
   exit 1

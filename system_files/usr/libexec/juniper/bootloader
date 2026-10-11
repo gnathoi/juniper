@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# rpi-bootc-bootloader with the FAT partition named explicitly. Its own guess rewrites the
+# /sysroot device name (sed 's/[0-9]+$/1/'), which names the root itself when root is on
+# /dev/mapper (LUKS): finalize-staged then silently skips the sync. cidata-device walks
+# partition/LUKS/LVM layers to the boot disk's CIDATA.
+set -euo pipefail
+MNTDEV=$("${JUNIPER_CIDATA_DEVICE:-/usr/libexec/juniper/cidata-device}") || {
+  echo "bootloader: can't find this disk's CIDATA partition; not touching the firmware config" >&2
+  exit 1
+}
+export MNTDEV
+exec rpi-bootc-bootloader "$@"
