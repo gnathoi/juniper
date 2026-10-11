@@ -22,6 +22,12 @@ Unreleased as its release notes, then moves those entries under the release's ta
   same image fails a second time it is held (recorded in `/var/lib/juniper/bad-digests`) and
   not booted again, while a newer image proceeds. The login status and `ujust pi-status` show
   a held update, and on `juniper-desktop` it gets no "Update ready" notice or deferral.
+- Storage budgets for unattended devices (part of #54): the daily download skips an update
+  (and says so) when under 2048 MiB is free (`MIN_FREE_MB` in `/etc/juniper/update.conf`),
+  after pruning dangling images; `juniper-image-prune.timer` prunes dangling podman images
+  weekly; the journal keeps 1G free; the login banner and `ujust pi-status` warn about a
+  skipped update and about under 10% or 1 GiB free on `/`. README: "Storage on long-running
+  devices".
 
 ### Changed
 
