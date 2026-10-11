@@ -3148,7 +3148,8 @@ case $1 in
   genkey) [[ $mode == gen-fails ]] && { echo "Last crypto error: 10 (not blank)" >&2; exit 246; }
           echo ok >"$T/fw.mode"; echo "Successfully generated ECDSA key in slot 1" ;;
   set-key-status) [[ $mode == nolock ]] && { echo "Last crypto error: 2 (EINVAL)" >&2; exit 254; }; echo "Set key 1 status" ;;
-  get-key-status) [[ $mode == nolock ]] && echo "Key 1 status: 0x00000101 (x)" || echo "Key 1 status: 0x00001b01 (x)" ;;
+  get-key-status) [[ -n ${FW_STATUS:-} ]] && { echo "Key 1 status: $FW_STATUS (x)"; exit 0; }
+          [[ $mode == nolock ]] && echo "Key 1 status: 0x00000101 (x)" || echo "Key 1 status: 0x00001b01 (x)" ;;
 esac'
 }
 fw_calls() { grep -c '^rpi-fw-crypto' "$CALLS" || true; }
@@ -3267,6 +3268,27 @@ test_fwkey_firmware_too_old_makes_no_calls() {
   rm -f "$T/fw.mode"
   fw_build 1769002727 # pieeprom-2026-01-21: the HMAC lock-up fix
   check "fwkey: 2026-01-21 passes the gate" test "$("$LIBEXEC/fwkey" probe)" = ok
+}
+
+# Hardware finding: on pre-2026-06-17 firmware, bit 8 of the key status is the global lock
+# (config.txt lock_device_private_key=1) and it also blocks genkey (error 4). Never try.
+test_fwkey_config_locked_blank_key_skips_genkey() {
+  fwkey_env
+  fw_build 1781654812 # one below the fine-grained locks
+  echo not-set >"$T/fw.mode"
+  export FW_STATUS=0x00000101
+  check "fwkey: ensure on a config-locked blank key" test "$("$LIBEXEC/fwkey" ensure || true)" = unavailable:key-locked-by-config
+  check "fwkey: ensure fails" fails "$LIBEXEC/fwkey" ensure
+  check "fwkey: no genkey when config-locked" not_called "rpi-fw-crypto genkey"
+  echo locked >"$T/fw.mode" # pubkey itself answers error 4
+  check "fwkey: probe says config lock" test "$("$LIBEXEC/fwkey" probe)" = unavailable:key-locked-by-config
+  export FW_STATUS=0x00000001 # no bit 8: a real error 4 stays a firmware error
+  check "fwkey: no bit 8 keeps the firmware error" test "$("$LIBEXEC/fwkey" probe)" = "unavailable:firmware error 4 (exit 252)"
+  fw_build 1790000000 # newer firmware: bit 8 is READ_LOCKED only, genkey is not blocked
+  export FW_STATUS=0x00000101
+  echo not-set >"$T/fw.mode"
+  check "fwkey: newer firmware still generates" test "$("$LIBEXEC/fwkey" ensure)" = generated
+  unset FW_STATUS
 }
 
 test_fwkey_pi4_unverified() {

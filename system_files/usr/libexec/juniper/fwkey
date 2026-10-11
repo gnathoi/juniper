@@ -22,6 +22,8 @@
 #     wedged marker is written, and no further mailbox call is made this boot. Recovery is a
 #     reboot: the hardware watchdog or a forced one (a plain reboot may block on the wedged
 #     mailbox; `echo b >/proc/sysrq-trigger` doesn't). Callers fail open.
+#   - Firmware < 2026-06-17 with status bit 8 (the global lock, set by an old image's config.txt
+#     lock_device_private_key=1) also blocks genkey: unavailable:key-locked-by-config, no genkey.
 #   - Unknown answers mean "don't know", never "ok", "not-set" or "locked".
 set -euo pipefail
 sysfs=${JUNIPER_SYSFS:-/sys}
@@ -126,8 +128,20 @@ fw_call() {
 
 hmac_hex() { fw_call "$1" hmac --in /dev/stdin --key-id 1 --outform hex; }
 
+# config_locked: 0 if the key status has bit 8 set on firmware older than lock_build. There bit
+# 8 is the global lock that config.txt's lock_device_private_key=1 sets, and it also blocks
+# genkey (error 4, hardware finding): this boot can't provision a key. On newer firmware bit 8
+# is READ_LOCKED only and genkey still works. Reads status only; false on any doubt.
+config_locked() {
+  local hex
+  ((build < lock_build)) || return 1
+  fw_call no_input get-key-status 1 && ((fw_rc == 0)) || return 1
+  hex=$(first_line "$(printf '%s\n' "$fw_out" | sed -n 's/^Key 1 status: 0x\([0-9a-fA-F]\{1,8\}\).*/\1/p')")
+  [[ -n $hex ]] && ((16#$hex & 0x100))
+}
+
 probe() {
-  local err
+  local err rc
   gate || {
     echo "unavailable:$why"
     return
@@ -137,11 +151,18 @@ probe() {
     return
   }
   err=$(fw_error "$fw_out")
-  case $fw_rc in
+  rc=$fw_rc
+  case $rc in
     0) echo ok ;;
     250) echo not-set ;;
     249) echo unavailable:invalid-key ;;
-    *) echo "unavailable:firmware error ${err:-none} (exit $fw_rc)" ;;
+    *)
+      if [[ $err == 4 ]] && config_locked; then
+        echo unavailable:key-locked-by-config
+        return
+      fi
+      echo "unavailable:firmware error ${err:-none} (exit $rc)"
+      ;;
   esac
 }
 
@@ -154,7 +175,12 @@ ensure() {
       echo ok
       return
       ;;
-    not-set) ;;
+    not-set)
+      gate && config_locked && {
+        echo "unavailable:key-locked-by-config"
+        return 1
+      }
+      ;;
     unavailable:*)
       echo "$state"
       return 1

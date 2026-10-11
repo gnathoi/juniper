@@ -2,5 +2,3 @@
 disable_splash=1
 camera_auto_detect=0
 display_auto_detect=0
-# The firmware refuses raw reads of the OTP device key (rpi-fw-crypto privkey); hmac and sign still work.
-lock_device_private_key=1
