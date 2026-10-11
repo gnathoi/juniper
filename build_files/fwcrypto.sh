@@ -11,7 +11,8 @@ sha256=$(sed -n 's/^sha256=//p' /fwcrypto.lock)
   exit 1
 }
 
-dnf -y install gcc cmake gnutls-devel
+# gcc-c++: upstream project() enables C and CXX by default (no C++ is compiled).
+dnf -y install gcc gcc-c++ cmake gnutls-devel
 
 curl -fsSLo /src.tgz "https://codeload.github.com/raspberrypi/utils/tar.gz/$commit"
 echo "$sha256  /src.tgz" | sha256sum -c
