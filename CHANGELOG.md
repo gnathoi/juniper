@@ -10,6 +10,13 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+### Added
+
+- Experimental `juniper-desktop` image (niri, lock screen first, Firefox and Bazaar from
+  Flathub); built and tested in CI, not published yet. `just flash` can set a password
+  (required for the desktop); `ujust switch` to the desktop asks for one. On it, a pending
+  update's reboot waits while the desktop is in use, at most 7 days.
+
 ## build-20261010 (2026-10-10)
 
 ### Removed

@@ -15,19 +15,21 @@ Bazzite.
 
 A Pi 5 running `juniper`. `juniper-minimal` shows just the status block.
 
-| | `juniper-minimal` | `juniper` |
-|---|---|---|
-| Purpose | appliance base | dev box |
-| Tailscale, flash-time join, firewall lockdown, `ujust lan-ssh` | yes | yes |
-| Podman + quadlets, nightly `podman auto-update`, firewalld | yes | yes |
-| cloud-init first boot, secrets scrubbed from the boot partition | yes | yes |
-| Signed weekly updates, reboot window, firmware tryboot fallback | yes | yes |
-| zram, journald cap, hardware watchdog, `noatime` | yes | yes |
-| `ujust` core: update, update-schedule, lan-ssh, tailscale-*, pi-status, enable-metrics | yes | yes |
-| Login status (Tailscale, update state) | yes | yes |
-| Juniper logo + system summary at login | no | yes |
-| Homebrew, distrobox, git; zellij, neovim, btop, ripgrep, fzf via a Brewfile | no | yes |
-| `ujust devbox`, `ujust install-podlet` | no | yes |
+| | `juniper-minimal` | `juniper` | `juniper-desktop` |
+|---|---|---|---|
+| Purpose | appliance base | dev box | dev box with a screen (experimental) |
+| Interface | headless | headless | niri desktop |
+| Tailscale, flash-time join, firewall lockdown, `ujust lan-ssh` | yes | yes | yes |
+| Podman + quadlets, nightly `podman auto-update`, firewalld | yes | yes | yes |
+| cloud-init first boot, secrets scrubbed from the boot partition | yes | yes | yes |
+| Signed weekly updates, reboot window, firmware tryboot fallback | yes | yes | yes |
+| zram, journald cap, hardware watchdog, `noatime` | yes | yes | yes |
+| `ujust` core: update, update-schedule, lan-ssh, tailscale-*, pi-status, enable-metrics | yes | yes | yes |
+| Login status (Tailscale, update state) | yes | yes | yes |
+| Juniper logo + system summary at login | no | yes | yes |
+| Homebrew, distrobox, git; zellij, neovim, btop, ripgrep, fzf via a Brewfile | no | yes | yes |
+| `ujust devbox`, `ujust install-podlet` | no | yes | yes |
+| Firefox and the Bazaar app store (Flathub) | no | no | yes |
 
 ## Images
 
@@ -43,6 +45,13 @@ Appliance base, to build `FROM`:
 ghcr.io/gnathoi/juniper-minimal:latest
 ```
 
+Desktop (experimental, not published yet; `juniper` plus niri, a lock screen, Firefox and
+Bazaar):
+
+```
+ghcr.io/gnathoi/juniper-desktop:latest
+```
+
 Every image, disk image and checksum is cosign-signed, and Pis only accept signed OS
 updates (required for everything under `ghcr.io/gnathoi`). Verify with:
 
@@ -52,12 +61,12 @@ cosign verify --key system_files/usr/share/pki/containers/juniper.pub ghcr.io/gn
 
 ## Tested hardware
 
-| Hardware | Boot media | `juniper-minimal` | `juniper` |
-|---|---|---|---|
-| Raspberry Pi 5 | microSD | ✅ tested 2026-10-10 | ✅ tested 2026-10-10 |
-| Raspberry Pi 5 | USB or NVMe | untested | untested |
-| Raspberry Pi 4, 400 | microSD or USB | untested | untested |
-| Raspberry Pi 500, CM4, CM5 | any | untested | untested |
+| Hardware | Boot media | `juniper-minimal` | `juniper` | `juniper-desktop` |
+|---|---|---|---|---|
+| Raspberry Pi 5 | microSD | ✅ tested 2026-10-10 | ✅ tested 2026-10-10 | untested |
+| Raspberry Pi 5 | USB or NVMe | untested | untested | untested |
+| Raspberry Pi 4, 400 | microSD or USB | untested | untested | untested |
+| Raspberry Pi 500, CM4, CM5 | any | untested | untested | untested |
 
 "Tested" means the full hardware acceptance run in [docs/acceptance.md](docs/acceptance.md):
 first boot, the Tailscale join and lockdown, signed updates through tryboot, and falling back
@@ -88,7 +97,8 @@ The config ([`examples/flash.yaml`](examples/flash.yaml)) holds the image (`juni
 `juniper-minimal`), hostname, user, SSH keys, timezone, Tailscale key and Wi-Fi. `just flash`
 downloads the latest release (or pass a tag or a local `.raw.xz` as a third argument),
 checks its cosign signature, refuses anything but a removable, USB or SD card disk, shows
-what it will write and asks for a y/N before erasing it.
+what it will write and asks for a y/N before erasing it. For `juniper-desktop` it also asks
+for a password (the headless images ask only if the config has `password: prompt`); only a hash is written.
 
 ### Flash by hand (any OS)
 
@@ -109,6 +119,22 @@ Tailscale, metrics, Pi status, and on `juniper` the dev box).
 
 The `juniper` image's Homebrew comes from Bluefin's `ublue-os/brew` and updates and
 upgrades your brew packages automatically (`brew-update.timer`, `brew-upgrade.timer`).
+
+### The experimental desktop
+
+`juniper-desktop` logs in automatically to a niri session that is locked at once, so the
+password is the lock screen. `just flash` and `ujust switch` both require a password. If an
+image has no usable password (say it was installed by a raw `bootc switch`), greetd still
+logs in with no lock screen and a notification asks you to set one.
+
+- `ujust desktop-config` writes a personal niri config that keeps Juniper's defaults.
+- `ujust desktop-lock-idle on|off` turns the lock after 10 minutes idle on or off.
+- `ujust flatpak-setup` retries the first-boot install of Firefox and Bazaar.
+
+A pending update's reboot waits while the desktop is in use (not idle for 30 minutes), for at
+most 7 days after the first deferral. A deferred update is retried hourly and applies once
+the desktop is idle, which can be outside the reboot window. Under tryboot the update also
+needs greetd to be running, or it falls back.
 
 ## Build your own appliance
 

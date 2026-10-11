@@ -19,7 +19,7 @@ body:
     id: image
     attributes:
       label: Image
-      options: [juniper-minimal, juniper]
+      options: [juniper-minimal, juniper, juniper-desktop]
     validations:
       required: true
   - type: input

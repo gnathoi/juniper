@@ -9,7 +9,7 @@ Start here when picking the project up on another machine.
 | A | Images (`juniper-minimal`, `juniper`), CI, releases | `specs/2026-10-09-juniper-image-design.md` | `plans/2026-10-09-juniper-image-core.md` | Done and hardened. Task 11 (Pi 5 hardware acceptance) passed, including 7b; one unexplained first-boot hang to reproduce (see Next); results in `docs/acceptance.md` |
 | B | Tailscale field in Raspberry Pi Imager (own-use fork) | `specs/2026-10-09-imager-tailscale-design.md` | `plans/2026-10-09-imager-tailscale.md` | **Parked** (2026-10-10): `just flash` covers it. Read the plan's "Parked" note before resuming |
 | C | Encryption at rest (OTP-bound LUKS2 + recovery passphrase) | not written | not written | Needs a spike. Known: rpi-bootc-bootloader finds the FAT partition by rewriting the root device name, so set `MNTDEV` under LUKS; the initramfs keeps `crypt`; without Pi signed boot an OTP key protects a stolen card, not a stolen Pi |
-| D | **Experimental `juniper-desktop` (niri)** | not written | not written | **Next, once A's remaining items are done** (owner decision 2026-10-10). Research below |
+| D | **Experimental `juniper-desktop` (niri)** | `specs/2026-10-10-juniper-desktop-design.md` | `plans/2026-10-10-juniper-desktop.md` | Implemented on `feat/juniper-desktop` (PR #49), build-only; next: hardware test plan on the owner's Pi 5 (spec), then Task 10 to publish. Research below |
 
 ## Next, in order
 
