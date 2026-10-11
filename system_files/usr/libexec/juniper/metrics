@@ -29,14 +29,12 @@ gauge() {
 }
 # flag NAME HELP COMMAND...: 1 if the command succeeds, else 0.
 flag() {
-  local name=$1 help=$2
+  local name=$1 help=$2 v=0
   shift 2
-  if "$@"; then gauge "$name" "$help" 1; else gauge "$name" "$help" 0; fi
+  "$@" && v=1
+  gauge "$name" "$help" "$v"
 }
 is_num() { [[ ${1:-} =~ ^[0-9]+$ ]]; }
-locked_and_legacy() { [[ -e $state_dir/locked && -s $run_dir/lan-ssh-legacy ]]; }
-has_file() { [[ -s $1 ]]; }
-has_marker() { [[ -e $1 ]]; }
 
 # Image: from bootc status. Metrics for a missing field are left out.
 bs=$(timeout -k 5 "$probe_timeout" bootc status --json 2>/dev/null) || bs=
@@ -66,11 +64,14 @@ if ok=$(stat -c %Y "$state_dir/health-last-ok" 2>/dev/null) && is_num "$ok"; the
 fi
 
 # The same marker files the login banner reads.
-flag juniper_update_held "1 if the staged update failed its health check twice and is held." has_file "$state_dir/update-held"
-flag juniper_update_skipped_space "1 if the last update was skipped for lack of disk space." has_file "$state_dir/update-skipped-space"
-flag juniper_tailscale_join_gave_up "1 if the first-boot Tailscale join gave up." has_marker "$state_dir/tailscale-join-gave-up"
-flag juniper_locked "1 once the device is locked down to Tailscale only." has_marker "$state_dir/locked"
-flag juniper_lan_ssh_legacy "1 if locked down but SSH is still open to every network (old lan-ssh rule)." locked_and_legacy
+flag juniper_update_held "1 if the staged update failed its health check twice and is held." test -s "$state_dir/update-held"
+flag juniper_update_skipped_space "1 if the last update was skipped for lack of disk space." test -s "$state_dir/update-skipped-space"
+flag juniper_tailscale_join_gave_up "1 if the first-boot Tailscale join gave up." test -e "$state_dir/tailscale-join-gave-up"
+flag juniper_locked "1 once the device is locked down to Tailscale only." test -e "$state_dir/locked"
+# Only after lockdown does the old unscoped `lan-ssh on` matter (as in the login banner).
+legacy=0
+[[ -e $state_dir/locked && -s $run_dir/lan-ssh-legacy ]] && legacy=1
+gauge juniper_lan_ssh_legacy "1 if locked down but SSH is still open to every network (old lan-ssh rule)." "$legacy"
 
 # Clock: yes/no from timedatectl; anything else leaves the metric out.
 sync=$(timeout -k 5 "$probe_timeout" timedatectl show -p NTPSynchronized --value 2>/dev/null) || sync=
