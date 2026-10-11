@@ -10,6 +10,8 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+## build-20261011 (2026-10-11)
+
 ### Added
 
 - `ujust trust-images NAMESPACE PUBKEY_FILE` requires your cosign signature for every image under a namespace (derived OS images via `bootc switch`/updates, and podman workload pulls including `podman auto-update`); `ujust trust-images` lists, `ujust untrust-images` removes. Juniper's own namespace can't be changed. The appliance example now pins its workload by digest and documents signed auto-update, readiness and keeping app data safe across a rollback (part of #55)
@@ -62,8 +64,6 @@ Unreleased as its release notes, then moves those entries under the release's ta
   trusted from HTTPS at every build: `epel-release` is signature-checked before it's
   installed, and `/etc/yum.repos.d/tailscale.repo` uses a local key
   (`/etc/pki/rpm-gpg/RPM-GPG-KEY-tailscale`).
-
-## build-20261011 (2026-10-11)
 
 ### Added
 
