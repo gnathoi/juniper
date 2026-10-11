@@ -1454,6 +1454,31 @@ test_render_cidata_encrypt_must_be_bool() {
   done
 }
 
+test_flash_summary_and_warning() {
+  local out
+  enc_config "$T/e.yaml" "encrypt: true"
+  "$ROOT/disk/render-cidata" "$T/e.yaml" "$T/o"
+  stub ssh-keygen 'cat >/dev/null; echo "256 SHA256:fakeprint a@b (ED25519)"'
+  out=$("$ROOT/disk/flash.sh" --summary-only "$T/e.yaml" "$T/o")
+  check "summary: encrypt yes with fingerprint" grep -qF "Encrypt:   yes (recovery: 1 SSH keys: SHA256:fakeprint)" <<<"$out"
+  check "summary: warning" grep -qF "Encryption: on first boot this Pi writes a permanent device key" <<<"$out"
+  check "summary: warning ends" grep -qF "recovery needs your SSH private key. Set encrypt: false to skip." <<<"$out"
+  enc_config "$T/e2.yaml" "encrypt: true
+recovery_key: ${AGE_PUB}"
+  "$ROOT/disk/render-cidata" "$T/e2.yaml" "$T/o2"
+  out=$("$ROOT/disk/flash.sh" --summary-only "$T/e2.yaml" "$T/o2")
+  check "summary: age key tail" grep -qF "Encrypt:   yes (recovery: age key age1…${AGE_PUB: -6})" <<<"$out"
+  enc_config "$T/e3.yaml" "encrypt: false"
+  "$ROOT/disk/render-cidata" "$T/e3.yaml" "$T/o3"
+  out=$("$ROOT/disk/flash.sh" --summary-only "$T/e3.yaml" "$T/o3")
+  check "summary: encrypt: false" grep -qF "Encrypt:   no (encrypt: false)" <<<"$out"
+  check "summary: no warning when off" not_stdout_has "Encryption: on first boot" echo "$out"
+  enc_config "$T/e4.yaml" ""
+  "$ROOT/disk/render-cidata" "$T/e4.yaml" "$T/o4"
+  out=$("$ROOT/disk/flash.sh" --summary-only "$T/e4.yaml" "$T/o4")
+  check "summary: not requested" grep -qF "Encrypt:   no (not requested)" <<<"$out"
+}
+
 # lsblk_json JSON: stub lsblk to print JSON (the -J output check-target asks for)
 lsblk_json() { stub lsblk "cat <<'EOF'
 $1
