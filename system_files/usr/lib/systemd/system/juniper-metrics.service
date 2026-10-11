@@ -4,5 +4,6 @@ Description=Write Juniper status metrics for node_exporter's textfile collector
 [Service]
 Type=oneshot
 ExecStart=/usr/libexec/juniper/metrics
+TimeoutStartSec=120
 Nice=19
 IOSchedulingClass=idle

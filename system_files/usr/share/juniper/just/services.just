@@ -12,6 +12,9 @@ enable-metrics:
     Network=host
     PodmanArgs=--pid=host
     Volume=/:/host:ro,rslave
+    # The textfile under /var/lib/juniper is var_lib_t, which container_t may not read under
+    # enforcing SELinux. Acceptable: read-only monitoring container, / is mounted read-only.
+    SecurityLabelDisable=true
     Exec=--path.rootfs=/host --collector.textfile.directory=/host/var/lib/juniper/metrics
     User=65534
     Group=65534

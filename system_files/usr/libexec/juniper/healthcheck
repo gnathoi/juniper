@@ -151,8 +151,12 @@ case ${1:-} in
     fall_back
     exit 0
     ;;
+  # juniper-metrics: probe only. No bootloader sync, no reboot, no strike, no marker file.
+  --check)
+    if healthy; then exit 0; else exit 1; fi
+    ;;
   *)
-    echo "usage: healthcheck [--fallback]" >&2
+    echo "usage: healthcheck [--fallback|--check]" >&2
     exit 2
     ;;
 esac

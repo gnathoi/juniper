@@ -2433,6 +2433,15 @@ JSON'
   stub timedatectl 'echo yes'
   stub rpm 'echo 1900000000'
   prom=$JUNIPER_METRICS_DIR/juniper.prom
+  health_stub 0
+}
+
+# health_stub CODE: fake healthcheck for the metrics script.
+health_stub() {
+  # shellcheck disable=SC2016 # expands inside the stub
+  printf '#!/usr/bin/env bash\n[[ $1 == --check ]] || exit 9\nexit %s\n' "$1" >"$T/healthcheck"
+  chmod +x "$T/healthcheck"
+  export JUNIPER_HEALTHCHECK=$T/healthcheck
 }
 
 test_metrics_writes_image_and_staged() {
@@ -2535,6 +2544,36 @@ test_healthcheck_touches_last_ok() {
   stub ip ''
   "$LIBEXEC/healthcheck" || true
   check "healthcheck: failure does not touch it" test ! -e "$JUNIPER_STATE_DIR/health-last-ok"
+}
+
+test_metrics_healthy_gauge() {
+  metrics_env
+  "$LIBEXEC/metrics"
+  check "metrics: healthy 1" grep -qx 'juniper_healthy 1' "$prom"
+  health_stub 1
+  "$LIBEXEC/metrics"
+  check "metrics: unhealthy 0" grep -qx 'juniper_healthy 0' "$prom"
+  health_stub 124
+  "$LIBEXEC/metrics"
+  check "metrics: probe error leaves healthy out" not_grep_dir juniper_healthy "$JUNIPER_METRICS_DIR"
+  check "metrics: last-ok help text" "$LIBEXEC/metrics"
+  touch "$JUNIPER_STATE_DIR/health-last-ok"
+  "$LIBEXEC/metrics"
+  check "metrics: last-ok describes confirmed boot" grep -q 'Last boot whose health check confirmed the deployment' "$prom"
+}
+
+test_healthcheck_check_mode_is_side_effect_free() {
+  health_env
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  check "healthcheck --check: healthy exits 0" "$LIBEXEC/healthcheck" --check
+  check "healthcheck --check: no bootloader sync" not_called "rpi-bootc-bootloader"
+  check "healthcheck --check: no last-ok marker" test ! -e "$JUNIPER_STATE_DIR/health-last-ok"
+  stub ip ''
+  printf '\x00\x00\x00\x01' >"$T/tryboot"
+  check "healthcheck --check: unhealthy exits 1" fails "$LIBEXEC/healthcheck" --check
+  check "healthcheck --check: no reboot even under tryboot" not_called "systemctl reboot"
+  check "healthcheck --check: no strike" test ! -e "$JUNIPER_STATE_DIR/bad-digests"
+  check "healthcheck --check: no bootc call" not_called "bootc"
 }
 
 test_motd_warns_when_clock_unsynced() {

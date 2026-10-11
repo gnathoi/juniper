@@ -232,7 +232,8 @@ metric whose input is missing is left out rather than reported wrong.
 | `juniper_image_info{image,digest,version}` | 1 for the booted image |
 | `juniper_staged_image_info{digest}` | 1 while an update is staged for the next reboot |
 | `juniper_image_timestamp_seconds` | build time of the booted image |
-| `juniper_health_last_ok_timestamp_seconds` | when a boot last passed the health check |
+| `juniper_healthy` | 1 if the health check passes right now (same probes as at boot, no side effects) |
+| `juniper_health_last_ok_timestamp_seconds` | last boot whose health check confirmed the deployment |
 | `juniper_update_held` | 1 if the staged update failed its health check twice and is held |
 | `juniper_update_skipped_space` | 1 if the last update was skipped for lack of disk space |
 | `juniper_tailscale_join_gave_up` | 1 if the first-boot Tailscale join gave up |
@@ -243,13 +244,11 @@ metric whose input is missing is left out rather than reported wrong.
 
 Example alert conditions:
 
-- Node down or offline: `up{job="juniper"} == 0`. A device that is off, or off the tailnet,
+- Node down or offline: `up{job="juniper"} == 0` (use the job name from your own scrape config). A device that is off, or off the tailnet,
   silently misses updates; this is how it shows up.
 - Update stuck: `juniper_update_held == 1`.
 - Clock wrong: `juniper_time_synced == 0` for 30 minutes.
-- No healthy boot lately: `time() - juniper_health_last_ok_timestamp_seconds > 8 * 86400`
-  (the check runs once per boot, and a device reboots only to apply an update, so size the
-  window to how often you ship images).
+- Unhealthy: `juniper_healthy == 0` for 30 minutes.
 - Image out of date: `time() - juniper_image_timestamp_seconds > 21 * 86400` (pick your N).
 
 The login banner and `ujust pi-status` also warn "Clock not synchronised (NTP)" when the

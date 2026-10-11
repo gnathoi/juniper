@@ -58,9 +58,17 @@ if [[ -n $bs ]]; then
   fi
 fi
 
+# Current health: the boot health check's probes, without its side effects (no sync, reboot or
+# strike). Exit 0/1 is healthy/unhealthy; anything else (timeout, crash) leaves the metric out.
+timeout -k 5 "${JUNIPER_METRICS_HEALTH_TIMEOUT:-90}" "${JUNIPER_HEALTHCHECK:-$(dirname "$0")/healthcheck}" --check >/dev/null 2>&1
+case $? in
+  0) gauge juniper_healthy "1 if the health check passes right now (route, Tailscale when locked, image and local hooks)." 1 ;;
+  1) gauge juniper_healthy "1 if the health check passes right now (route, Tailscale when locked, image and local hooks)." 0 ;;
+esac
+
 # healthcheck touches this when a boot is confirmed healthy.
 if ok=$(stat -c %Y "$state_dir/health-last-ok" 2>/dev/null) && is_num "$ok"; then
-  gauge juniper_health_last_ok_timestamp_seconds "Last time the boot health check passed, Unix seconds." "$ok"
+  gauge juniper_health_last_ok_timestamp_seconds "Last boot whose health check confirmed the deployment, Unix seconds." "$ok"
 fi
 
 # The same marker files the login banner reads.
@@ -80,7 +88,7 @@ case $sync in
   no) gauge juniper_time_synced "1 if the system clock is NTP-synchronised." 0 ;;
 esac
 
-kb=$(rpm -q --qf '%{BUILDTIME}\n' raspberrypi2-kernel4 2>/dev/null | sort -n | tail -n1) || kb=
+kb=$(timeout -k 5 "$probe_timeout" rpm -q --qf '%{BUILDTIME}\n' raspberrypi2-kernel4 2>/dev/null | sort -n | tail -n1) || kb=
 if is_num "$kb"; then
   gauge juniper_kernel_build_timestamp_seconds "Build time of the installed Pi kernel package, Unix seconds." "$kb"
 fi
