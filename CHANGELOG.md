@@ -10,6 +10,18 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+### Fixed
+
+- `wifi.country` must be a two-letter country code: `just flash` refuses anything else, and
+  the image ignores (and logs) a malformed Wi-Fi regulatory domain or interface name in
+  CIDATA instead of writing it into system configuration.
+- The EPEL and Tailscale package signing keys are pinned in the repository instead of
+  trusted from HTTPS at every build: `epel-release` is signature-checked before it's
+  installed, and `/etc/yum.repos.d/tailscale.repo` uses a local key
+  (`/etc/pki/rpm-gpg/RPM-GPG-KEY-tailscale`).
+
+## build-20261011 (2026-10-11)
+
 ### Added
 
 - Experimental `juniper-desktop` image (niri, Firefox and Bazaar from Flathub), published
@@ -24,16 +36,6 @@ Unreleased as its release notes, then moves those entries under the release's ta
 - SSH is explicitly key-only on every image (`/etc/ssh/sshd_config.d/40-juniper.conf`), now
   that accounts can have a password.
 - The health check names a failing image health hook and stops a hung one after 60 seconds.
-
-### Fixed
-
-- `wifi.country` must be a two-letter country code: `just flash` refuses anything else, and
-  the image ignores (and logs) a malformed Wi-Fi regulatory domain or interface name in
-  CIDATA instead of writing it into system configuration.
-- The EPEL and Tailscale package signing keys are pinned in the repository instead of
-  trusted from HTTPS at every build: `epel-release` is signature-checked before it's
-  installed, and `/etc/yum.repos.d/tailscale.repo` uses a local key
-  (`/etc/pki/rpm-gpg/RPM-GPG-KEY-tailscale`).
 
 ## build-20261010 (2026-10-10)
 
