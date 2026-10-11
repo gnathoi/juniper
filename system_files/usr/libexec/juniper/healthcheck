@@ -151,8 +151,12 @@ case ${1:-} in
     fall_back
     exit 0
     ;;
+  # juniper-metrics: probe only. No bootloader sync, no reboot, no strike, no marker file.
+  --check)
+    if healthy; then exit 0; else exit 1; fi
+    ;;
   *)
-    echo "usage: healthcheck [--fallback]" >&2
+    echo "usage: healthcheck [--fallback|--check]" >&2
     exit 2
     ;;
 esac
@@ -160,6 +164,8 @@ esac
 for ((i = 0; i < tries && SECONDS < deadline; i++)); do
   if healthy; then
     rpi-bootc-bootloader sync
+    # Read by juniper-metrics (juniper_health_last_ok_timestamp_seconds); best effort.
+    { mkdir -p "$state_dir" && touch "$state_dir/health-last-ok"; } 2>/dev/null || true
     exit 0
   fi
   ((SECONDS + interval < deadline)) || break
