@@ -3,6 +3,8 @@
 #   just image=juniper test-image   /   just image=juniper-minimal test-image
 #   just image=juniper-desktop test-image
 set -euo pipefail
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
 
 # shellcheck source=/dev/null
 . /usr/lib/os-release
@@ -134,6 +136,38 @@ for kdir in /usr/lib/modules/*/; do
     fi
   fi
 done
+# rpi-fw-crypto + age (issue #50): the OTP-bound key and recovery sealing for root encryption.
+need_cmds rpi-fw-crypto age cryptsetup sfdisk partx
+ldd /usr/bin/rpi-fw-crypto >"$tmp/ldd"
+grep -q 'librpifwcrypto.so.0 => /usr/lib64/' "$tmp/ldd"
+usage=$({ rpi-fw-crypto 2>&1 || true; })
+for sub in 'hmac --in' 'genkey' 'get-key-status' 'set-key-status'; do
+  grep -q -- "$sub" <<<"$usage" || {
+    echo "rpi-fw-crypto lacks $sub"
+    exit 1
+  }
+done
+test -s /usr/share/licenses/rpi-fw-crypto/LICENCE
+for kdir in /usr/lib/modules/*/; do
+  grep -qx 'lock_device_private_key=1' "$kdir/rpi-config.txt"
+  if grep -q 'lock_device_key_write' "$kdir/rpi-config.txt"; then
+    echo "lock_device_key_write breaks genkey"
+    exit 1
+  fi
+done
+for img in /usr/lib/modules/*/initramfs.img; do
+  lsinitrd "$img" >"$tmp/inv"
+  if grep -q 'kernel/x86/microcode' "$tmp/inv"; then
+    echo "x86 microcode in the arm64 initramfs"
+    exit 1
+  fi
+  echo "initramfs: $img: $(stat -c %s "$img") bytes"
+done
+# /dev/vcio stays root-only: it is the only barrier without the HMAC lock (ruling 4).
+if grep -rlE 'vcio.*MODE|vcio.*GROUP' /usr/lib/udev/rules.d /etc/udev/rules.d 2>/dev/null; then
+  echo "a udev rule widens /dev/vcio"
+  exit 1
+fi
 need_enabled juniper-wifi-import.service juniper-firstboot-retry.service juniper-emergency-fallback.service
 grep -qx 'prefer_fqdn_over_hostname: false' /etc/cloud/cloud.cfg.d/10-juniper-hostname.cfg
 test -f /usr/share/juniper/cidata/user-data

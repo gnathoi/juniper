@@ -6,3 +6,5 @@ display_auto_detect=1
 dtoverlay=vc4-kms-v3d
 max_framebuffers=2
 disable_fw_kms_setup=1
+# The firmware refuses raw reads of the OTP device key (rpi-fw-crypto privkey); hmac and sign still work.
+lock_device_private_key=1

@@ -52,6 +52,11 @@ rm -f "$(dirname "$resizefs")"/__pycache__/cc_resizefs.*.pyc
 cp -a /ctx/system_files/. /
 install -D -m 0644 -t /usr/share/licenses/juniper /ctx/LICENSE /ctx/THIRD_PARTY.md
 
+# rpi-fw-crypto (issue #50): built from a pinned raspberrypi/utils commit (Containerfile stage).
+cp -a /fwcrypto/usr/. /usr/
+dnf -y install age # EPEL; only /usr/bin/age is used (initramfs recovery sealing)
+dnf clean all
+
 # Initramfs: regenerate with 90-juniper.conf (system_files), dropping what a Pi never boots
 # with (46 -> 29 MB, ~30% faster initrd stage on a Pi 5), and from this build's upgraded
 # systemd/ostree instead of the base's. /root links to /var/roothome, which a build's /var
@@ -125,6 +130,9 @@ for p in sys.stdin.read().split("\0"):
 # regular files only: Linux rejects user.* xattrs on symlinks
 find /ctx/system_files -type f -printf '/%P\0' | tag juniper
 printf '%s\0' /usr/share/licenses/juniper/LICENSE /usr/share/licenses/juniper/THIRD_PARTY.md | tag juniper
+# rpi-fw-crypto: /usr/bin/rpi-fw-crypto, /usr/lib64/librpifwcrypto.so.0, header, licence
+# (regular files only: librpifwcrypto.so is a symlink)
+find /fwcrypto -type f -printf '/%P\0' | tag juniper
 # Its own layer: changes only when its inputs do (dracut --reproducible).
 printf '%s\0' /usr/lib/modules/*/initramfs.img | tag initramfs
 printf '%s\0' /usr/lib/os-release /etc/containers/policy.json /etc/containers/registries.d/juniper.yaml \
