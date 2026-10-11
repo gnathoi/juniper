@@ -7,5 +7,7 @@ ConditionPathExists=/var/lib/juniper/reboot-deferred-since
 Type=oneshot
 # `ujust update-schedule off` disables juniper-reboot.timer: then no automatic reboots at all.
 ExecCondition=/usr/bin/systemctl is-enabled --quiet juniper-reboot.timer
+# Not within 10 minutes of boot (a first-boot clock step must not trigger a reboot).
+ExecCondition=/usr/bin/awk 'BEGIN { getline <"/proc/uptime"; exit ($$1 > 600) ? 0 : 1 }'
 ExecCondition=/usr/libexec/juniper/desktop-idle
 ExecStart=/usr/libexec/juniper/apply-update

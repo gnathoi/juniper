@@ -10,6 +10,21 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+### Added
+
+- `ujust update-unhold` clears a held update's strikes (`bad-digests`) and the held note, prints which digests it cleared or "nothing held", so the image is tried again
+
+### Changed
+
+- `bootc status` shows Juniper's version (e.g. 20261011) instead of the base image's: every image sets the `org.opencontainers.image.version` label. A derived image inherits it unless it sets its own
+- `ujust pi-status` no longer echoes its commands
+
+### Fixed
+
+- A second failed health check now writes the held note at once, so the login status, `ujust pi-status` and the `juniper_update_held` metric show it right after the fallback instead of at the next update check
+- `ujust lan-ssh on` no longer lists host routes (/32, /128) or prefixes covered by another listed network (e.g. `fe80::/64` under `fe80::/10`)
+- `juniper-reboot.service` (and the desktop's hourly retry) skip a run in the first 10 minutes after boot: on a Pi without a battery clock the time step at first boot made the weekly timer fire at once and reboot a fresh device
+
 ## build-20261011 (2026-10-11)
 
 ### Added
