@@ -68,17 +68,17 @@ bump-desktop:
     trap 'rm -f "$tmp"' EXIT
     podman run --rm -v ./build_files:/b:ro,z quay.io/almalinuxorg/almalinux:10 bash -c '
       set -euo pipefail
-      pkgs=()
+      # Each package only from its own COPR, fenced like the build (desktop.sh): another COPR
+      # with a newer build of it (wlroots-epel also has niri) must not win.
       while read -r proj list; do
         [[ -z $proj || $proj == "#"* ]] && continue
         id=${proj/\//-}
-        printf "[%s]\nname=%s\nbaseurl=https://download.copr.fedorainfracloud.org/results/%s/epel-10-\$basearch/\ngpgcheck=1\ngpgkey=file:///b/copr-keys/%s.gpg\nenabled=1\n" \
-          "$id" "$proj" "$proj" "$id" >"/etc/yum.repos.d/$id.repo"
-        read -ra more <<<"$list"
-        pkgs+=("${more[@]}")
+        printf "[%s]\nname=%s\nbaseurl=https://download.copr.fedorainfracloud.org/results/%s/epel-10-\$basearch/\ngpgcheck=1\ngpgkey=file:///b/copr-keys/%s.gpg\nenabled=1\nincludepkgs=%s\n" \
+          "$id" "$proj" "$proj" "$id" "$list" >"/etc/yum.repos.d/$id.repo"
+        read -ra pkgs <<<"$list"
+        dnf -q --forcearch=aarch64 --repo="$id" \
+          repoquery --latest-limit 1 --qf "%{name}-%{evr}\n" "${pkgs[@]}" </dev/null
       done </b/desktop-copr.txt
-      dnf -q --forcearch=aarch64 --disablerepo="*" --enablerepo="yalter-niri,yselkowitz-*" \
-        repoquery --latest-limit 1 --qf "%{name}-%{evr}\n" "${pkgs[@]}"
     ' | sed -e '/^$/d' -e 's/-0:/-/' | LC_ALL=C sort -u >"$tmp"
     # repoquery silently omits packages a COPR no longer has: fail rather than ship an image without them
     missing=()
