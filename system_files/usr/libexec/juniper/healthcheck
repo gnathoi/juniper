@@ -2,8 +2,8 @@
 # Every boot (juniper-healthcheck.service): if the system is healthy, make the booted
 # deployment the firmware default; if an update booted via tryboot is unhealthy, reboot
 # so the firmware falls back to the previous deployment.
-# ponytail: a bad update is retried at each reboot window until a fixed image ships; add a
-# known-bad digest list if that ever matters.
+# An update that fails here under tryboot gets a strike (bad-digests, below) and is retried at
+# the next window; after a second failure apply-update holds it until a newer image is staged.
 set -euo pipefail
 
 state_dir=${JUNIPER_STATE_DIR:-/var/lib/juniper}
@@ -11,26 +11,74 @@ tries=${JUNIPER_HEALTH_TRIES:-20}
 interval=${JUNIPER_HEALTH_INTERVAL:-15}
 tryboot_flag=${JUNIPER_TRYBOOT_FLAG:-/proc/device-tree/chosen/bootloader/tryboot}
 health_d=${JUNIPER_HEALTH_D:-/usr/lib/juniper/health.d}
+health_local_d=${JUNIPER_HEALTH_LOCAL_D:-/etc/juniper/health.d}
+local_owner=${JUNIPER_HEALTH_LOCAL_OWNER:-0}
+boot_id_file=${JUNIPER_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}
 hook_timeout=${JUNIPER_HEALTH_HOOK_TIMEOUT:-15}
 hook_kill=${JUNIPER_HEALTH_HOOK_KILL:-5}
 # Stop retrying after this many seconds, so the tryboot fallback below always runs well before
 # juniper-healthcheck.service's TimeoutStartSec=10min kills the check (which would skip it).
 deadline=${JUNIPER_HEALTH_DEADLINE:-420}
+# Every probe is bounded the same way, so a wedged tailscaled, netlink or D-Bus can't stall a
+# try: it is killed (SIGKILL if it ignores SIGTERM) and the try counts as unhealthy.
+probe_timeout=${JUNIPER_HEALTH_PROBE_TIMEOUT:-10}
+probe_kill=${JUNIPER_HEALTH_PROBE_KILL:-5}
+
+probe() { timeout -k "$probe_kill" "$probe_timeout" "$@"; }
 
 healthy() {
-  [[ -n $(ip route show default) || -n $(ip -6 route show default) ]] || return 1
+  [[ -n $(probe ip route show default) || -n $(probe ip -6 route show default) ]] || return 1
   # Once locked, SSH over the tailnet is the only way in: Tailscale must be up, and either
   # Tailscale SSH on or sshd running (`ujust tailscale-ssh off` falls back to sshd).
   if [[ -e $state_dir/locked ]]; then
-    [[ $(tailscale status --json 2>/dev/null | jq -r '.BackendState // empty') == Running ]] || return 1
-    [[ $(tailscale debug prefs 2>/dev/null | jq -r '.RunSSH // false') == true ]] ||
-      [[ $(systemctl is-active sshd.service 2>/dev/null) == active ]] || return 1
+    local ts
+    ts=$(probe tailscale status --json 2>/dev/null) || return 1
+    [[ $(jq -r '.BackendState // empty' <<<"$ts" 2>/dev/null) == Running ]] || return 1
+    # The management path must actually work, not just tailscaled: .Self.Online is true while
+    # the node holds its map session with the coordination server (tailscaled sets it from
+    # health.GetInPollNetMap). Offline policy: a locked device that can't reach Tailscale after
+    # an update falls back. The previous image is known good, and the device stays reachable
+    # on it; the update is retried at the next window (one strike), and only a second failure
+    # holds it until a newer image ships (see quarantine below).
+    [[ $(jq -r '.Self.Online // false' <<<"$ts" 2>/dev/null) == true ]] || return 1
+    [[ $(probe tailscale debug prefs 2>/dev/null | jq -r '.RunSSH // false') == true ]] ||
+      [[ $(probe systemctl is-active sshd.service 2>/dev/null) == active ]] || return 1
   fi
   # Image-specific checks (juniper-desktop: greetd must be running). None on headless images.
-  # Each is bounded (SIGKILL if it ignores SIGTERM), so a hung hook can't stall a try.
+  run_hooks "$health_d" || return 1
+  # Local checks for appliances run from quadlets without a custom image ("a sample was
+  # stored in the last 10 minutes"). /etc is writable, so only root-controlled ones run.
+  if [[ -d $health_local_d ]]; then
+    if root_controlled "$health_local_d"; then
+      run_hooks "$health_local_d" local || return 1
+    else
+      echo "skipping local health hooks: $health_local_d is not root-owned or is group/world-writable" >&2
+    fi
+  fi
+}
+
+# Owned by root (uid $local_owner) and not group- or world-writable (symlinks followed).
+root_controlled() {
+  local uid mode
+  read -r uid mode < <(stat -L -c '%u %a' -- "$1" 2>/dev/null) || return 1
+  [[ $uid == "$local_owner" ]] && ((! (8#$mode & 8#022)))
+}
+
+# run_hooks DIR [local]: run each executable in DIR, sorted; any failure fails the try. Each is
+# bounded (SIGKILL if it ignores SIGTERM), so a hung hook can't stall a try. Local hooks that
+# aren't root-controlled are skipped and logged.
+run_hooks() {
   local hook
-  for hook in "$health_d"/*; do
-    [[ -x $hook ]] || continue
+  for hook in "$1"/*; do
+    [[ -x $hook && ! -d $hook ]] || continue
+    if [[ ${2:-} == local && -L $hook ]]; then
+      echo "skipping local health hook ${hook##*/}: symlink" >&2
+      continue
+    fi
+    if [[ ${2:-} == local ]] && ! root_controlled "$hook"; then
+      echo "skipping local health hook ${hook##*/}: not root-owned or group/world-writable" >&2
+      continue
+    fi
     timeout -k "$hook_kill" "$hook_timeout" "$hook" || {
       echo "health hook ${hook##*/} failed" >&2
       return 1
@@ -44,6 +92,71 @@ in_tryboot() {
   [[ -r $tryboot_flag ]] && [[ $(od -An -tu4 --endian=big -N4 "$tryboot_flag" | tr -d ' ') == 1 ]]
 }
 
+# Under tryboot, reboot: the firmware then boots the previous (known-good) deployment. On a
+# normal boot do nothing, so a failing check can never reboot-loop.
+fall_back() {
+  in_tryboot || return 0
+  echo "Unhealthy update under tryboot; rebooting into the previous deployment." >&2
+  quarantine || true
+  systemctl reboot
+}
+
+# Two strikes: give the booted (failed tryboot) image digest a strike in $state_dir/bad-digests
+# ("DIGEST COUNT BOOT_ID" lines; /var survives the fallback). One strike: the update is retried
+# at the next window, so a transient outage or a one-off bootloader hiccup doesn't hold back a
+# good (maybe security) update. Two strikes, on different boots: apply-update holds that digest
+# until a newer one is staged. At most one strike per boot (the main check and the OnFailure=
+# fallback can both get here). Best effort: it must never stand in the way of the reboot.
+quarantine() {
+  local digest boot count last list=$state_dir/bad-digests
+  digest=$(probe bootc status --json 2>/dev/null | jq -r '.status.booted.image.imageDigest // empty' 2>/dev/null) || true
+  if [[ ! $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo "No image digest for this deployment; no strike recorded." >&2
+    return 1
+  fi
+  boot=$(tr -cd '0-9a-zA-Z-' <"$boot_id_file" 2>/dev/null) || true
+  boot=${boot:-unknown}
+  read -r count last < <(awk -v d="$digest" '$1 == d {print $2 + 0, $3}' "$list" 2>/dev/null) || true
+  count=${count:-0}
+  if [[ $count -gt 0 && ${last:-} == "$boot" ]]; then
+    return 0
+  fi
+  count=$((count + 1))
+  if ((count >= 2)); then
+    echo "Second failure of $digest: quarantined until a newer image is staged." >&2
+  else
+    echo "First failure of $digest: it will be retried at the next update window." >&2
+  fi
+  mkdir -p "$state_dir"
+  # Newest last, each digest once, the last 10 only. Replace the list only if the new one was
+  # written in full, so a full /var can't wipe the strike history.
+  if {
+    awk -v d="$digest" '$1 != d' "$list" 2>/dev/null || true
+    echo "$digest $count $boot"
+  } | tail -n 10 >"$list.tmp"; then
+    mv -f "$list.tmp" "$list"
+  else
+    rm -f "$list.tmp"
+    echo "Could not record the strike for $digest." >&2
+    return 1
+  fi
+}
+
+case ${1:-} in
+  "") ;;
+  # juniper-healthcheck-fallback.service, via OnFailure= of juniper-healthcheck.service: the
+  # check itself died (killed at TimeoutStartSec, crashed, OOM) before it could fall back.
+  --fallback)
+    echo "juniper-healthcheck failed before confirming this boot." >&2
+    fall_back
+    exit 0
+    ;;
+  *)
+    echo "usage: healthcheck [--fallback]" >&2
+    exit 2
+    ;;
+esac
+
 for ((i = 0; i < tries && SECONDS < deadline; i++)); do
   if healthy; then
     rpi-bootc-bootloader sync
@@ -53,9 +166,6 @@ for ((i = 0; i < tries && SECONDS < deadline; i++)); do
   sleep "$interval"
 done
 
-echo "Health check failed: no default route, (locked) Tailscale or SSH over it down, or an image health hook failed." >&2
-if in_tryboot; then
-  echo "Unhealthy update under tryboot; rebooting into the previous deployment." >&2
-  systemctl reboot
-fi
+echo "Health check failed: no default route, (locked) Tailscale down, offline from its control plane or SSH over it down, or an image health hook or local health hook failed." >&2
+fall_back
 exit 1

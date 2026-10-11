@@ -26,6 +26,9 @@ fi
 
 if systemctl -q is-failed juniper-update.service; then
   upd="update failed - see: journalctl -u juniper-update"
+elif [[ -s $state_dir/update-held ]]; then
+  # Written by apply-update: the staged image failed its health check before (quarantined).
+  upd=$(head -n1 "$state_dir/update-held" | tr -cd '[:print:]')
 elif [[ -e /run/ostree/staged-deployment ]]; then
   when=$(systemctl show juniper-reboot.timer -P NextElapseUSecRealtime 2>/dev/null)
   [[ $when == n/a ]] && when=

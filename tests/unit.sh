@@ -294,8 +294,14 @@ test_changelog_repo_file() {
   check "changelog: CHANGELOG.md has Unreleased" grep -qx '## Unreleased' "$ROOT/CHANGELOG.md"
 }
 
+# tailscale status --json of a locked device that is up and connected to the control plane.
+# shellcheck disable=SC2089,SC2090 # JSON text, echoed verbatim by the stubs
+export TS_ONLINE='{"BackendState":"Running","Self":{"Online":true}}'
+
 health_env() {
-  export JUNIPER_HEALTH_TRIES=1 JUNIPER_HEALTH_INTERVAL=0 JUNIPER_TRYBOOT_FLAG=$T/tryboot
+  export JUNIPER_HEALTH_TRIES=1 JUNIPER_HEALTH_INTERVAL=0 JUNIPER_TRYBOOT_FLAG=$T/tryboot \
+    JUNIPER_HEALTH_D=$T/health.d JUNIPER_HEALTH_LOCAL_D=$T/local.d \
+    JUNIPER_HEALTH_PROBE_TIMEOUT=2 JUNIPER_HEALTH_PROBE_KILL=1
 }
 
 test_healthcheck_healthy_confirms() {
@@ -387,7 +393,7 @@ test_healthcheck_locked_tailscale_ssh_is_healthy() {
   printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
   stub ip 'echo "default via 192.168.1.1 dev wlan0"'
   # shellcheck disable=SC2016 # expands inside the stub
-  stub tailscale 'case $1 in status) echo "{\"BackendState\":\"Running\"}" ;; debug) echo "{\"RunSSH\":true}" ;; esac'
+  stub tailscale 'case $1 in status) echo "$TS_ONLINE" ;; debug) echo "{\"RunSSH\":true}" ;; esac'
   "$LIBEXEC/healthcheck"
   check "health: locked + Tailscale SSH -> healthy" called "rpi-bootc-bootloader sync"
   check "health: locked + Tailscale SSH -> no reboot" not_called "systemctl reboot"
@@ -398,7 +404,7 @@ test_healthcheck_locked_sshd_is_healthy() {
   touch "$JUNIPER_STATE_DIR/locked"
   stub ip 'echo "default via 192.168.1.1 dev wlan0"'
   # shellcheck disable=SC2016 # expands inside the stub
-  stub tailscale 'case $1 in status) echo "{\"BackendState\":\"Running\"}" ;; debug) echo "{\"RunSSH\":false}" ;; esac'
+  stub tailscale 'case $1 in status) echo "$TS_ONLINE" ;; debug) echo "{\"RunSSH\":false}" ;; esac'
   # shellcheck disable=SC2016 # expands inside the stub
   stub systemctl 'if [[ $1 == is-active ]]; then echo active; fi'
   "$LIBEXEC/healthcheck"
@@ -481,6 +487,452 @@ test_healthcheck_passing_hook_and_no_hooks() {
   : >"$CALLS"
   "$LIBEXEC/healthcheck"
   check "health: passing hook -> healthy" called "rpi-bootc-bootloader sync"
+}
+
+# A hung probe must not stall a try either: a wedged tailscaled (or ip, or systemctl) is killed
+# after the probe timeout, and the try counts as unhealthy. The stubs ignore SIGTERM.
+hang='trap "" TERM; sleep 30'
+test_healthcheck_hanging_tailscale_still_falls_back() {
+  health_env
+  touch "$JUNIPER_STATE_DIR/locked"
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  stub tailscale "$hang"
+  local start=$SECONDS
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "health: hung tailscale killed after the probe timeout" test $((SECONDS - start)) -lt 10
+  check "health: hung tailscale under tryboot -> reboot" called "systemctl reboot"
+  check "health: hung tailscale -> no sync" not_called "rpi-bootc-bootloader sync"
+}
+
+test_healthcheck_hanging_ip_still_falls_back() {
+  health_env
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip "$hang"
+  local start=$SECONDS
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "health: hung ip killed after the probe timeout" test $((SECONDS - start)) -lt 10
+  check "health: hung ip under tryboot -> reboot" called "systemctl reboot"
+}
+
+test_healthcheck_hanging_systemctl_probe_still_falls_back() {
+  health_env
+  touch "$JUNIPER_STATE_DIR/locked"
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub tailscale 'case $1 in status) echo "$TS_ONLINE" ;; debug) echo "{\"RunSSH\":false}" ;; esac'
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub systemctl 'if [[ $1 == is-active ]]; then trap "" TERM; sleep 30; fi'
+  local start=$SECONDS
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "health: hung systemctl is-active killed after the probe timeout" test $((SECONDS - start)) -lt 10
+  check "health: hung systemctl probe under tryboot -> reboot" called "systemctl reboot"
+}
+
+# Local hooks (/etc/juniper/health.d) for quadlet users who don't build images. Only files
+# owned by root (JUNIPER_HEALTH_LOCAL_OWNER here, so a non-root test run can own them) and not
+# group- or world-writable run; anything else is skipped and logged.
+local_hook() { # NAME BODY [MODE]
+  mkdir -p "$JUNIPER_HEALTH_LOCAL_D"
+  chmod 755 "$JUNIPER_HEALTH_LOCAL_D"
+  printf '#!/bin/sh\n%s\n' "$2" >"$JUNIPER_HEALTH_LOCAL_D/$1"
+  chmod "${3:-755}" "$JUNIPER_HEALTH_LOCAL_D/$1"
+}
+local_env() {
+  health_env
+  export JUNIPER_HEALTH_LOCAL_OWNER
+  JUNIPER_HEALTH_LOCAL_OWNER=$(id -u)
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+}
+
+test_healthcheck_local_hook_failure_falls_back() {
+  local_env
+  local_hook 50-sensor 'exit 1'
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "health: failing local hook under tryboot -> reboot" called "systemctl reboot"
+  check "health: failing local hook named" stderr_has "health hook 50-sensor failed" "$LIBEXEC/healthcheck"
+  check "health: failing local hook -> no sync" not_called "rpi-bootc-bootloader sync"
+}
+
+test_healthcheck_local_hook_pass_is_healthy() {
+  local_env
+  local_hook 50-sensor 'exit 0'
+  "$LIBEXEC/healthcheck"
+  check "health: passing local hook ran" test -x "$JUNIPER_HEALTH_LOCAL_D/50-sensor"
+  check "health: passing local hook -> sync" called "rpi-bootc-bootloader sync"
+}
+
+test_healthcheck_local_hooks_run_sorted() {
+  local_env
+  local_hook 20-b "echo b >>$T/order"
+  local_hook 10-a "echo a >>$T/order"
+  "$LIBEXEC/healthcheck"
+  check "health: local hooks run in sorted order" test "$(tr -d '\n' <"$T/order")" = ab
+}
+
+test_healthcheck_local_hook_world_writable_skipped() {
+  local_env
+  local_hook 50-unsafe 'exit 1' 777
+  check "health: world-writable local hook logged" stderr_has "skipping local health hook 50-unsafe" "$LIBEXEC/healthcheck"
+  check "health: world-writable local hook skipped -> healthy" called "rpi-bootc-bootloader sync"
+  check "health: world-writable local hook skipped -> no reboot" not_called "systemctl reboot"
+}
+
+test_healthcheck_local_hook_group_writable_skipped() {
+  local_env
+  local_hook 50-unsafe 'exit 1' 775
+  "$LIBEXEC/healthcheck" 2>/dev/null
+  check "health: group-writable local hook skipped -> healthy" called "rpi-bootc-bootloader sync"
+}
+
+test_healthcheck_local_hook_wrong_owner_skipped() {
+  local_env
+  # Files and the directory share one ownership check; a non-root run can't chown a single file,
+  # so the whole directory (and its hook) is owned by "someone else" here.
+  JUNIPER_HEALTH_LOCAL_OWNER=$(($(id -u) + 1))
+  local_hook 50-notroot 'exit 1'
+  check "health: wrong-owner local hooks logged" stderr_has "skipping local health hook" "$LIBEXEC/healthcheck"
+  check "health: wrong-owner local hook skipped -> healthy" called "rpi-bootc-bootloader sync"
+}
+
+test_healthcheck_local_hook_unsafe_dir_skipped() {
+  local_env
+  local_hook 50-sensor 'exit 1'
+  chmod 777 "$JUNIPER_HEALTH_LOCAL_D"
+  check "health: unsafe local hook dir logged" stderr_has "skipping local health hooks" "$LIBEXEC/healthcheck"
+  check "health: unsafe local hook dir skipped -> healthy" called "rpi-bootc-bootloader sync"
+}
+
+test_healthcheck_local_hook_symlink_skipped() {
+  local_env
+  printf '#!/bin/sh\nexit 1\n' >"$T/elsewhere" && chmod 755 "$T/elsewhere"
+  mkdir -p "$JUNIPER_HEALTH_LOCAL_D" && chmod 755 "$JUNIPER_HEALTH_LOCAL_D"
+  ln -s "$T/elsewhere" "$JUNIPER_HEALTH_LOCAL_D/50-link"
+  check "health: symlinked local hook logged" stderr_has "skipping local health hook 50-link" "$LIBEXEC/healthcheck"
+  check "health: symlinked local hook skipped -> healthy" called "rpi-bootc-bootloader sync"
+}
+
+test_healthcheck_local_hook_timeout() {
+  local_env
+  export JUNIPER_HEALTH_HOOK_TIMEOUT=1 JUNIPER_HEALTH_HOOK_KILL=1
+  local_hook 50-hang 'trap "" TERM; sleep 30'
+  local start=$SECONDS
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "health: hung local hook killed after the hook timeout" test $((SECONDS - start)) -lt 10
+  check "health: hung local hook under tryboot -> reboot" called "systemctl reboot"
+  unset JUNIPER_HEALTH_HOOK_TIMEOUT JUNIPER_HEALTH_HOOK_KILL
+}
+
+test_example_appliance_health_hook() {
+  local h=$ROOT/examples/appliance/health.d/50-sensor-sample
+  check "example: appliance health hook is executable" test -x "$h"
+  check "example: appliance health hook documented in README" grep -q '/etc/juniper/health.d' "$ROOT/README.md"
+}
+
+# Locked: Tailscale must also be connected to its control plane (.Self.Online), or the update
+# falls back (the decided offline policy).
+locked_ts_env() {
+  health_env
+  touch "$JUNIPER_STATE_DIR/locked"
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub tailscale 'case $1 in status) echo "$TS_STATUS" ;; debug) echo "{\"RunSSH\":true}" ;; esac'
+}
+
+test_healthcheck_locked_requires_control_connection() {
+  locked_ts_env
+  TS_STATUS='{"BackendState":"Running","Self":{"Online":false}}' "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "health: locked, control offline -> fall back" called "systemctl reboot"
+  check "health: locked, control offline -> no sync" not_called "rpi-bootc-bootloader sync"
+}
+
+test_healthcheck_locked_missing_online_is_unhealthy() {
+  locked_ts_env
+  TS_STATUS='{"BackendState":"Running"}' "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "health: locked, no Self.Online -> fall back" called "systemctl reboot"
+}
+
+test_healthcheck_locked_control_online_is_healthy() {
+  locked_ts_env
+  TS_STATUS=$TS_ONLINE "$LIBEXEC/healthcheck"
+  check "health: locked, control online -> sync" called "rpi-bootc-bootloader sync"
+  check "health: locked, control online -> no reboot" not_called "systemctl reboot"
+}
+
+test_healthcheck_unlocked_ignores_control_connection() {
+  health_env
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  stub tailscale "echo '{\"BackendState\":\"Running\",\"Self\":{\"Online\":false}}'"
+  "$LIBEXEC/healthcheck"
+  check "health: not locked, control offline -> still healthy (LAN SSH works)" called "rpi-bootc-bootloader sync"
+}
+
+# juniper-healthcheck.service failing for any reason (killed at TimeoutStartSec, crashed, OOM)
+# starts juniper-healthcheck-fallback.service: `healthcheck --fallback` reboots under tryboot
+# only, with no probes and no retries.
+test_healthcheck_fallback_mode_reboots_under_tryboot() {
+  health_env
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  "$LIBEXEC/healthcheck" --fallback 2>/dev/null
+  check "health fallback: tryboot -> reboot" called "systemctl reboot"
+  check "health fallback: no probes" not_called "ip "
+  check "health fallback: never confirms" not_called "rpi-bootc-bootloader sync"
+}
+
+test_healthcheck_fallback_mode_normal_boot_does_nothing() {
+  health_env
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  printf '\x00\x00\x00\x00' >"$JUNIPER_TRYBOOT_FLAG"
+  check "health fallback: normal boot exits 0" "$LIBEXEC/healthcheck" --fallback
+  check "health fallback: normal boot -> no reboot" not_called "systemctl reboot"
+  check "health fallback: normal boot -> no sync" not_called "rpi-bootc-bootloader sync"
+  rm -f "$JUNIPER_TRYBOOT_FLAG"
+  check "health fallback: no flag exits 0" "$LIBEXEC/healthcheck" --fallback
+  check "health fallback: no flag -> no reboot" not_called "systemctl reboot"
+}
+
+test_healthcheck_rejects_unknown_argument() {
+  health_env
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  check "health: unknown argument fails" fails "$LIBEXEC/healthcheck" --bogus
+  check "health: unknown argument -> no reboot" not_called "systemctl reboot"
+}
+
+test_healthcheck_unit_has_fallback_on_failure() {
+  local u=$ROOT/system_files/usr/lib/systemd/system
+  check "health unit: OnFailure= the fallback" \
+    grep -qx 'OnFailure=juniper-healthcheck-fallback.service' "$u/juniper-healthcheck.service"
+  check "fallback unit: runs healthcheck --fallback" \
+    grep -qx 'ExecStart=/usr/libexec/juniper/healthcheck --fallback' "$u/juniper-healthcheck-fallback.service"
+}
+
+# Two strikes: a digest that fails its health check under tryboot gets a strike in
+# $JUNIPER_STATE_DIR/bad-digests ("DIGEST COUNT BOOT_ID"; /var survives the fallback) and is
+# retried at the next window. A second failure, on another boot, quarantines it: held until a
+# newer digest is staged.
+BAD=sha256:$(printf 'b%.0s' {1..64})
+NEW=sha256:$(printf 'c%.0s' {1..64})
+booted_digest() { stub bootc "echo '{\"status\":{\"booted\":{\"image\":{\"imageDigest\":\"$1\"}}}}'"; }
+strikes() { awk -v d="$1" '$1 == d {print $2}' "$JUNIPER_STATE_DIR/bad-digests" 2>/dev/null; }
+# fail_boot BOOT_ID: a failed tryboot of $BAD on that boot (the OnFailure= fallback path).
+fail_boot() {
+  echo "$1" >"$JUNIPER_BOOT_ID_FILE"
+  "$LIBEXEC/healthcheck" --fallback 2>/dev/null
+}
+strike_env() {
+  health_env
+  export JUNIPER_BOOT_ID_FILE=$T/boot_id
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  booted_digest "$BAD"
+}
+
+test_healthcheck_first_failure_records_a_strike() {
+  strike_env
+  echo boot-1 >"$JUNIPER_BOOT_ID_FILE"
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "strikes: first failure -> one strike" test "$(strikes "$BAD")" = 1
+  check "strikes: still reboots" called "systemctl reboot"
+}
+
+# The main check falls back, exits 1, and OnFailure= then runs --fallback on the same boot:
+# still one strike, or a single failure would quarantine.
+test_healthcheck_one_strike_per_boot() {
+  strike_env
+  echo boot-1 >"$JUNIPER_BOOT_ID_FILE"
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  fail_boot boot-1
+  check "strikes: main check + OnFailure fallback on one boot -> one strike" test "$(strikes "$BAD")" = 1
+  check "strikes: listed once" test "$(grep -c "^$BAD " "$JUNIPER_STATE_DIR/bad-digests")" = 1
+}
+
+test_healthcheck_second_failure_quarantines() {
+  strike_env
+  fail_boot boot-1
+  fail_boot boot-2
+  check "strikes: second failure on another boot -> two strikes" test "$(strikes "$BAD")" = 2
+}
+
+test_healthcheck_normal_boot_records_nothing() {
+  strike_env
+  printf '\x00\x00\x00\x00' >"$JUNIPER_TRYBOOT_FLAG"
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  fail_boot boot-1
+  check "strikes: normal boot records nothing" test ! -e "$JUNIPER_STATE_DIR/bad-digests"
+}
+
+# A full /var (the rewrite fails) must not wipe the strike history.
+test_healthcheck_failed_strike_write_keeps_history() {
+  strike_env
+  echo "$NEW 1 boot-0" >"$JUNIPER_STATE_DIR/bad-digests"
+  stub tail 'exit 1'
+  fail_boot boot-1
+  check "strikes: failed write keeps the old list" test "$(cat "$JUNIPER_STATE_DIR/bad-digests")" = "$NEW 1 boot-0"
+  check "strikes: failed write still reboots" called "systemctl reboot"
+}
+
+# A failed `rpi-bootc-bootloader sync` on a normal boot fails the unit; the OnFailure= fallback
+# must still leave a normal boot alone.
+test_healthcheck_failed_sync_normal_boot_no_reboot() {
+  strike_env
+  printf '\x00\x00\x00\x00' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  stub rpi-bootc-bootloader 'exit 1'
+  check "health: failed sync fails the check" fails "$LIBEXEC/healthcheck"
+  fail_boot boot-1
+  check "health: failed sync + fallback on a normal boot -> no reboot" not_called "systemctl reboot"
+  check "health: failed sync on a normal boot -> no strike" test ! -e "$JUNIPER_STATE_DIR/bad-digests"
+}
+
+test_healthcheck_fallback_unit_has_timeout() {
+  check "fallback unit: explicit TimeoutStartSec" grep -qx 'TimeoutStartSec=2min' \
+    "$ROOT/system_files/usr/lib/systemd/system/juniper-healthcheck-fallback.service"
+}
+
+# Never hold on data we can't trust: a malformed staged digest or a corrupt list proceeds.
+test_apply_update_malformed_digest_proceeds() {
+  printf 'sha256:zz 2 boot-1\n' >"$JUNIPER_STATE_DIR/bad-digests"
+  staged_digest 'sha256:zz'
+  "$LIBEXEC/apply-update" >/dev/null
+  check "apply-update: malformed staged digest -> proceeds" called "rpi-bootc-bootloader tryreboot"
+  check "apply-update: malformed staged digest -> not held" test ! -e "$JUNIPER_STATE_DIR/update-held"
+}
+
+test_apply_update_corrupt_list_proceeds() {
+  printf '\x00\xff garbage\n%s lots boot-1\n\n' "$BAD" >"$JUNIPER_STATE_DIR/bad-digests"
+  staged_digest "$BAD"
+  "$LIBEXEC/apply-update" >/dev/null
+  check "apply-update: corrupt bad-digests -> proceeds" called "rpi-bootc-bootloader tryreboot"
+  check "apply-update: corrupt bad-digests -> not held" test ! -e "$JUNIPER_STATE_DIR/update-held"
+}
+
+test_healthcheck_quarantine_is_bounded() {
+  strike_env
+  local i
+  for i in 0 1 2 3 4 5 6 7 8 9; do echo "sha256:$(printf "$i%.0s" {1..64}) 2 old"; done >"$JUNIPER_STATE_DIR/bad-digests"
+  fail_boot boot-1
+  check "strikes: keeps the last 10" test "$(wc -l <"$JUNIPER_STATE_DIR/bad-digests")" = 10
+  check "strikes: newest kept" test "$(tail -n1 "$JUNIPER_STATE_DIR/bad-digests")" = "$BAD 1 boot-1"
+  check "strikes: oldest dropped" fails grep -q "sha256:0000" "$JUNIPER_STATE_DIR/bad-digests"
+}
+
+test_healthcheck_quarantine_ignores_bad_bootc_output() {
+  health_env
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  # shellcheck disable=SC2016 # a literal, never expanded
+  booted_digest 'sha256:nope$(reboot)'
+  "$LIBEXEC/healthcheck" --fallback 2>/dev/null
+  check "quarantine: malformed digest not recorded" test ! -s "$JUNIPER_STATE_DIR/bad-digests"
+  check "quarantine: malformed digest -> still reboots" called "systemctl reboot"
+  : >"$CALLS"
+  stub bootc "$hang"
+  local start=$SECONDS
+  "$LIBEXEC/healthcheck" --fallback 2>/dev/null
+  check "quarantine: hung bootc doesn't stall the fallback" test $((SECONDS - start)) -lt 10
+  check "quarantine: hung bootc -> still reboots" called "systemctl reboot"
+}
+
+staged_digest() { stub bootc "echo '{\"status\":{\"staged\":{\"image\":{\"imageDigest\":\"$1\"}}}}'"; }
+
+test_apply_update_one_strike_still_applies() {
+  echo "$BAD 1 boot-1" >"$JUNIPER_STATE_DIR/bad-digests"
+  staged_digest "$BAD"
+  local out
+  out=$("$LIBEXEC/apply-update")
+  check "apply-update: one strike -> retried (tryreboot)" called "rpi-bootc-bootloader tryreboot"
+  check "apply-update: one strike -> not held" test ! -e "$JUNIPER_STATE_DIR/update-held"
+  check "apply-update: one strike logged" grep -q "1 failed attempt" <<<"$out"
+}
+
+test_apply_update_skips_quarantined_digest() {
+  echo "$BAD 2 boot-2" >"$JUNIPER_STATE_DIR/bad-digests"
+  staged_digest "$BAD"
+  local out
+  out=$("$LIBEXEC/apply-update")
+  check "apply-update: quarantined digest -> no tryreboot" not_called "rpi-bootc-bootloader"
+  check "apply-update: quarantined digest logged" grep -q "update $BAD failed its health check twice; waiting for a newer image" <<<"$out"
+  check "apply-update: quarantine shown (update-held)" grep -q "failed its health check" "$JUNIPER_STATE_DIR/update-held"
+}
+
+# End to end: two failed tryboots of one digest hold it; the next digest goes ahead.
+test_two_strikes_then_newer_digest() {
+  strike_env
+  fail_boot boot-1
+  staged_digest "$BAD"
+  "$LIBEXEC/apply-update" >/dev/null
+  check "two strikes: after the first failure the update is retried" called "rpi-bootc-bootloader tryreboot"
+  : >"$CALLS"
+  booted_digest "$BAD"
+  fail_boot boot-2
+  staged_digest "$BAD"
+  "$LIBEXEC/apply-update" >/dev/null
+  check "two strikes: after the second failure it is held" not_called "rpi-bootc-bootloader"
+  check "two strikes: held is shown" test -s "$JUNIPER_STATE_DIR/update-held"
+  staged_digest "$NEW"
+  "$LIBEXEC/apply-update" >/dev/null
+  check "two strikes: a newer digest proceeds" called "rpi-bootc-bootloader tryreboot"
+  check "two strikes: a newer digest clears held" test ! -e "$JUNIPER_STATE_DIR/update-held"
+}
+
+test_apply_update_newer_digest_proceeds() {
+  echo "$BAD 2 boot-2" >"$JUNIPER_STATE_DIR/bad-digests"
+  echo "update $BAD failed its health check twice; waiting for a newer image" >"$JUNIPER_STATE_DIR/update-held"
+  staged_digest "$NEW"
+  "$LIBEXEC/apply-update"
+  check "apply-update: newer digest -> tryreboot" called "rpi-bootc-bootloader tryreboot"
+  check "apply-update: newer digest clears update-held" test ! -e "$JUNIPER_STATE_DIR/update-held"
+}
+
+test_apply_update_held_mode() {
+  echo "$BAD 2 boot-2" >"$JUNIPER_STATE_DIR/bad-digests"
+  staged_digest "$BAD"
+  check "apply-update --held: quarantined -> exit 0" "$LIBEXEC/apply-update" --held
+  staged_digest "$NEW"
+  check "apply-update --held: newer -> exit 1" fails "$LIBEXEC/apply-update" --held
+  echo "$NEW 1 boot-1" >>"$JUNIPER_STATE_DIR/bad-digests"
+  check "apply-update --held: one strike -> exit 1" fails "$LIBEXEC/apply-update" --held
+  check "apply-update --held: never reboots" not_called "rpi-bootc-bootloader"
+}
+
+test_apply_update_check_mode_never_reboots() {
+  echo "$BAD 2 boot-2" >"$JUNIPER_STATE_DIR/bad-digests"
+  staged_digest "$BAD"
+  "$LIBEXEC/apply-update" --check >/dev/null
+  check "apply-update --check: quarantined -> update-held" grep -q "$BAD" "$JUNIPER_STATE_DIR/update-held"
+  staged_digest "$NEW"
+  "$LIBEXEC/apply-update" --check >/dev/null
+  check "apply-update --check: newer -> update-held cleared" test ! -e "$JUNIPER_STATE_DIR/update-held"
+  check "apply-update --check: never reboots" not_called "rpi-bootc-bootloader"
+}
+
+test_update_service_refreshes_quarantine_status() {
+  check "juniper-update: refreshes update-held after staging" grep -qx \
+    'ExecStartPost=-/usr/libexec/juniper/apply-update --check' \
+    "$ROOT/system_files/usr/lib/systemd/system/juniper-update.service"
+}
+
+test_motd_shows_quarantined_update() {
+  stub fastfetch ''
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub systemctl '[[ $* != *is-failed* ]]'
+  echo "update $BAD failed its health check; waiting for a newer image" >"$JUNIPER_STATE_DIR/update-held"
+  check "motd: quarantined update shown" grep -q "update $BAD failed its health check" <<<"$("$LIBEXEC/motd" 2>/dev/null)"
+}
+
+test_pi_status_shows_quarantined_update() {
+  check "pi-status: shows update-held" grep -q '/var/lib/juniper/update-held' \
+    "$ROOT/system_files/usr/share/juniper/just/pi.just"
+}
+
+test_healthcheck_probe_timeout_is_short() {
+  local p
+  # shellcheck disable=SC2016 # literal ${...} in the script's text
+  p=$(sed -n 's/^probe_timeout=${JUNIPER_HEALTH_PROBE_TIMEOUT:-\([0-9]*\)}$/\1/p' "$LIBEXEC/healthcheck")
+  check "health: per-probe timeout at most 10s" test "${p:-99}" -le 10
 }
 
 # Real-root emergency mode under tryboot: PID 1 keeps the watchdog fed, so nothing would
@@ -961,7 +1413,7 @@ test_flatpak_setup_offline_retries() {
 }
 
 idle_env() {
-  export JUNIPER_NOW=2000000000
+  export JUNIPER_NOW=2000000000 JUNIPER_APPLY_UPDATE=$LIBEXEC/apply-update
   stub bootc 'echo "{\"status\":{\"staged\":{}}}"'
   stub runuser ''
   # shellcheck disable=SC2016 # expands inside the stub
@@ -1061,6 +1513,28 @@ test_desktop_idle_notify_resets_after_reboot_allowed() {
   : >"$CALLS"
   JUNIPER_NOW=$((2000000000 + 3600)) "$LIBEXEC_DESKTOP/desktop-idle" >/dev/null || true
   check "notify: a new deferral notifies again" called "runuser -u nat"
+}
+
+# A held (quarantined) update won't be applied: no "Update ready" notice, no deferral. The
+# window's apply-update then declines it.
+test_desktop_idle_held_update_no_notice_no_deferral() {
+  notify_env
+  echo "$BAD 2 boot-2" >"$JUNIPER_STATE_DIR/bad-digests"
+  stub bootc "echo '{\"status\":{\"staged\":{\"image\":{\"imageDigest\":\"$BAD\"}}}}'"
+  check "idle: held update -> no deferral (exit 0)" "$LIBEXEC_DESKTOP/desktop-idle"
+  check "idle: held update -> no notice" not_called "runuser"
+  check "idle: held update -> no deferral recorded" test ! -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
+  echo $((2000000000 - 86400)) >"$JUNIPER_STATE_DIR/reboot-deferred-since"
+  "$LIBEXEC_DESKTOP/desktop-idle" >/dev/null || true
+  check "idle: held update -> an old deferral isn't extended" test ! -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
+}
+
+test_desktop_idle_one_strike_still_defers() {
+  notify_env
+  echo "$BAD 1 boot-1" >"$JUNIPER_STATE_DIR/bad-digests"
+  stub bootc "echo '{\"status\":{\"staged\":{\"image\":{\"imageDigest\":\"$BAD\"}}}}'"
+  check "idle: one strike, desktop in use -> defer" fails "$LIBEXEC_DESKTOP/desktop-idle"
+  check "idle: one strike -> notice sent" called "runuser -u nat"
 }
 
 test_desktop_idle_any_active_nonidle_session_defers() {
@@ -1580,6 +2054,30 @@ test_just_recipe_wraps_script() {
   check "recipe: thin wrapper" grep -q 'sudo /usr/libexec/juniper/lan-ssh' "$ROOT/system_files/usr/share/juniper/just/network.just"
   check "recipe: not echoed by just" grep -q '^    @sudo /usr/libexec/juniper/lan-ssh' "$ROOT/system_files/usr/share/juniper/just/network.just"
   check "recipe: no inline firewall-cmd" not_grep_dir 'firewall-cmd' "$ROOT/system_files/usr/share/juniper/just/network.just"
+}
+
+test_motd_shows_gave_up_and_held_together() {
+  stub fastfetch ''
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub systemctl '[[ $* != *is-failed* ]]'
+  stub tailscale 'exit 1'
+  echo "key rejected on 2033-05-18" >"$JUNIPER_STATE_DIR/tailscale-join-gave-up"
+  echo "update $BAD failed its health check twice; waiting for a newer image" >"$JUNIPER_STATE_DIR/update-held"
+  export JUNIPER_RUN_DIR=$T/run
+  mkdir -p "$JUNIPER_RUN_DIR"
+  touch "$JUNIPER_STATE_DIR/locked"
+  echo "SSH is open to every network (old lan-ssh rule)" >"$JUNIPER_RUN_DIR/lan-ssh-legacy"
+  check "motd: all warnings -> gave-up in the Tailscale row" stdout_has "not joined: key rejected on 2033-05-18" "$LIBEXEC/motd"
+  check "motd: all warnings -> held in the Update row" stdout_has "update $BAD failed its health check twice" "$LIBEXEC/motd"
+  check "motd: all warnings -> lan-ssh legacy warning" stdout_has "SSH is open to every network (old lan-ssh rule)" "$LIBEXEC/motd"
+  unset JUNIPER_RUN_DIR
+}
+
+test_pi_status_shows_gave_up_legacy_and_held() {
+  local j=$ROOT/system_files/usr/share/juniper/just/pi.just
+  check "pi-status: gave-up line kept" grep -q 'tailscale-join-gave-up' "$j"
+  check "pi-status: lan-ssh legacy line kept" grep -q 'lan-ssh legacy' "$j"
+  check "pi-status: held line kept" grep -q 'update-held' "$j"
 }
 
 # --- runner ---

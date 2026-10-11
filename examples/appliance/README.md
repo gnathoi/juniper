@@ -4,7 +4,9 @@ Juniper Minimal gives you Tailscale-first networking with firewall lockdown, Pod
 quadlets with nightly auto-update, signed nightly OS updates with firmware fallback, and
 `ujust`. You add your packages and services:
 
-1. Copy this directory, edit `Containerfile` and add your `*.container` quadlets.
+1. Copy this directory, edit `Containerfile` and add your `*.container` quadlets, and a
+   readiness hook in `health.d/` (see `50-sensor-sample`) so an update that breaks your
+   workload falls back.
 2. Build for arm64 and push to your registry (CI: copy Juniper's `build.yml` matrix leg).
 3. Flash a Juniper Minimal disk image, then on the device:
    `ujust switch ghcr.io/you/sensor-box:latest` (a plain reboot keeps the current image;

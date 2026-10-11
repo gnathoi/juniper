@@ -9,5 +9,7 @@ RUN dnf -y install i2c-tools && dnf clean all
 # Quadlets shipped in the image live in /usr/share/containers/systemd (immutable, updated
 # with the image); ones you add on a device go in /etc/containers/systemd.
 COPY sensor.container /usr/share/containers/systemd/sensor.container
+# Readiness hook: after an update, the new image is kept only once the sensor stores samples.
+COPY health.d/50-sensor-sample /usr/lib/juniper/health.d/50-sensor-sample
 
 RUN bootc container lint

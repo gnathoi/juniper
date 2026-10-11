@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Appliance readiness hook: healthy only once the sensor has stored a sample in the last few
+# minutes of this boot. juniper-healthcheck runs it at every boot (15 s at most per run, retried
+# for about 7 minutes); after an update under tryboot, a failure falls back to the previous image.
+#   in your image:  COPY health.d/50-sensor-sample /usr/lib/juniper/health.d/
+#   on a device:    sudo install -D -o root -g root -m 0755 50-sensor-sample /etc/juniper/health.d/50-sensor-sample
+set -euo pipefail
+
+# sensor.container logs one reading a minute to the journal.
+journalctl -b -q -u sensor.service --since -3min -o cat | grep -q '^[0-9]'
+
+# If your workload writes files instead, check the newest one's age, e.g.:
+#   [[ -n $(find /var/lib/sensor/readings -type f -mmin -10 -print -quit) ]]

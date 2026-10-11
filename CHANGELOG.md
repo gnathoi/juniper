@@ -14,6 +14,14 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 - README section "If a device is lost or stolen": what a stolen card or board exposes today
   (nothing is encrypted at rest; the boot partition is unsigned) and the revocation steps.
+- Local health hooks: executables in `/etc/juniper/health.d` (root-owned, not group- or
+  world-writable) run with the image's hooks, so a quadlet appliance can require its
+  workload to be ready (e.g. a sample stored in the last 10 minutes) before an update is
+  kept. Example in `examples/appliance/health.d/`.
+- An update that fails its health check under tryboot is retried at the next window; if the
+  same image fails a second time it is held (recorded in `/var/lib/juniper/bad-digests`) and
+  not booted again, while a newer image proceeds. The login status and `ujust pi-status` show
+  a held update, and on `juniper-desktop` it gets no "Update ready" notice or deferral.
 
 ### Changed
 
@@ -24,9 +32,17 @@ Unreleased as its release notes, then moves those entries under the release's ta
   `--force`. Devices that ran the old command keep working, but the login banner and
   `ujust pi-status` warn that SSH is open to every network; `ujust lan-ssh on` or `off`
   removes that rule.
+- Once locked down, the health check also requires Tailscale to be connected to its control
+  plane: a locked device that can't reach Tailscale after an update falls back to the
+  previous image.
 
 ### Fixed
 
+- A hung `tailscale`, `ip` or `systemctl` call can no longer stall the health check: each
+  probe is stopped after 10 seconds and counts as unhealthy.
+- If the health check itself fails (killed at its timeout, crashed, out of memory), a tryboot
+  update still falls back (`juniper-healthcheck-fallback.service`); a normal boot is left
+  alone.
 - `wifi.country` must be a two-letter country code: `just flash` refuses anything else, and
   the image ignores (and logs) a malformed Wi-Fi regulatory domain or interface name in
   CIDATA instead of writing it into system configuration.
@@ -50,7 +66,8 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 - SSH is explicitly key-only on every image (`/etc/ssh/sshd_config.d/40-juniper.conf`), now
   that accounts can have a password.
-- The health check names a failing image health hook and stops a hung one after 60 seconds.
+- The health check names a failing image health hook and stops a hung one after 15 seconds
+  (killed 5 seconds later if it ignores that).
 
 ## build-20261010 (2026-10-10)
 

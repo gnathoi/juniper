@@ -220,6 +220,21 @@ also needs greetd to be running, or it falls back.
 See [examples/appliance](examples/appliance): `FROM ghcr.io/gnathoi/juniper-minimal`, add
 packages and quadlets, push, `bootc switch` the device to it.
 
+### Readiness checks for your workload
+
+After an update, the boot health check keeps the new image only if the device is reachable
+(a default route; once locked, Tailscale connected to its control plane and SSH over it) and
+every health hook passes; under tryboot, anything else falls back to the previous image. Add
+your own check, such as "a sample was stored in the last 10 minutes", as an executable that
+exits 0 when ready:
+
+- in your image: `/usr/lib/juniper/health.d/`
+- on a device running plain quadlets: `/etc/juniper/health.d/`; only root-owned files that
+  aren't group- or world-writable run, anything else is skipped and logged
+
+Hooks run in name order at every boot, 15 seconds at most each, retried for about 7 minutes.
+See [the example](examples/appliance/health.d/50-sensor-sample).
+
 ## Switch an existing AlmaLinux RPi bootc system
 
 The first switch is trust-on-first-use: the starting system doesn't check Juniper's signature
@@ -254,6 +269,15 @@ A new release (both signed images, disk images and release notes) is published e
 Monday at 02:00 UTC with that week's dependency and security updates. Pis download it daily
 and reboot into it on Tuesday at 04:00 local time, within a 90-minute window; change that
 with `ujust update-schedule`, or apply it now with `ujust update`.
+
+The new image boots once through firmware tryboot and is kept only if the boot health check
+passes (see [readiness checks](#readiness-checks-for-your-workload)); otherwise, or if the
+check itself fails, the Pi falls back to the previous image. A locked device that can't reach
+Tailscale's control plane after an update falls back too. An image that fell back once is
+retried at the next window; one that fails twice is held: the login status and
+`ujust pi-status` say "update … failed its health check twice; waiting for a newer image",
+and the next release proceeds as usual. To retry a held image anyway, remove its line from
+`/var/lib/juniper/bad-digests`.
 
 ## Acknowledgements
 

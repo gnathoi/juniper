@@ -3,10 +3,53 @@
 # Uses firmware tryboot: the new deployment boots once; juniper-healthcheck makes it the
 # default, otherwise the next boot falls back to the current one. A plain reboot would
 # keep the old deployment because tryboot.conf sets TRYBOOT=1.
+# Two strikes: healthcheck counts failed tryboots per image digest in bad-digests. After one,
+# the update is retried; after two, that image is held (not booted again) until a newer one is
+# staged. The reason is kept in update-held for the motd and `ujust pi-status`. To retry a
+# held image anyway, remove its line from bad-digests.
+#   apply-update          reboot into the staged update, unless it is held
+#   apply-update --check  only refresh update-held (juniper-update.service, after staging)
+#   apply-update --held   refresh update-held; exit 0 if the staged update is held, else 1
 set -euo pipefail
 
-if [[ $(bootc status --json | jq '.status.staged != null') != true ]]; then
-  echo "No staged update; not rebooting."
+state_dir=${JUNIPER_STATE_DIR:-/var/lib/juniper}
+held=$state_dir/update-held
+mode=${1:-}
+
+case $mode in
+  "" | --check | --held) ;;
+  *)
+    echo "usage: apply-update [--check | --held]" >&2
+    exit 2
+    ;;
+esac
+
+not_held() {
+  rm -f "$held"
+  [[ $mode != --held ]] || exit 1
+  [[ -z $mode ]] || exit 0
+}
+
+status=$(bootc status --json)
+if [[ $(jq '.status.staged != null' <<<"$status") != true ]]; then
+  [[ -n $mode ]] || echo "No staged update; not rebooting."
+  not_held
   exit 0
 fi
+
+digest=$(jq -r '.status.staged.image.imageDigest // empty' <<<"$status")
+strikes=0
+if [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  strikes=$(awk -v d="$digest" '$1 == d {print $2 + 0; exit}' "$state_dir/bad-digests" 2>/dev/null) || true
+  strikes=${strikes:-0}
+fi
+if ((strikes >= 2)); then
+  msg="update $digest failed its health check twice; waiting for a newer image"
+  echo "$msg"
+  mkdir -p "$state_dir"
+  echo "$msg" >"$held"
+  exit 0
+fi
+((strikes == 0)) || [[ -n $mode ]] || echo "Update $digest had 1 failed attempt; trying it once more."
+not_held
 exec rpi-bootc-bootloader tryreboot
