@@ -10,9 +10,10 @@ days=${JUNIPER_DEFER_CAP_DAYS:-7}
 [[ $days =~ ^[0-9]+$ ]] || days=7
 cap=$((days * 86400))
 since_f=$state/reboot-deferred-since
+notified_f=$state/reboot-notified
 
 allow() {
-  rm -f "$since_f"
+  rm -f "$since_f" "$notified_f"
   [[ -z ${1:-} ]] || echo "$1"
   exit 0
 }
@@ -44,9 +45,18 @@ if ((now - since >= cap)); then
 fi
 
 echo "Desktop in use: not rebooting for the staged update this window."
-# Best-effort notification; never changes the exit status.
-if user=$(getent passwd 1000 2>/dev/null | cut -d: -f1) && [[ -n $user && -S /run/user/1000/bus ]]; then
-  runuser -u "$user" -- env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
-    notify-send "Update ready" "Reboot when convenient (ujust update), or it happens within a week." || true
+# Best-effort notice for uid 1000 (the desktop's user): when the deferral starts, then at most
+# once a day (the hourly retry runs this too). Never changes the exit status.
+last=$(head -c 32 "$notified_f" 2>/dev/null || true)
+[[ $last =~ ^[0-9]+$ ]] || last=0
+last=$((10#$last))
+if ((now - last >= 86400 || last > now)); then
+  deadline=$(date -d "@$((since + cap))" '+%a %-d %b %H:%M' 2>/dev/null || echo "within $days days")
+  bus=${JUNIPER_USER_BUS:-/run/user/1000/bus}
+  if user=$(getent passwd 1000 2>/dev/null | cut -d: -f1) && [[ -n $user && -S $bus ]] &&
+    runuser -u "$user" -- env DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" notify-send "Update ready" \
+      "Reboot when convenient (ujust update). Otherwise it reboots once the desktop is idle, or at the latest around $deadline."; then
+    echo "$now" >"$notified_f" 2>/dev/null || true
+  fi
 fi
 exit 1

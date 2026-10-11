@@ -893,6 +893,42 @@ test_desktop_idle_notify_is_best_effort() {
   check "idle: notify trouble still exits 1 (skip, not error)" test $rc = 1
 }
 
+# One "update ready" notice when the deferral starts, then at most one a day (the hourly retry
+# runs the same check), with the real deadline: first deferral + 7 days.
+notify_env() {
+  idle_env
+  export JUNIPER_USER_BUS=$T/bus
+  python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$JUNIPER_USER_BUS"
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub getent '[[ "$1 $2" == "passwd 1000" ]] && echo "nat:x:1000:1000::/var/home/nat:/bin/bash"'
+}
+
+test_desktop_idle_notifies_once_with_deadline() {
+  notify_env
+  local deadline
+  deadline=$(date -d @$((2000000000 + 7 * 86400)) '+%a %-d %b %H:%M')
+  "$LIBEXEC_DESKTOP/desktop-idle" >/dev/null || true
+  check "notify: first deferral -> notice for uid 1000" called "runuser -u nat"
+  check "notify: on uid 1000's session bus" called "DBUS_SESSION_BUS_ADDRESS=unix:path=$T/bus"
+  check "notify: shows the deadline" called "$deadline"
+  : >"$CALLS"
+  JUNIPER_NOW=$((2000000000 + 3600)) "$LIBEXEC_DESKTOP/desktop-idle" >/dev/null || true
+  check "notify: hourly retry -> no repeat" not_called "runuser"
+  JUNIPER_NOW=$((2000000000 + 86400 + 60)) "$LIBEXEC_DESKTOP/desktop-idle" >/dev/null || true
+  check "notify: a day later -> one reminder" called "runuser -u nat"
+  check "notify: reminder keeps the first deadline" called "$deadline"
+}
+
+test_desktop_idle_notify_resets_after_reboot_allowed() {
+  notify_env
+  "$LIBEXEC_DESKTOP/desktop-idle" >/dev/null || true
+  IDLE=yes "$LIBEXEC_DESKTOP/desktop-idle" >/dev/null
+  check "notify: allowed reboot clears the notice marker" test ! -e "$JUNIPER_STATE_DIR/reboot-notified"
+  : >"$CALLS"
+  JUNIPER_NOW=$((2000000000 + 3600)) "$LIBEXEC_DESKTOP/desktop-idle" >/dev/null || true
+  check "notify: a new deferral notifies again" called "runuser -u nat"
+}
+
 test_desktop_idle_any_active_nonidle_session_defers() {
   idle_env
   # shellcheck disable=SC2016 # expands inside the stub
