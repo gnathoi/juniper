@@ -10,6 +10,11 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+### Added
+
+- README section "If a device is lost or stolen": what a stolen card or board exposes today
+  (nothing is encrypted at rest; the boot partition is unsigned) and the revocation steps.
+
 ### Changed
 
 - `ujust lan-ssh on` now allows SSH only from the networks the Pi is directly connected to

@@ -176,6 +176,24 @@ network; the login banner and `ujust pi-status` warn while that rule is still th
 The `juniper` image's Homebrew comes from Bluefin's `ublue-os/brew` and updates and
 upgrades your brew packages automatically (`brew-update.timer`, `brew-upgrade.timer`).
 
+### If a device is lost or stolen
+
+The root filesystem is not encrypted (encryption is tracked in #50). Whoever holds the card
+can read the Tailscale node state (a working tailnet node), SSH host keys, Wi-Fi passwords,
+password hashes and workload data. The boot partition is unsigned too, so a card that comes
+back may have been modified. Revoke in this order:
+
+1. Remove the device in the Tailscale admin console. That revokes its node key. Devices
+   that joined with a tagged auth key never expire on their own.
+2. Revoking or expiring the auth key does not remove nodes that already joined with it.
+   Revoke it too if the card never booted: its auth key is still on the FAT partition.
+3. Change the Wi-Fi password, and any workload or API secrets the device held.
+4. Remove its SSH host key from your `known_hosts`.
+5. Reflash any card that comes back instead of trusting it.
+
+What is verified: OS updates are signature-checked before they install. Nothing verifies
+the boot chain on the card itself.
+
 ### The experimental desktop
 
 `juniper-desktop` is experimental: it is built, tested in CI and published (signed image and
