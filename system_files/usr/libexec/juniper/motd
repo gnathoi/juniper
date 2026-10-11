@@ -39,5 +39,9 @@ if command -v fastfetch >/dev/null; then fastfetch; fi
 row Image "${PRETTY_NAME}"
 row Tailscale "$ts"
 row Update "$upd"
+# Only after lockdown does the old unscoped `lan-ssh on` matter; before it SSH is open anyway.
+if [[ -e $state_dir/locked ]] && warn=$(timeout 5 "${JUNIPER_LAN_SSH:-/usr/libexec/juniper/lan-ssh}" legacy 2>/dev/null); then
+  row Warning "$warn"
+fi
 row Tip "$(cat /usr/share/juniper/tips*.txt 2>/dev/null | shuf -n1)"
 printf '\n  ujust for commands · ujust toggle-motd to hide this\n\n'

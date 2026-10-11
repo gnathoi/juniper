@@ -10,6 +10,16 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+### Changed
+
+- `ujust lan-ssh on` now allows SSH only from the networks the Pi is directly connected to
+  (IPv4 and IPv6, link-local included), or from CIDRs you give it, instead of every source.
+  New: `ujust lan-ssh for 2h` (temporary, gone on reboot), `ujust lan-ssh status`, and
+  validation that refuses `0.0.0.0/0`, `::/0` and other very broad prefixes without
+  `--force`. Devices that ran the old command keep working, but the login banner and
+  `ujust pi-status` warn that SSH is open to every network; `ujust lan-ssh on` or `off`
+  removes that rule.
+
 ### Fixed
 
 - `wifi.country` must be a two-letter country code: `just flash` refuses anything else, and
