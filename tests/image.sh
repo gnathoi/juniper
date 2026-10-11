@@ -19,6 +19,11 @@ test -s /usr/share/licenses/juniper/LICENSE
 test -s /usr/share/licenses/juniper/THIRD_PARTY.md
 grep -q 'BSD 3-Clause' /usr/share/licenses/tailscale/LICENSE
 
+# fail MSG: stop the image test with a message (a bare `set -e` exit prints nothing).
+fail() {
+  echo "image test: $*" >&2
+  exit 1
+}
 need_cmds() {
   for cmd; do
     command -v "$cmd" >/dev/null || {
@@ -156,28 +161,27 @@ for kdir in /usr/lib/modules/*/; do
 done
 # rpi-fw-crypto + age (issue #50): the OTP-bound key and recovery sealing for root encryption.
 need_cmds rpi-fw-crypto age cryptsetup sfdisk partx
-ldd /usr/bin/rpi-fw-crypto >"$tmp/ldd"
-grep -q 'librpifwcrypto.so.0 => /usr/lib64/' "$tmp/ldd"
+# Each of these checks names what it got: a bare `set -e` failure in the smoke test is silent.
+ldd /usr/bin/rpi-fw-crypto >"$tmp/ldd" 2>&1 || fail "ldd rpi-fw-crypto failed: $(cat "$tmp/ldd")"
+# /lib64 is a symlink to usr/lib64, so the loader may report either path.
+grep -Eq 'librpifwcrypto\.so\.0 => (/usr)?/lib64/' "$tmp/ldd" ||
+  fail "librpifwcrypto.so.0 not resolved from /usr/lib64: $(cat "$tmp/ldd")"
 usage=$({ rpi-fw-crypto 2>&1 || true; })
 for sub in 'hmac --in' 'genkey' 'get-key-status' 'set-key-status'; do
-  grep -q -- "$sub" <<<"$usage" || {
-    echo "rpi-fw-crypto lacks $sub"
-    exit 1
-  }
+  grep -q -- "$sub" <<<"$usage" || fail "rpi-fw-crypto lacks $sub; its usage: $usage"
 done
-test -s /usr/share/licenses/rpi-fw-crypto/LICENCE
+test -s /usr/share/licenses/rpi-fw-crypto/LICENCE || fail "no rpi-fw-crypto LICENCE"
 for kdir in /usr/lib/modules/*/; do
-  grep -qx 'lock_device_private_key=1' "$kdir/rpi-config.txt"
+  grep -qx 'lock_device_private_key=1' "$kdir/rpi-config.txt" ||
+    fail "no lock_device_private_key=1 in $kdir/rpi-config.txt"
   if grep -q 'lock_device_key_write' "$kdir/rpi-config.txt"; then
-    echo "lock_device_key_write breaks genkey"
-    exit 1
+    fail "lock_device_key_write breaks genkey"
   fi
 done
 for img in /usr/lib/modules/*/initramfs.img; do
-  lsinitrd "$img" >"$tmp/inv"
+  lsinitrd "$img" >"$tmp/inv" 2>"$tmp/inv.err" || fail "lsinitrd $img failed: $(head -c 2000 "$tmp/inv.err")"
   if grep -q 'kernel/x86/microcode' "$tmp/inv"; then
-    echo "x86 microcode in the arm64 initramfs"
-    exit 1
+    fail "x86 microcode in the arm64 initramfs"
   fi
   echo "initramfs: $img: $(stat -c %s "$img") bytes"
 done
