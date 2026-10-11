@@ -294,8 +294,14 @@ test_changelog_repo_file() {
   check "changelog: CHANGELOG.md has Unreleased" grep -qx '## Unreleased' "$ROOT/CHANGELOG.md"
 }
 
+# tailscale status --json of a locked device that is up and connected to the control plane.
+TS_ONLINE='{"BackendState":"Running","Self":{"Online":true}}'
+export TS_ONLINE
+
 health_env() {
-  export JUNIPER_HEALTH_TRIES=1 JUNIPER_HEALTH_INTERVAL=0 JUNIPER_TRYBOOT_FLAG=$T/tryboot
+  export JUNIPER_HEALTH_TRIES=1 JUNIPER_HEALTH_INTERVAL=0 JUNIPER_TRYBOOT_FLAG=$T/tryboot \
+    JUNIPER_HEALTH_D=$T/health.d JUNIPER_HEALTH_LOCAL_D=$T/local.d \
+    JUNIPER_HEALTH_PROBE_TIMEOUT=2 JUNIPER_HEALTH_PROBE_KILL=1
 }
 
 test_healthcheck_healthy_confirms() {
@@ -387,7 +393,7 @@ test_healthcheck_locked_tailscale_ssh_is_healthy() {
   printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
   stub ip 'echo "default via 192.168.1.1 dev wlan0"'
   # shellcheck disable=SC2016 # expands inside the stub
-  stub tailscale 'case $1 in status) echo "{\"BackendState\":\"Running\"}" ;; debug) echo "{\"RunSSH\":true}" ;; esac'
+  stub tailscale 'case $1 in status) echo "$TS_ONLINE" ;; debug) echo "{\"RunSSH\":true}" ;; esac'
   "$LIBEXEC/healthcheck"
   check "health: locked + Tailscale SSH -> healthy" called "rpi-bootc-bootloader sync"
   check "health: locked + Tailscale SSH -> no reboot" not_called "systemctl reboot"
@@ -398,7 +404,7 @@ test_healthcheck_locked_sshd_is_healthy() {
   touch "$JUNIPER_STATE_DIR/locked"
   stub ip 'echo "default via 192.168.1.1 dev wlan0"'
   # shellcheck disable=SC2016 # expands inside the stub
-  stub tailscale 'case $1 in status) echo "{\"BackendState\":\"Running\"}" ;; debug) echo "{\"RunSSH\":false}" ;; esac'
+  stub tailscale 'case $1 in status) echo "$TS_ONLINE" ;; debug) echo "{\"RunSSH\":false}" ;; esac'
   # shellcheck disable=SC2016 # expands inside the stub
   stub systemctl 'if [[ $1 == is-active ]]; then echo active; fi'
   "$LIBEXEC/healthcheck"
@@ -481,6 +487,54 @@ test_healthcheck_passing_hook_and_no_hooks() {
   : >"$CALLS"
   "$LIBEXEC/healthcheck"
   check "health: passing hook -> healthy" called "rpi-bootc-bootloader sync"
+}
+
+# A hung probe must not stall a try either: a wedged tailscaled (or ip, or systemctl) is killed
+# after the probe timeout, and the try counts as unhealthy. The stubs ignore SIGTERM.
+hang='trap "" TERM; sleep 30'
+test_healthcheck_hanging_tailscale_still_falls_back() {
+  health_env
+  touch "$JUNIPER_STATE_DIR/locked"
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  stub tailscale "$hang"
+  local start=$SECONDS
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "health: hung tailscale killed after the probe timeout" test $((SECONDS - start)) -lt 10
+  check "health: hung tailscale under tryboot -> reboot" called "systemctl reboot"
+  check "health: hung tailscale -> no sync" not_called "rpi-bootc-bootloader sync"
+}
+
+test_healthcheck_hanging_ip_still_falls_back() {
+  health_env
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip "$hang"
+  local start=$SECONDS
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "health: hung ip killed after the probe timeout" test $((SECONDS - start)) -lt 10
+  check "health: hung ip under tryboot -> reboot" called "systemctl reboot"
+}
+
+test_healthcheck_hanging_systemctl_probe_still_falls_back() {
+  health_env
+  touch "$JUNIPER_STATE_DIR/locked"
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub tailscale 'case $1 in status) echo "$TS_ONLINE" ;; debug) echo "{\"RunSSH\":false}" ;; esac'
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub systemctl 'if [[ $1 == is-active ]]; then trap "" TERM; sleep 30; fi'
+  local start=$SECONDS
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "health: hung systemctl is-active killed after the probe timeout" test $((SECONDS - start)) -lt 10
+  check "health: hung systemctl probe under tryboot -> reboot" called "systemctl reboot"
+}
+
+test_healthcheck_probe_timeout_is_short() {
+  local p
+  # shellcheck disable=SC2016 # literal ${...} in the script's text
+  p=$(sed -n 's/^probe_timeout=${JUNIPER_HEALTH_PROBE_TIMEOUT:-\([0-9]*\)}$/\1/p' "$LIBEXEC/healthcheck")
+  check "health: per-probe timeout at most 10s" test "${p:-99}" -le 10
 }
 
 # Real-root emergency mode under tryboot: PID 1 keeps the watchdog fed, so nothing would
