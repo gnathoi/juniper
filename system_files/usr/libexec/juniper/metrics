@@ -59,12 +59,11 @@ if [[ -n $bs ]]; then
 fi
 
 # Current health: the boot health check's probes, without its side effects (no sync, reboot or
-# strike). Exit 0/1 is healthy/unhealthy; anything else (timeout, crash) leaves the metric out.
-timeout -k 5 "${JUNIPER_METRICS_HEALTH_TIMEOUT:-90}" "${JUNIPER_HEALTHCHECK:-$(dirname "$0")/healthcheck}" --check >/dev/null 2>&1
-case $? in
-  0) gauge juniper_healthy "1 if the health check passes right now (route, Tailscale when locked, image and local hooks)." 1 ;;
-  1) gauge juniper_healthy "1 if the health check passes right now (route, Tailscale when locked, image and local hooks)." 0 ;;
-esac
+# strike). Exit 0 is healthy; anything else, including a timeout or crash, is unhealthy: a hung
+# check is itself a health problem, and an absent series would not trigger a `== 0` alert.
+healthy=0
+timeout -k 5 "${JUNIPER_METRICS_HEALTH_TIMEOUT:-90}" "${JUNIPER_HEALTHCHECK:-$(dirname "$0")/healthcheck}" --check >/dev/null 2>&1 && healthy=1
+gauge juniper_healthy "1 if the health check passes right now (route, Tailscale when locked, image and local hooks)." "$healthy"
 
 # healthcheck touches this when a boot is confirmed healthy.
 if ok=$(stat -c %Y "$state_dir/health-last-ok" 2>/dev/null) && is_num "$ok"; then

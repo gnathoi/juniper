@@ -2555,7 +2555,10 @@ test_metrics_healthy_gauge() {
   check "metrics: unhealthy 0" grep -qx 'juniper_healthy 0' "$prom"
   health_stub 124
   "$LIBEXEC/metrics"
-  check "metrics: probe error leaves healthy out" not_grep_dir juniper_healthy "$JUNIPER_METRICS_DIR"
+  check "metrics: probe crash/timeout code reports unhealthy" grep -qx 'juniper_healthy 0' "$prom"
+  printf '#!/usr/bin/env bash\nsleep 30\n' >"$T/healthcheck"
+  JUNIPER_METRICS_HEALTH_TIMEOUT=1 "$LIBEXEC/metrics"
+  check "metrics: hung check reports unhealthy" grep -qx 'juniper_healthy 0' "$prom"
   check "metrics: last-ok help text" "$LIBEXEC/metrics"
   touch "$JUNIPER_STATE_DIR/health-last-ok"
   "$LIBEXEC/metrics"
