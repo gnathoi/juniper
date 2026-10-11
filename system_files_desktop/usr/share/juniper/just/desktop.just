@@ -5,7 +5,7 @@ desktop-config:
     f=$HOME/.config/niri/config.kdl
     if [[ -e $f ]]; then echo "$f exists; leaving it alone."; exit 0; fi
     mkdir -p "${f%/*}"
-    printf '%s\n' '// Juniper defaults first: they lock the screen at login. Keep this line.' \
+    printf '%s\n' '// Juniper defaults (bar, notifications, idle lock, key bindings); drop this line to start from scratch.' \
       'include "/usr/share/juniper/niri/juniper.kdl"' '' '// Your settings below override the defaults.' >"$f"
     niri validate -c "$f" && echo "Created $f"
 

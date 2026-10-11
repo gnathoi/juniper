@@ -160,6 +160,14 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
     swaylock swayidle swaync pipewire wireplumber flatpak notify-send
   need_enabled greetd.service
   systemd-analyze verify greetd.service
+  # Login prompt first: agreety, then niri only after PAM authentication; never auto-login.
+  grep -qx 'command = "agreety --cmd niri-session"' /etc/greetd/config.toml
+  if grep -q initial_session /etc/greetd/config.toml ||
+    compgen -G '/usr/lib/systemd/system/greetd.service.d/*' >/dev/null ||
+    compgen -G '/etc/systemd/system/greetd.service.d/*' >/dev/null; then
+    echo "greetd auto-login, or a drop-in overriding /etc/greetd/config.toml"
+    exit 1
+  fi
   # An update that doesn't bring greetd up is rolled back under tryboot (healthcheck hook).
   test -x /usr/lib/juniper/health.d/10-greetd
   grep -q '^GPGKey=' /etc/flatpak/remotes.d/flathub.flatpakrepo

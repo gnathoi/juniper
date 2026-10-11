@@ -1,10 +1,8 @@
 // Juniper Desktop defaults, included by /etc/niri/config.kdl (and by the stub that
 // `ujust desktop-config` writes). Later settings in your own config override these.
 
-// Notifications first (the lock script may need to show one), then lock so every boot ends
-// at the lock screen; then the bar and idle.
+// niri starts after you log in at greetd's prompt. Notifications, the bar, and the idle lock.
 spawn-at-startup "swaync"
-spawn-at-startup "/usr/libexec/juniper/desktop-lock-first"
 spawn-at-startup "waybar"
 spawn-at-startup "/usr/libexec/juniper/desktop-idle-lock"
 
