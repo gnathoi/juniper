@@ -31,6 +31,12 @@ healthy() {
     local ts
     ts=$(probe tailscale status --json 2>/dev/null) || return 1
     [[ $(jq -r '.BackendState // empty' <<<"$ts" 2>/dev/null) == Running ]] || return 1
+    # The management path must actually work, not just tailscaled: .Self.Online is true while
+    # the node holds its map session with the coordination server (tailscaled sets it from
+    # health.GetInPollNetMap). Offline policy: a locked device that can't reach Tailscale after
+    # an update falls back. The previous image is known good, and the device stays reachable
+    # on it; the update is retried once a newer image ships (see the digest quarantine below).
+    [[ $(jq -r '.Self.Online // false' <<<"$ts" 2>/dev/null) == true ]] || return 1
     [[ $(probe tailscale debug prefs 2>/dev/null | jq -r '.RunSSH // false') == true ]] ||
       [[ $(probe systemctl is-active sshd.service 2>/dev/null) == active ]] || return 1
   fi
@@ -84,6 +90,6 @@ for ((i = 0; i < tries && SECONDS < deadline; i++)); do
   sleep "$interval"
 done
 
-echo "Health check failed: no default route, (locked) Tailscale or SSH over it down, or an image health hook failed." >&2
+echo "Health check failed: no default route, (locked) Tailscale down, offline from its control plane or SSH over it down, or an image health hook or local health hook failed." >&2
 fall_back
 exit 1

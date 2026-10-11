@@ -530,6 +530,46 @@ test_healthcheck_hanging_systemctl_probe_still_falls_back() {
   check "health: hung systemctl probe under tryboot -> reboot" called "systemctl reboot"
 }
 
+# Locked: Tailscale must also be connected to its control plane (.Self.Online), or the update
+# falls back (the decided offline policy).
+locked_ts_env() {
+  health_env
+  touch "$JUNIPER_STATE_DIR/locked"
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub tailscale 'case $1 in status) echo "$TS_STATUS" ;; debug) echo "{\"RunSSH\":true}" ;; esac'
+}
+
+test_healthcheck_locked_requires_control_connection() {
+  locked_ts_env
+  TS_STATUS='{"BackendState":"Running","Self":{"Online":false}}' "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "health: locked, control offline -> fall back" called "systemctl reboot"
+  check "health: locked, control offline -> no sync" not_called "rpi-bootc-bootloader sync"
+}
+
+test_healthcheck_locked_missing_online_is_unhealthy() {
+  locked_ts_env
+  TS_STATUS='{"BackendState":"Running"}' "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "health: locked, no Self.Online -> fall back" called "systemctl reboot"
+}
+
+test_healthcheck_locked_control_online_is_healthy() {
+  locked_ts_env
+  TS_STATUS=$TS_ONLINE "$LIBEXEC/healthcheck"
+  check "health: locked, control online -> sync" called "rpi-bootc-bootloader sync"
+  check "health: locked, control online -> no reboot" not_called "systemctl reboot"
+}
+
+test_healthcheck_unlocked_ignores_control_connection() {
+  health_env
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  stub ip 'echo "default via 192.168.1.1 dev wlan0"'
+  stub tailscale "echo '{\"BackendState\":\"Running\",\"Self\":{\"Online\":false}}'"
+  "$LIBEXEC/healthcheck"
+  check "health: not locked, control offline -> still healthy (LAN SSH works)" called "rpi-bootc-bootloader sync"
+}
+
 # juniper-healthcheck.service failing for any reason (killed at TimeoutStartSec, crashed, OOM)
 # starts juniper-healthcheck-fallback.service: `healthcheck --fallback` reboots under tryboot
 # only, with no probes and no retries.
