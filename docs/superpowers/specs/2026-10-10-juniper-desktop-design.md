@@ -126,11 +126,12 @@ default unless hardware testing shows otherwise.
   which the reboot window uses.
 - **niri config.** niri reads `~/.config/niri/config.kdl`, else `/etc/niri/config.kdl`,
   else its built-in default. Juniper ships its defaults read-only at
-  `/usr/share/juniper/niri/juniper.kdl` (keybinds, waybar/swaync/idle-lock/
-  xwayland-satellite spawn, Juniper wallpaper). A first-login user unit (like
-  `juniper-brew-tools`) creates `~/.config/niri/config.kdl` only if missing, containing
-  `include "/usr/share/juniper/niri/juniper.kdl"` followed by a commented "your overrides
-  below" section: image updates still change the defaults, user changes win. Needs niri's
+  `/usr/share/juniper/niri/juniper.kdl` (keybinds, waybar/swaync/idle-lock spawn,
+  xwayland-satellite), and `/etc/niri/config.kdl` contains only an include of it. No user
+  config is created automatically: `ujust desktop-config` creates `~/.config/niri/config.kdl`
+  only if missing, containing `include "/usr/share/juniper/niri/juniper.kdl"` followed by a
+  commented "your settings below" section: image updates still change the defaults, user
+  changes win. Needs niri's
   `include` (25.11+) and later-wins merging, to be confirmed on hardware. Security doesn't
   depend on the user's config: authentication happens at greetd, before niri starts.
 - **Keyring.** gnome-keyring with the PAM lines the greetd package already has
@@ -187,7 +188,7 @@ default unless hardware testing shows otherwise.
 | Lockdown (`drop` zone + tailscale0 trusted) | Unchanged; the desktop opens no ports |
 | Health check | Under tryboot, also require `greetd.service` active (desktop-only `health.d/` hook; the headless images ship no hook) |
 | Daily stage (`juniper-update`) | Unchanged |
-| Weekly reboot window | Desktop-only drop-in adds `ExecCondition=/usr/libexec/juniper/desktop-idle` to `juniper-reboot.service`: skip the reboot while a seat0 session is active and not idle (logind `IdleHint`, set by swayidle after 30 min) unless the update has been staged for 7 days. A deferral shows a swaync notification ("update ready", with the deadline) when it starts and at most once a day after. An hourly timer retries a deferred reboot once the desktop is idle, only while automatic reboots are on (`ujust update-schedule off` stops it too). The headless images don't ship either |
+| Weekly reboot window | Desktop-only drop-in adds `ExecCondition=/usr/libexec/juniper/desktop-idle` to `juniper-reboot.service`: skip the reboot while a logind session of `Type=wayland` is active and not idle (`IdleHint`, set by swayidle after 30 min) unless the update has been staged for 7 days. A deferral shows a swaync notification ("update ready", with the deadline) when it starts and at most once a day after. An hourly timer retries a deferred reboot once the desktop is idle, only while automatic reboots are on (`ujust update-schedule off` stops it too). The headless images don't ship either |
 | `ujust update` | Unchanged (explicit, reboots now) |
 | MOTD/fastfetch | Unchanged (SSH logins and foot) |
 
