@@ -264,7 +264,9 @@ fresh() {
 cr() {
   local action=$1
   shift
+  # A SIGKILLed or refusing run is an expected result here, not a test error.
   set +e
+  trap - ERR
   env PATH="$W/hook:$REAL_PATH" JUNIPER_CMDLINE="$W/cmdline" JUNIPER_CIDATA_MNT="$W/cidata-mnt" \
     JUNIPER_RUN_DIR="$W/run" JUNIPER_CPUINFO="$W/cpuinfo-aes" \
     JUNIPER_TRYBOOT_FLAG="$W/no-tryboot" JUNIPER_ROOT_WAIT=5 JUNIPER_UNLOCK_FAIL_DELAY=0 \
@@ -272,6 +274,7 @@ cr() {
     setsid -w "$CRYPTROOT" "$action" >"$W/out" 2>&1
   rc=$?
   set -e
+  trap 'echo "cryptroot-loop.sh:$LINENO: failed: $BASH_COMMAND" >&2' ERR
   grep -v '^Progress' "$W/out" | sed "s/^/     | /" || true
   if [[ ! -e $KILL_DONE ]] && mountpoint -q "$W/cidata-mnt"; then
     check "cryptroot $action left CIDATA unmounted" false
