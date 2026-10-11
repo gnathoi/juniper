@@ -89,6 +89,24 @@ test -x /usr/libexec/juniper/metrics
 need_enabled juniper-update.timer juniper-image-prune.timer juniper-metrics.timer juniper-reboot.timer juniper-healthcheck.service juniper-lan-ssh-status.service
 need_cmds rpi-bootc-bootloader
 grep -qx 'TRYBOOT=1' /etc/rpi-bootc-bootloader/tryboot.conf
+test -x /usr/libexec/juniper/bootloader
+# The effective ExecStop list is exactly one command, our wrapper. rpi-bootc-bootloader's own
+# drop-in already replaced the unit's `ostree admin finalize-staged` with the tool, which runs
+# ostree admin finalize-staged itself, so that call must stay reachable through the tool.
+# No systemd in the test container: resolve the list as systemd does (unit, then drop-ins in
+# name order; an empty ExecStop= resets).
+u=/usr/lib/systemd/system/ostree-finalize-staged.service
+stops=()
+for f in "$u" "$u".d/*.conf; do
+  while IFS= read -r l; do
+    case $l in
+      ExecStop=) stops=() ;;
+      ExecStop=*) stops+=("${l#ExecStop=}") ;;
+    esac
+  done <"$f"
+done
+[[ ${#stops[@]} == 1 && ${stops[0]} == '/usr/libexec/juniper/bootloader finalize-staged' ]]
+grep -q 'ostree admin finalize-staged' /usr/bin/rpi-bootc-bootloader
 grep -qx 'OnCalendar=Tue \*-\*-\* 04:00:00' /usr/lib/systemd/system/juniper-reboot.timer || {
   echo "reboot timer default is not Tue 04:00" >&2
   exit 1
