@@ -49,7 +49,7 @@ These are repeated in each task brief where they apply.
   - default off until Task 13, then Task 14.
 - **Key rules:**
   - key id 1;
-  - probe with `hmac` on `juniper.probe.v1`;
+  - probe with `hmac` on `juniper.probe.v1`; **Superseded 2026-10-11:** `hmac` wedged the mailbox on EEPROM 2025-11-05. Probe with `pubkey` (250 = not set), gate on build-timestamp >= 1769002727 (Pi 5; fail open on Pi 4), and bound every call with a deadline and a wedged marker (spec, "Hardware findings");
   - `genkey --key-id 1 --alg ec` **only** on `KEY_NOT_SET` (error 6), and **only as the last first-boot precondition** (I7);
   - never `privkey`, `rpi-otp-private-key`, `vcmailbox 0x00030081` or `set-key-usage`;
   - after unlock, `set-key-status 1 READ_LOCKED GEN_LOCKED HMAC_LOCKED USAGE_LOCKED` **is best-effort** (ruling 4, I3): `unavailable` is expected, and it never fails the boot;
@@ -451,7 +451,7 @@ derive() {
    6. Grow by 64 MiB with an absolute size (I15). `cur` is the partition's size in sectors (`cat $JUNIPER_BLOCK_SYSFS/class/block/$part/size`). Run `printf 'size=%s\n' "$((cur + 131072))" | sfdisk -N "$n" --no-reread --no-tell-kernel /dev/$disk`, then `partx -u -n "$n" /dev/$disk`.
    7. `fwkey derive "$disk" | cryptsetup reencrypt --batch-mode --encrypt --init-only --type luks2 --key-slot 0 --reduce-device-size 32M --cipher "$cipher" --key-size "$keysize" --sector-size 512 --pbkdf pbkdf2 --pbkdf-force-iterations 1000 --label juniper-root --key-file - "/dev/$part"`.
    8. **Disarm the trap.** From here, failures leave the marker at `converting` so the next boot resumes.
-   9. Import token 0 with `recovery: pending`, `recipients: <n>` and `id_type` (from `fwkey card-id`, the part before `:`).
+   9. **Superseded 2026-10-11:** cryptsetup refuses `token import` while the header is marked for reencryption (reboot loop). Import token 0 only after the conversion completes; before then the candidate is found by the `converting` marker, GPT root type and CIDATA disk. Original text: import token 0 with `recovery: pending`, `recipients: <n>` and `id_type` (from `fwkey card-id`, the part before `:`).
 4. **Resume.**
    - A LUKS candidate with no token (the C1 case) gets token 0 imported first.
    - If `cryptsetup luksDump` shows `online-reencrypt` in its requirements:

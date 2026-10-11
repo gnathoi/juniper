@@ -99,7 +99,13 @@ The OTP research (issue #50, 2026-10-11) settles the details:
 - **Interface:** `rpi-fw-crypto` (raspberrypi/utils `rpifwcrypto/`) through the `/dev/vcio`
   mailbox. Key id **1**, the only one exposed on Pi 4 and Pi 5. It is shared with Connect
   and Raspberry Pi's FDE tools.
-- **Probe, then generate only if blank.** `rpi-fw-crypto hmac --key-id 1` runs on
+- **Probe, then generate only if blank.**
+
+  > **Superseded 2026-10-11:** probing with `hmac` wedged the firmware mailbox on EEPROM
+  > 2025-11-05. The key is probed with `rpi-fw-crypto pubkey` (exit 250 = not set, the only
+  > case that runs `genkey`). See "Hardware findings".
+
+  `rpi-fw-crypto hmac --key-id 1` runs on
   `juniper.probe.v1`:
   - success: reuse the key;
   - `KEY_NOT_SET` (error 6): `rpi-fw-crypto genkey --key-id 1 --alg ec`, then probe again;
@@ -276,11 +282,15 @@ secret reaches the root partition.
    1. `cryptsetup reencrypt --encrypt --init-only --type luks2 --key-slot 0
       --reduce-device-size 32M …` writes the header (data offset 16 MiB), with the
       passphrase on stdin. The fail-open guard is disarmed from here.
-   2. `cryptsetup token import --token-id 0` adds the `juniper` token (`recovery: pending`).
+   2. ~~`cryptsetup token import --token-id 0` adds the `juniper` token.~~ Superseded 2026-10-11: see the note below step 5.
    3. `cryptsetup reencrypt --resume-only --progress-frequency 10` does the work: about
       3–10 minutes on SD for the 6 GiB partition (1.6 GiB used, every block rewritten).
       Progress goes to the serial console. The watchdog stays fed by PID 1, and the unit has
       `TimeoutStartSec=infinity`.
+   > **Superseded 2026-10-11:** real cryptsetup refuses `token import` while the header is
+   > marked for reencryption (a reboot loop on hardware). Token 0 is imported only after the
+   > conversion completes (step 6's resume). See "Hardware findings".
+
 6. **Interrupted runs** are recognised on the next boot:
    - **After the header, before the token (C1):** the root is LUKS with label `juniper-root`
      and no `juniper` token, on the CIDATA disk, with GPT type root-arm64 and marker
@@ -468,6 +478,22 @@ New `flash.yaml` keys:
    cloud-init growpart is unchanged.
 3. **The owner's Pi 5 hardware run** (Task 13).
 4. **Flip PR** (Task 14).
+
+## Hardware findings (2026-10-11)
+
+First runs on a Pi 5 changed three parts of the design above:
+
+- **Firmware gate.** `hmac` on EEPROM 2025-11-05 locks up the mailbox. `fwkey` reads
+  `/proc/device-tree/chosen/bootloader/build-timestamp` and requires at least 1769002727
+  (pieeprom-2026-01-21) on a Pi 5; older firmware means no encryption and a warning. On a
+  Pi 4 it fails open (unverified).
+- **Probe with `pubkey`.** Exit 250 means the key is not set, the only case that runs
+  `genkey`. Every `rpi-fw-crypto` call has a deadline; one that overruns writes a wedged
+  marker and the boot fails open.
+- **Token 0 follows the conversion.** cryptsetup refuses `token import` while the header is
+  marked for reencryption. The token is imported after the conversion completes. Until then
+  the candidate is found by the `converting` marker, the GPT root type (root-arm64) and the
+  CIDATA disk.
 
 ## Spike findings (2026-10-11)
 
