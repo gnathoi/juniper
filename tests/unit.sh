@@ -4377,6 +4377,209 @@ test_version_label_and_first_boot_reboot_guard() {
   done
 }
 
+# --- encryption reporting (#50 task 7) ---
+enc_env() {
+  export JUNIPER_RUN_DIR=$T/run JUNIPER_CIDATA_DIR=$T/cidata
+  mkdir -p "$JUNIPER_RUN_DIR" "$JUNIPER_CIDATA_DIR"
+  stub findmnt 'echo /dev/mapper/juniper-root'
+  stub lsblk 'printf "crypt\npart\ndisk\n"'
+  enc=$JUNIPER_STATE_DIR/encryption
+}
+enc_run() { printf '%s\n' "$@" >"$JUNIPER_RUN_DIR/cryptroot"; }
+enc_ok() {
+  enc_run state=encrypted reason= cipher=aes-xts-plain64 binding=board+mmc key_lock=locked recovery=sealed:2
+}
+
+test_encryption_status_encrypted() {
+  enc_env
+  enc_ok
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: encrypted" grep -qx 'state=encrypted' "$enc"
+  check "encryption-status: cipher kept" grep -qx 'cipher=aes-xts-plain64' "$enc"
+  check "encryption-status: requested" grep -qx 'requested=yes' "$enc"
+  check "encryption-status: print line" stdout_has \
+    'Storage: encrypted (LUKS2 aes-xts-plain64, bound to this Pi and card; key lock: locked; recovery: sealed to 2 keys)' \
+    "$LIBEXEC/encryption-status" --print
+}
+
+test_encryption_status_live_device_wins() {
+  enc_env
+  enc_ok
+  stub lsblk 'printf "part\ndisk\n"'
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: live part -> not-encrypted" grep -qx 'state=not-encrypted' "$enc"
+  check "encryption-status: live reason" grep -qx 'reason=root is not on dm-crypt' "$enc"
+  check "encryption-status: live mismatch is a warning" grep -qx 'requested=yes' "$enc"
+  check "encryption-status: print warns" stdout_has 'Storage: NOT ENCRYPTED (root is not on dm-crypt). Reflash to encrypt.' "$LIBEXEC/encryption-status" --print
+}
+
+test_encryption_status_plain_card_is_quiet() {
+  enc_env
+  stub lsblk 'printf "part\ndisk\n"'
+  enc_run state=not-encrypted 'reason=not requested at flash time'
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: plain card, not requested" grep -qx 'requested=no' "$enc"
+  check "encryption-status: plain card, quiet line" stdout_has '^Storage: not encrypted (not requested at flash time)$' "$LIBEXEC/encryption-status" --print
+  check "encryption-status: plain card, no shouting" not_stdout_has 'NOT ENCRYPTED' "$LIBEXEC/encryption-status" --print
+}
+
+test_encryption_status_firmware_reasons() {
+  enc_env
+  stub lsblk 'printf "part\ndisk\n"'
+  enc_run state=not-encrypted 'reason=firmware key interface unavailable: firmware-too-old'
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: firmware-too-old asks for an EEPROM update" stdout_has 'update the Pi.s EEPROM: sudo rpi-eeprom-update -a' "$LIBEXEC/encryption-status" --print
+  check "encryption-status: firmware-too-old is requested" grep -qx 'requested=yes' "$enc"
+  enc_run state=not-encrypted 'reason=firmware key interface unavailable: pi4-unverified'
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: pi4-unverified" stdout_has 'Pi 4 firmware key interface is unverified' "$LIBEXEC/encryption-status" --print
+  enc_run state=not-encrypted 'reason=firmware key interface unavailable: derive failed (firmware-wedged)'
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: firmware-wedged" stdout_has 'firmware key interface stopped answering' "$LIBEXEC/encryption-status" --print
+  enc_run state=not-encrypted 'reason=encryption unfinished; the next boot retries'
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: unfinished retries" stdout_has 'The next boot retries' "$LIBEXEC/encryption-status" --print
+}
+
+test_encryption_status_legacy_device() {
+  enc_env
+  stub lsblk 'printf "part\ndisk\n"'
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: no run file, no marker -> legacy" grep -qx 'reason=flashed before encryption support' "$enc"
+  check "encryption-status: legacy is quiet" grep -qx 'requested=no' "$enc"
+}
+
+test_encryption_status_prepare_missing() {
+  enc_env
+  stub lsblk 'printf "part\ndisk\n"'
+  echo on >"$JUNIPER_CIDATA_DIR/juniper-encrypt"
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: marker but no run file" grep -qx 'reason=prepare did not run' "$enc"
+  check "encryption-status: asked for encryption -> warning" grep -qx 'requested=yes' "$enc"
+  echo off >"$JUNIPER_CIDATA_DIR/juniper-encrypt"
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: marker off -> quiet" grep -qx 'requested=no' "$enc"
+}
+
+test_encryption_status_mounts_cidata_read_only() {
+  enc_env
+  unset JUNIPER_CIDATA_DIR
+  stub lsblk 'printf "part\ndisk\n"'
+  stub cidata-device 'echo /dev/mmcblk0p1'
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub mount 'echo on >"${@: -1}/juniper-encrypt"'
+  export JUNIPER_CIDATA_DEVICE=cidata-device JUNIPER_MOUNT_RETRY_DELAY=0
+  TMPDIR=$T "$LIBEXEC/encryption-status" || true
+  check "encryption-status: mounts boot disk CIDATA read-only" called "mount -o ro /dev/mmcblk0p1"
+  check "encryption-status: unmounts it" called "umount"
+  check "encryption-status: really read the marker" grep -qx 'reason=prepare did not run' "$enc"
+}
+
+test_encryption_status_mount_failure_is_loud() {
+  enc_env
+  unset JUNIPER_CIDATA_DIR
+  stub lsblk 'printf "part\ndisk\n"'
+  stub cidata-device 'echo /dev/mmcblk0p1'
+  stub mount 'exit 32'
+  export JUNIPER_CIDATA_DEVICE=cidata-device JUNIPER_MOUNT_RETRY_DELAY=0
+  TMPDIR=$T "$LIBEXEC/encryption-status"
+  check "encryption-status: mount failure -> unknown" grep -qx 'state=unknown' "$enc"
+  check "encryption-status: mount failure is not quiet" grep -qx 'requested=yes' "$enc"
+  check "encryption-status: mount retried" test "$(grep -c '^mount' "$CALLS")" = 5
+  check "encryption-status: not passed off as legacy" not_grep_dir 'flashed before' "$JUNIPER_STATE_DIR"
+  check "encryption-status: print says unknown" stdout_has 'Storage: UNKNOWN' "$LIBEXEC/encryption-status" --print
+  motd_env
+  df_queue "30000 20000"
+  check "motd: unknown status warns" stdout_has 'Storage encryption status unknown' "$LIBEXEC/motd"
+  check "unit: not ordered after firstboot (healthcheck cycle)" not_grep_dir 'juniper-firstboot' "$ROOT/system_files/usr/lib/systemd/system/juniper-encryption-status.service"
+}
+
+test_encryption_status_empty_reason_is_quiet() {
+  enc_env
+  stub lsblk 'printf "part\ndisk\n"'
+  enc_run state=not-encrypted reason=
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: empty reason, quiet" grep -qx 'requested=no' "$enc"
+  check "encryption-status: empty reason noted in pi-status" stdout_has 'not encrypted (reason not recorded)' "$LIBEXEC/encryption-status" --print
+}
+
+test_metrics_encryption_gauges() {
+  metrics_env
+  printf 'state=encrypted\nkey_lock=unavailable\nrecovery=sealed:2\n' >"$JUNIPER_STATE_DIR/encryption"
+  "$LIBEXEC/metrics"
+  check "metrics: encrypted 1" grep -qx 'juniper_encrypted 1' "$prom"
+  check "metrics: key lock 0" grep -qx 'juniper_encryption_key_locked 0' "$prom"
+  check "metrics: recovery sealed 1" grep -qx 'juniper_encryption_recovery_sealed 1' "$prom"
+  printf 'state=encrypted\nkey_lock=locked\nrecovery=pending\n' >"$JUNIPER_STATE_DIR/encryption"
+  "$LIBEXEC/metrics"
+  check "metrics: locked 1" grep -qx 'juniper_encryption_key_locked 1' "$prom"
+  check "metrics: pending recovery 0" grep -qx 'juniper_encryption_recovery_sealed 0' "$prom"
+  rm "$JUNIPER_STATE_DIR/encryption"
+  "$LIBEXEC/metrics"
+  check "metrics: no file -> encrypted 0" grep -qx 'juniper_encrypted 0' "$prom"
+  check "metrics: no file -> requested 0" grep -qx 'juniper_encryption_requested 0' "$prom"
+  check "metrics: no file -> recovery series absent" not_grep_dir juniper_encryption_recovery_sealed "$JUNIPER_METRICS_DIR"
+  check "metrics: no file -> key lock series absent" not_grep_dir juniper_encryption_key_locked "$JUNIPER_METRICS_DIR"
+  printf 'state=not-encrypted\nrequested=yes\n' >"$JUNIPER_STATE_DIR/encryption"
+  "$LIBEXEC/metrics"
+  check "metrics: failed request -> requested 1" grep -qx 'juniper_encryption_requested 1' "$prom"
+  check "metrics: failed request -> encrypted 0" grep -qx 'juniper_encrypted 0' "$prom"
+}
+
+test_metrics_keeps_existing_series() {
+  metrics_env
+  "$LIBEXEC/metrics"
+  check "metrics: image info still present" grep -q '^juniper_image_info' "$prom"
+  check "metrics: healthy still present" grep -qx 'juniper_healthy 1' "$prom"
+}
+
+test_motd_warns_not_encrypted() {
+  motd_env
+  df_queue "30000 20000"
+  printf 'state=not-encrypted\nrequested=yes\nreason=x\nfriendly=firmware too old\nadvice=Reflash to encrypt.\n' >"$JUNIPER_STATE_DIR/encryption"
+  check "motd: not-encrypted warning" stdout_has 'Storage NOT ENCRYPTED (firmware too old): anyone holding this card can read its secrets. Reflash to encrypt.' "$LIBEXEC/motd"
+  printf 'state=not-encrypted\nrequested=no\nreason=not requested at flash time\nfriendly=not requested at flash time\n' >"$JUNIPER_STATE_DIR/encryption"
+  check "motd: plain card shows nothing" not_stdout_has 'ENCRYPTED\|Storage' "$LIBEXEC/motd"
+  rm "$JUNIPER_STATE_DIR/encryption"
+  check "motd: no report shows nothing" not_stdout_has 'ENCRYPTED' "$LIBEXEC/motd"
+}
+
+test_motd_warns_recovery_unsealed() {
+  motd_env
+  df_queue "30000 20000"
+  printf 'state=encrypted\nrecovery=pending\n' >"$JUNIPER_STATE_DIR/encryption"
+  check "motd: unsealed recovery warning" stdout_has 'Storage recovery key not sealed (pending): only this Pi can unlock this card.' "$LIBEXEC/motd"
+  printf 'state=encrypted\nrecovery=sealed:2\n' >"$JUNIPER_STATE_DIR/encryption"
+  check "motd: sealed -> quiet" not_stdout_has 'Storage' "$LIBEXEC/motd"
+}
+
+test_pi_status_board_only_wording() {
+  enc_env
+  enc_run state=encrypted reason= cipher=xchacha12,aes-adiantum-plain64 binding=board key_lock=unavailable recovery=sealed:1
+  "$LIBEXEC/encryption-status"
+  check "pi-status: board-only wording" stdout_has 'bound to this Pi only (USB disk has no serial; a clone unlocks on this Pi); key lock: unavailable; recovery: sealed to 1 keys' "$LIBEXEC/encryption-status" --print
+  check "pi-status: recipe calls it" grep -qx '    @/usr/libexec/juniper/encryption-status --print' "$ROOT/system_files/usr/share/juniper/just/pi.just"
+}
+
+test_encryption_status_unit() {
+  local u=$ROOT/system_files/usr/lib/systemd/system/juniper-encryption-status.service
+  check "unit: after local-fs" grep -qx 'After=local-fs.target' "$u"
+  check "unit: before healthcheck and metrics" grep -qx 'Before=juniper-healthcheck.service juniper-metrics.service' "$u"
+  check "build.sh enables it" grep -q 'juniper-encryption-status.service' "$ROOT/build_files/build.sh"
+}
+
+test_firstboot_keeps_and_copies_recovery() {
+  firstboot_env
+  echo "age-armor blob" >"$JUNIPER_CIDATA_DIR/juniper-recovery.age"
+  "$LIBEXEC/firstboot"
+  check "firstboot: blob copied" grep -q 'age-armor blob' "$JUNIPER_STATE_DIR/recovery.age"
+  check "firstboot: blob mode 0644" test "$(stat -c %a "$JUNIPER_STATE_DIR/recovery.age")" = 644
+  check "firstboot: blob stays on CIDATA" test -e "$JUNIPER_CIDATA_DIR/juniper-recovery.age"
+  rm "$JUNIPER_STATE_DIR/recovery.age" "$JUNIPER_CIDATA_DIR/juniper-recovery.age"
+  "$LIBEXEC/firstboot"
+  check "firstboot: no blob, no copy" test ! -e "$JUNIPER_STATE_DIR/recovery.age"
+}
+
 # --- runner ---
 # UNIT_FILTER=REGEX runs only the matching tests (e.g. UNIT_FILTER=cryptroot tests/unit.sh).
 # --- initramfs completeness (issue #50): the dracut module installs every command ---

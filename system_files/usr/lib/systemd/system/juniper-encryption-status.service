@@ -1,0 +1,11 @@
+[Unit]
+Description=Record whether the root filesystem is encrypted, for the login banner, pi-status and metrics
+After=local-fs.target
+Before=juniper-healthcheck.service juniper-metrics.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/juniper/encryption-status
+
+[Install]
+WantedBy=multi-user.target

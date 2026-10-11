@@ -274,6 +274,9 @@ metric whose input is missing is left out rather than reported wrong.
 | `juniper_lan_ssh_legacy` | 1 if locked down but SSH is still open to every network |
 | `juniper_locked` | 1 once locked down to Tailscale only |
 | `juniper_time_synced` | 1 if the clock is NTP-synchronised |
+| `juniper_encrypted` | 1 if the root filesystem is on LUKS2 |
+| `juniper_encryption_requested` | 1 if encryption was requested at flash time (or the root is encrypted) |
+| `juniper_encryption_key_locked`, `juniper_encryption_recovery_sealed` | only on an encrypted root: firmware key lock held; age-sealed recovery keyslot exists |
 | `juniper_kernel_build_timestamp_seconds` | build time of the installed Pi kernel |
 
 Example alert conditions:
@@ -283,6 +286,7 @@ Example alert conditions:
 - Update stuck: `juniper_update_held == 1`.
 - Clock wrong: `juniper_time_synced == 0` for 30 minutes.
 - Unhealthy: `juniper_healthy == 0` for 30 minutes.
+- Encryption requested but not active: `juniper_encryption_requested == 1 and juniper_encrypted == 0`.
 - Image out of date: `time() - juniper_image_timestamp_seconds > 21 * 86400` (pick your N).
 
 The login banner and `ujust pi-status` also warn "Clock not synchronised (NTP)" when the
