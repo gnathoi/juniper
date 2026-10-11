@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Firewall the Pi down to Tailscale once it has joined a tailnet. Fires automatically once
-# (juniper-lockdown.timer); afterwards `ujust lan-ssh on|off` adjusts it.
+# (juniper-lockdown.timer); afterwards `ujust lan-ssh` adjusts it.
 # Without a tailnet the Pi stays a normal LAN box: locking it then would brick it.
 set -euo pipefail
 
@@ -18,4 +18,4 @@ mkdir -p "$state_dir"
 touch "$state_dir/locked"
 # ponytail: polling timer; retire it now that its job is done.
 systemctl disable --now juniper-lockdown.timer
-echo "Locked down: only Tailscale traffic can reach this Pi. 'ujust lan-ssh on' re-opens LAN SSH."
+echo "Locked down: only Tailscale traffic can reach this Pi. 'ujust lan-ssh on' re-opens SSH from your local network only; 'ujust lan-ssh for 2h' does it temporarily."

@@ -1,13 +1,7 @@
-# Allow (on) or block (off) SSH from the local network after Tailscale lockdown
-lan-ssh state:
-    #!/usr/bin/bash
-    set -euo pipefail
-    case {{ quote(state) }} in
-      on) sudo firewall-cmd --permanent --zone=drop --add-service=ssh ;;
-      off) sudo firewall-cmd --permanent --zone=drop --remove-service=ssh ;;
-      *) echo "usage: ujust lan-ssh on|off" >&2; exit 2 ;;
-    esac
-    sudo firewall-cmd --reload
+# SSH from the local network after Tailscale lockdown: status | on [CIDR...] | for 2h [CIDR...] | off
+[positional-arguments]
+lan-ssh *args:
+    @sudo /usr/libexec/juniper/lan-ssh "$@"
 
 # Log in to Tailscale (prints a login URL), then lock the firewall down to it
 tailscale-up:

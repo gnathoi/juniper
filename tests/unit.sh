@@ -726,6 +726,7 @@ stdout_has() {
   grep -q -- "$1" <<<"$out"
 }
 not_stdout_has() { ! stdout_has "$@"; }
+not_stderr_has() { ! stderr_has "$@"; }
 stderr_has() { { "${@:2}" 2>&1 >/dev/null || true; } | grep -q -- "$1"; }
 
 # yq-free YAML lookups for the flash tests: yget FILE PYTHON-EXPR (d is the parsed document)
@@ -1305,6 +1306,280 @@ test_motd_shows_tailscale_gave_up_only_when_disconnected() {
   check "motd: gave-up reason shown" stdout_has "key rejected on 2033-05-18" "$LIBEXEC/motd"
   stub tailscale 'echo 100.64.0.1'
   check "motd: connected hides the stale marker" not_stdout_has "not joined" "$LIBEXEC/motd"
+}
+
+# --- lan-ssh ---
+# fw_fake: stateful firewall-cmd for the drop zone. Files under $T/fw hold permanent and
+# runtime rich rules/services; --reload copies permanent over runtime (dropping --timeout rules).
+fw_fake() {
+  export T
+  export JUNIPER_RUN_DIR=$T/run
+  mkdir -p "$T/fw"
+  : >"$T/fw/perm_rich" && : >"$T/fw/run_rich" && : >"$T/fw/perm_svc" && : >"$T/fw/run_svc"
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub firewall-cmd 'cfg=run
+for a; do case $a in
+  --permanent) cfg=perm ;;
+  --add-rich-rule=*) if grep -qxF -- "${a#*=}" "$T/fw/${cfg}_rich"; then echo "Warning: ALREADY_ENABLED" >&2; else echo "${a#*=}" >>"$T/fw/${cfg}_rich"; fi ;;
+  --remove-rich-rule=*) grep -vxF -- "${a#*=}" "$T/fw/${cfg}_rich" >"$T/fw/tmp" || true; mv "$T/fw/tmp" "$T/fw/${cfg}_rich" ;;
+  --list-rich-rules) cat "$T/fw/${cfg}_rich" ;;
+  --add-service=*) echo "${a#*=}" >>"$T/fw/${cfg}_svc" ;;
+  --remove-service=*) grep -vxF -- "${a#*=}" "$T/fw/${cfg}_svc" >"$T/fw/tmp" || true; mv "$T/fw/tmp" "$T/fw/${cfg}_svc" ;;
+  --query-service=*) grep -qxF -- "${a#*=}" "$T/fw/${cfg}_svc"; exit $? ;;
+  --reload) cp "$T/fw/perm_rich" "$T/fw/run_rich"; cp "$T/fw/perm_svc" "$T/fw/run_svc" ;;
+esac; done'
+}
+lan_ip_fixture() {
+  stub ip 'case "$*" in
+  "-j route show scope link") cat <<J
+[{"dst":"169.254.0.0/16","dev":"eth0","scope":"link","metric":1002},
+ {"dst":"192.168.1.0/24","dev":"eth0","protocol":"kernel","scope":"link","prefsrc":"192.168.1.20"},
+ {"dst":"100.100.0.0/16","dev":"tailscale0","scope":"link"},
+ {"dst":"10.9.0.0/16","dev":"wlan0","gateway":"10.9.0.1","scope":"link"},
+ {"dst":"172.16.5.0/24","dev":"lo","scope":"link"}]
+J
+  ;;
+  "-j -6 route show") cat <<J
+[{"dst":"2001:db8:1::/64","dev":"eth0","protocol":"ra","metric":100},
+ {"dst":"fe80::/64","dev":"eth0","protocol":"kernel"},
+ {"dst":"fd7a:115c:a1e0::/48","dev":"tailscale0","protocol":"kernel"},
+ {"dst":"2001:db8:9::/64","dev":"wlan0","gateway":"fe80::1","protocol":"ra"},
+ {"dst":"default","dev":"eth0","gateway":"fe80::1","protocol":"ra"}]
+J
+  ;;
+esac'
+}
+lan_ip_virt_fixture() {
+  stub ip 'case "$*" in
+  "-j route show scope link") echo "[{\"dst\":\"192.168.1.0/24\",\"dev\":\"eth0\"},{\"dst\":\"10.88.0.0/16\",\"dev\":\"podman0\"},{\"dst\":\"172.17.0.0/16\",\"dev\":\"docker0\"},{\"dst\":\"192.168.122.0/24\",\"dev\":\"virbr0\"},{\"dst\":\"10.244.1.0/24\",\"dev\":\"cni0\"},{\"dst\":\"10.1.0.0/24\",\"dev\":\"cali123\"},{\"dst\":\"10.2.0.0/24\",\"dev\":\"flannel.1\"},{\"dst\":\"10.3.0.0/24\",\"dev\":\"veth1\"}]" ;;
+  "-j -6 route show") echo "[{\"dst\":\"fd00:1::/64\",\"dev\":\"podman1\"}]" ;;
+esac'
+}
+lan_rule() { printf 'rule family="%s" source address="%s" service name="ssh" accept' "$1" "$2"; }
+lan_setup() {
+  fw_fake
+  lan_ip_fixture
+}
+perm_has() { grep -qxF -- "$(lan_rule "$1" "$2")" "$T/fw/perm_rich"; }
+run_has() { grep -qxF -- "$(lan_rule "$1" "$2")" "$T/fw/run_rich"; }
+
+test_lan_ssh_on_defaults_to_onlink_networks() {
+  lan_setup
+  check "lan-ssh on: runs" "$LIBEXEC/lan-ssh" on
+  check "lan-ssh on: v4 on-link" perm_has ipv4 192.168.1.0/24
+  check "lan-ssh on: v4 link-local" perm_has ipv4 169.254.0.0/16
+  check "lan-ssh on: v6 on-link global /64" perm_has ipv6 2001:db8:1::/64
+  check "lan-ssh on: v6 link-local fe80::/10" perm_has ipv6 fe80::/10
+  check "lan-ssh on: drop zone" called "--zone=drop --permanent --add-rich-rule"
+  check "lan-ssh on: reloaded" called "firewall-cmd --reload"
+  check "lan-ssh on: prints sources" stdout_has "192.168.1.0/24" "$LIBEXEC/lan-ssh" on
+}
+
+test_lan_ssh_on_excludes_tailscale_lo_and_gatewayed() {
+  lan_setup
+  "$LIBEXEC/lan-ssh" on >/dev/null
+  check "lan-ssh on: no tailscale0 v4" not_grep_dir 100.100.0.0 "$T/fw"
+  check "lan-ssh on: no tailscale0 v6" not_grep_dir fd7a "$T/fw"
+  check "lan-ssh on: no loopback iface" not_grep_dir 172.16.5.0 "$T/fw"
+  check "lan-ssh on: no gatewayed v4 route" not_grep_dir 10.9.0.0 "$T/fw"
+  check "lan-ssh on: no gatewayed v6 route" not_grep_dir 2001:db8:9 "$T/fw"
+  check "lan-ssh on: no default route" not_grep_dir '0.0.0.0/0\|::/0' "$T/fw"
+  check "lan-ssh on: never an unscoped service" not_called "--add-service"
+}
+
+test_lan_ssh_on_skips_broad_onlink_route() {
+  lan_setup
+  stub ip 'case "$*" in "-j route show scope link") echo "[{\"dst\":\"0.0.0.0/0\",\"dev\":\"wwan0\"},{\"dst\":\"10.0.0.0/24\",\"dev\":\"eth0\"}]" ;; esac'
+  "$LIBEXEC/lan-ssh" on >/dev/null 2>&1
+  check "lan-ssh on: on-link default route skipped" not_grep_dir '0.0.0.0/0' "$T/fw"
+  check "lan-ssh on: other route kept" perm_has ipv4 10.0.0.0/24
+}
+
+test_lan_ssh_on_skips_container_bridges() {
+  lan_setup
+  lan_ip_virt_fixture
+  "$LIBEXEC/lan-ssh" on >/dev/null
+  check "lan-ssh on: real interface kept" perm_has ipv4 192.168.1.0/24
+  for n in 10.88.0 172.17 192.168.122 10.244.1 10.1.0 10.2.0 10.3.0 fd00:1; do
+    check "lan-ssh on: container/VM net $n skipped" not_grep_dir "$n" "$T/fw"
+  done
+}
+
+test_lan_ssh_on_is_quiet_about_existing_rules() {
+  lan_setup
+  "$LIBEXEC/lan-ssh" on 10.1.0.0/24 >/dev/null
+  check "lan-ssh on: rerun has no ALREADY_ENABLED noise" not_stderr_has ALREADY_ENABLED "$LIBEXEC/lan-ssh" on 10.1.0.0/24
+}
+
+test_lan_ssh_on_no_networks_fails() {
+  lan_setup
+  stub ip 'echo "[]"'
+  check "lan-ssh on: nothing on-link is an error" fails "$LIBEXEC/lan-ssh" on
+  check "lan-ssh on: nothing added" not_called "add-rich-rule"
+}
+
+test_lan_ssh_on_explicit_cidrs() {
+  lan_setup
+  check "lan-ssh on CIDR: runs" "$LIBEXEC/lan-ssh" on 10.1.2.0/24 fd00:1::/64 192.168.5.7
+  check "lan-ssh on CIDR: v4" perm_has ipv4 10.1.2.0/24
+  check "lan-ssh on CIDR: v6" perm_has ipv6 fd00:1::/64
+  check "lan-ssh on CIDR: host becomes /32" perm_has ipv4 192.168.5.7/32
+  check "lan-ssh on CIDR: no on-link lookup" not_called "ip -j"
+  check "lan-ssh on CIDR: nothing else added" not_grep_dir 192.168.1.0 "$T/fw"
+}
+
+test_lan_ssh_rejects_bad_and_broad_cidrs() {
+  lan_setup
+  check "lan-ssh: garbage CIDR refused" fails "$LIBEXEC/lan-ssh" on not-a-cidr
+  check "lan-ssh: injection refused" fails "$LIBEXEC/lan-ssh" on '10.0.0.0/24" accept'
+  check "lan-ssh: 0.0.0.0/0 refused" fails "$LIBEXEC/lan-ssh" on 0.0.0.0/0
+  check "lan-ssh: ::/0 refused" fails "$LIBEXEC/lan-ssh" on ::/0
+  check "lan-ssh: /7 refused" fails "$LIBEXEC/lan-ssh" on 10.0.0.0/7
+  check "lan-ssh: v6 /15 refused" fails "$LIBEXEC/lan-ssh" on 2000::/15
+  check "lan-ssh: one bad CIDR refuses all" fails "$LIBEXEC/lan-ssh" on 10.0.0.0/24 bogus
+  check "lan-ssh: refusal says why" stderr_has "too broad" "$LIBEXEC/lan-ssh" on 0.0.0.0/0
+  check "lan-ssh: refusals changed nothing" not_called "add-rich-rule"
+  check "lan-ssh: explicit fe80::/10 allowed" "$LIBEXEC/lan-ssh" on fe80::/10
+  check "lan-ssh: /8 allowed" "$LIBEXEC/lan-ssh" on 10.0.0.0/8
+  check "lan-ssh: v6 /16 allowed" "$LIBEXEC/lan-ssh" on 2001::/16
+  check "lan-ssh: --force allows broad" "$LIBEXEC/lan-ssh" on --force 0.0.0.0/0
+  check "lan-ssh: --force still validates" fails "$LIBEXEC/lan-ssh" on --force nonsense
+}
+
+test_lan_ssh_on_replaces_stale_sources_and_legacy() {
+  lan_setup
+  echo ssh >"$T/fw/perm_svc"
+  echo ssh >"$T/fw/run_svc"
+  lan_rule ipv4 10.77.0.0/24 >"$T/fw/perm_rich"
+  echo >>"$T/fw/perm_rich"
+  "$LIBEXEC/lan-ssh" on 192.168.1.0/24 >/dev/null
+  check "lan-ssh on: stale source removed" not_grep_dir 10.77.0.0 "$T/fw"
+  check "lan-ssh on: legacy permanent service removed" test ! -s "$T/fw/perm_svc"
+  check "lan-ssh on: legacy runtime service removed" test ! -s "$T/fw/run_svc"
+  check "lan-ssh on: new source present" perm_has ipv4 192.168.1.0/24
+}
+
+test_lan_ssh_for_is_runtime_with_timeout() {
+  lan_setup
+  check "lan-ssh for: runs" "$LIBEXEC/lan-ssh" for 30m
+  check "lan-ssh for: timeout passed" called "--timeout=30m"
+  check "lan-ssh for: runtime rule" run_has ipv4 192.168.1.0/24
+  check "lan-ssh for: not permanent" test ! -s "$T/fw/perm_rich"
+  check "lan-ssh for: no reload (would drop it)" not_called "firewall-cmd --reload"
+  check "lan-ssh for: hours accepted" "$LIBEXEC/lan-ssh" for 2h 10.0.0.0/24
+  check "lan-ssh for: explicit CIDR timed" run_has ipv4 10.0.0.0/24
+  : >"$CALLS"
+  "$LIBEXEC/lan-ssh" for 1h 172.20.0.0/16 >/dev/null
+  check "lan-ssh for: CIDR rule carries timeout" called "--add-rich-rule=rule family=\"ipv4\" source address=\"172.20.0.0/16\" service name=\"ssh\" accept --timeout=1h"
+}
+
+test_lan_ssh_for_rejects_bad_duration() {
+  lan_setup
+  check "lan-ssh for: missing duration" fails "$LIBEXEC/lan-ssh" for
+  check "lan-ssh for: junk duration" fails "$LIBEXEC/lan-ssh" for soon
+  check "lan-ssh for: zero duration" fails "$LIBEXEC/lan-ssh" for 0m
+  check "lan-ssh for: bare number needs a unit" fails "$LIBEXEC/lan-ssh" for 30
+  check "lan-ssh for: injection duration" fails "$LIBEXEC/lan-ssh" for '5m --permanent'
+  check "lan-ssh for: nothing added" not_called "add-rich-rule"
+}
+
+test_lan_ssh_for_keeps_permanent_rules_untimed() {
+  lan_setup
+  "$LIBEXEC/lan-ssh" on 192.168.1.0/24 >/dev/null
+  : >"$CALLS"
+  "$LIBEXEC/lan-ssh" for 10m 192.168.1.0/24 >/dev/null
+  check "lan-ssh for: already-permanent rule gets no timeout" not_called "--timeout"
+}
+
+test_lan_ssh_for_reports_rules_already_open() {
+  lan_setup
+  "$LIBEXEC/lan-ssh" for 1h 10.2.0.0/24 >/dev/null
+  check "lan-ssh for: rerun says already open temporarily" stdout_has "already open temporarily" "$LIBEXEC/lan-ssh" for 5m 10.2.0.0/24
+  check "lan-ssh for: rerun doesn't claim the new duration" not_stdout_has "expires in 5m" "$LIBEXEC/lan-ssh" for 5m 10.2.0.0/24
+  "$LIBEXEC/lan-ssh" on 10.3.0.0/24 >/dev/null
+  check "lan-ssh for: permanent rule reported" stdout_has "already allowed permanently" "$LIBEXEC/lan-ssh" for 5m 10.3.0.0/24
+  check "lan-ssh for: no ALREADY_ENABLED noise" not_stderr_has ALREADY_ENABLED "$LIBEXEC/lan-ssh" for 5m 10.2.0.0/24
+}
+
+test_lan_ssh_refresh_writes_legacy_status_file() {
+  lan_setup
+  "$LIBEXEC/lan-ssh" refresh
+  check "refresh: no file when not legacy" test ! -e "$JUNIPER_RUN_DIR/lan-ssh-legacy"
+  echo ssh >"$T/fw/run_svc"
+  "$LIBEXEC/lan-ssh" refresh
+  check "refresh: file with the warning when legacy" grep -q "open to every network" "$JUNIPER_RUN_DIR/lan-ssh-legacy"
+  "$LIBEXEC/lan-ssh" on 10.0.0.0/24 >/dev/null
+  check "on: clears the status file" test ! -e "$JUNIPER_RUN_DIR/lan-ssh-legacy"
+  echo ssh >"$T/fw/perm_svc"
+  "$LIBEXEC/lan-ssh" refresh
+  check "refresh: permanent legacy counts" test -e "$JUNIPER_RUN_DIR/lan-ssh-legacy"
+  "$LIBEXEC/lan-ssh" off >/dev/null
+  check "off: clears the status file" test ! -e "$JUNIPER_RUN_DIR/lan-ssh-legacy"
+}
+
+test_lan_ssh_off_removes_everything() {
+  lan_setup
+  "$LIBEXEC/lan-ssh" on 10.1.0.0/24 fd00::/64 >/dev/null
+  "$LIBEXEC/lan-ssh" for 1h 10.2.0.0/24 >/dev/null
+  echo ssh >"$T/fw/perm_svc"
+  echo ssh >"$T/fw/run_svc"
+  check "lan-ssh off: runs" "$LIBEXEC/lan-ssh" off
+  check "lan-ssh off: no permanent rules" test ! -s "$T/fw/perm_rich"
+  check "lan-ssh off: no runtime rules" test ! -s "$T/fw/run_rich"
+  check "lan-ssh off: legacy permanent service gone" test ! -s "$T/fw/perm_svc"
+  check "lan-ssh off: legacy runtime service gone" test ! -s "$T/fw/run_svc"
+  check "lan-ssh off: tailscale0 untouched" not_called "tailscale0"
+  check "lan-ssh off: default zone untouched" not_called "default-zone"
+}
+
+test_lan_ssh_status_states() {
+  lan_setup
+  touch "$JUNIPER_STATE_DIR/locked"
+  check "lan-ssh status: off" stdout_has "LAN SSH is off" "$LIBEXEC/lan-ssh" status
+  check "lan-ssh bare: same as status" stdout_has "LAN SSH is off" "$LIBEXEC/lan-ssh"
+  check "lan-ssh status: off has no legacy warning" not_stdout_has "every network" "$LIBEXEC/lan-ssh" status
+  check "lan-ssh legacy: exit 1 when off" fails "$LIBEXEC/lan-ssh" legacy
+  "$LIBEXEC/lan-ssh" on 10.1.0.0/24 fd00::/64 >/dev/null
+  "$LIBEXEC/lan-ssh" for 1h 10.2.0.0/24 >/dev/null
+  check "lan-ssh status: scoped lists v4" stdout_has "10.1.0.0/24" "$LIBEXEC/lan-ssh" status
+  check "lan-ssh status: scoped lists v6" stdout_has "fd00::/64" "$LIBEXEC/lan-ssh" status
+  check "lan-ssh status: runtime marked temporary" stdout_has "10.2.0.0/24 (temporary" "$LIBEXEC/lan-ssh" status
+  check "lan-ssh status: permanent not marked temporary" not_stdout_has "10.1.0.0/24 (temporary" "$LIBEXEC/lan-ssh" status
+  check "lan-ssh status: scoped is not legacy" fails "$LIBEXEC/lan-ssh" legacy
+  echo ssh >"$T/fw/perm_svc"
+  check "lan-ssh status: legacy warns" stdout_has "open to every network; run .ujust lan-ssh on. to scope it" "$LIBEXEC/lan-ssh" status
+  check "lan-ssh legacy: exit 0 with warning" stdout_has "open to every network" "$LIBEXEC/lan-ssh" legacy
+  rm "$JUNIPER_STATE_DIR/locked"
+  check "lan-ssh status: not locked note" stdout_has "not locked down" "$LIBEXEC/lan-ssh" status
+}
+
+test_lan_ssh_unknown_subcommand() {
+  lan_setup
+  check "lan-ssh: unknown subcommand refused" fails "$LIBEXEC/lan-ssh" sideways
+  check "lan-ssh: usage on stderr" stderr_has usage "$LIBEXEC/lan-ssh" sideways
+}
+
+test_motd_warns_on_legacy_lan_ssh() {
+  lan_setup
+  stub tailscale 'echo 100.64.0.1'
+  touch "$JUNIPER_STATE_DIR/locked"
+  check "motd: no status file, no warning" not_stdout_has "every network" "$LIBEXEC/motd"
+  echo ssh >"$T/fw/run_svc"
+  check "motd: never asks firewalld" not_called "firewall-cmd"
+  "$LIBEXEC/lan-ssh" refresh
+  check "motd: legacy warning shown" stdout_has "ujust lan-ssh on" "$LIBEXEC/motd"
+  rm "$JUNIPER_STATE_DIR/locked"
+  check "motd: no warning before lockdown" not_stdout_has "ujust lan-ssh on" "$LIBEXEC/motd"
+}
+
+test_pi_status_warns_on_legacy_lan_ssh() {
+  check "pi-status: calls lan-ssh legacy" grep -q 'libexec/juniper/lan-ssh legacy' "$ROOT/system_files/usr/share/juniper/just/pi.just"
+}
+
+test_just_recipe_wraps_script() {
+  check "recipe: thin wrapper" grep -q 'sudo /usr/libexec/juniper/lan-ssh' "$ROOT/system_files/usr/share/juniper/just/network.just"
+  check "recipe: not echoed by just" grep -q '^    @sudo /usr/libexec/juniper/lan-ssh' "$ROOT/system_files/usr/share/juniper/just/network.just"
+  check "recipe: no inline firewall-cmd" not_grep_dir 'firewall-cmd' "$ROOT/system_files/usr/share/juniper/just/network.just"
 }
 
 # --- runner ---

@@ -39,5 +39,11 @@ if command -v fastfetch >/dev/null; then fastfetch; fi
 row Image "${PRETTY_NAME}"
 row Tailscale "$ts"
 row Update "$upd"
+# Only after lockdown does the old unscoped `lan-ssh on` matter; before it SSH is open anyway.
+# Root writes this file (juniper-lan-ssh-status.service, lan-ssh on|off): we can't ask firewalld.
+legacy_file=${JUNIPER_RUN_DIR:-/run/juniper}/lan-ssh-legacy
+if [[ -e $state_dir/locked && -s $legacy_file ]]; then
+  row Warning "$(cat "$legacy_file")"
+fi
 row Tip "$(cat /usr/share/juniper/tips*.txt 2>/dev/null | shuf -n1)"
 printf '\n  ujust for commands · ujust toggle-motd to hide this\n\n'

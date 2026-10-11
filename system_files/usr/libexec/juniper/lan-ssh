@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+# Scoped LAN SSH after lockdown (`ujust lan-ssh`). Before lockdown, SSH is open on every
+# network by design; this only matters once the default zone is drop.
+#   lan-ssh on [--force] [CIDR...]            permanent, from CIDRs or the on-link networks
+#   lan-ssh for DURATION [--force] [CIDR...]  runtime only, expires (e.g. 30m, 2h)
+#   lan-ssh off                               remove every lan-ssh rule and the legacy open rule
+#   lan-ssh status                            (default)
+#   lan-ssh legacy                            prints the warning, exits 0 if SSH is open to all
+#   lan-ssh refresh                           (root: boot, and after on/off) write $run_dir/lan-ssh-legacy
+#                                             for the login banner, which cannot query firewalld
+# tailscale0 is in the trusted zone and is never touched here.
+set -euo pipefail
+
+state_dir=${JUNIPER_STATE_DIR:-/var/lib/juniper}
+zone=drop
+run_dir=${JUNIPER_RUN_DIR:-/run/juniper}
+# shellcheck disable=SC2016 # literal backticks
+legacy_msg='LAN SSH is open to every network; run `ujust lan-ssh on` to scope it.'
+rule_re='^rule family="ipv[46]" source address="([^"]+)" service name="ssh" accept$'
+
+die() {
+  echo "lan-ssh: $*" >&2
+  exit 2
+}
+usage() {
+  echo "usage: ujust lan-ssh [on [CIDR...] | for DURATION [CIDR...] | off | status] [--force]" >&2
+  exit 2
+}
+
+fw() { firewall-cmd --zone=$zone "$@"; }
+
+# Our rich rules (one per line) from the permanent (--permanent) or the runtime (no arg) config.
+lan_rules() { { fw "$@" --list-rich-rules || true; } | grep -E "$rule_re" || true; }
+rule_source() { [[ $1 =~ $rule_re ]] && echo "${BASH_REMATCH[1]}"; }
+rule_for() {
+  local fam=ipv4
+  [[ $1 == *:* ]] && fam=ipv6
+  printf 'rule family="%s" source address="%s" service name="ssh" accept' "$fam" "$1"
+}
+
+has_legacy() {
+  fw --query-service=ssh >/dev/null 2>&1 || fw --permanent --query-service=ssh >/dev/null 2>&1
+}
+
+# python3 helper. validate: normalise explicit CIDRs. onlink: derive them from `ip -j` output.
+# Prefixes broader than /8 (v4) or /16 (v6) are refused unless force=1.
+cidrs() {
+  python3 -I - "$@" <<'PY'
+import ipaddress, json, sys
+
+mode, force = sys.argv[1], sys.argv[2] == "1"
+LIMIT = {4: 8, 6: 16}
+
+def check(net):
+    if net == ipaddress.ip_network("fe80::/10"):
+        return None
+    if net.prefixlen == 0 or net.prefixlen < LIMIT[net.version]:
+        return f"{net} is too broad (limit /{LIMIT[net.version]} for IPv{net.version}); use --force to allow it"
+    return None
+
+out = []
+if mode == "validate":
+    for c in sys.argv[3:]:
+        try:
+            net = ipaddress.ip_network(c, strict=False)
+        except ValueError:
+            sys.exit(f"lan-ssh: invalid CIDR: {c}")
+        if not force and (err := check(net)):
+            sys.exit(f"lan-ssh: {err}")
+        out.append(net)
+else:
+    skip = {"lo", "tailscale0"}
+    # Local containers and VMs don't need the host's sshd.
+    virt = ("podman", "docker", "veth", "cni", "cali", "flannel", "virbr")
+    for raw in sys.argv[3:5]:
+        try:
+            routes = json.loads(raw or "[]")
+        except ValueError:
+            sys.exit("lan-ssh: could not parse `ip -j` output")
+        for r in routes:
+            dev = r.get("dev") or ""
+            if dev in skip or dev.startswith(virt) or r.get("gateway") or r.get("nexthops"):
+                continue
+            if r.get("type", "unicast") != "unicast" or r.get("dst") in (None, "default"):
+                continue
+            try:
+                net = ipaddress.ip_network(r["dst"], strict=False)
+            except ValueError:
+                continue
+            if net.is_multicast or net.is_loopback:
+                continue
+            if err := check(net):
+                print(f"lan-ssh: skipping on-link route: {err.split(';')[0]}", file=sys.stderr)
+                continue
+            out.append(net)
+    if not out:
+        sys.exit("lan-ssh: no on-link networks found; pass CIDRs explicitly")
+    out.append(ipaddress.ip_network("fe80::/10"))
+seen = []
+for n in out:
+    if n not in seen:
+        seen.append(n)
+print("\n".join(str(n) for n in seen))
+PY
+}
+
+# sources [--force] [CIDR...] -> stdout, one per line
+sources() {
+  local force=0 args=() a
+  for a; do if [[ $a == --force ]]; then force=1; else args+=("$a"); fi; done
+  if ((${#args[@]})); then
+    cidrs validate "$force" "${args[@]}"
+  else
+    cidrs onlink "$force" "$(ip -j route show scope link 2>/dev/null || true)" "$(ip -j -6 route show 2>/dev/null || true)"
+  fi
+}
+
+# The banner runs as the login user, who can't query firewalld: root leaves a file for it.
+refresh() {
+  mkdir -p "$run_dir"
+  if has_legacy; then echo "$legacy_msg" >"$run_dir/lan-ssh-legacy"; else rm -f "$run_dir/lan-ssh-legacy"; fi
+}
+
+remove_legacy() {
+  fw --permanent --remove-service=ssh >/dev/null 2>&1 || true
+  fw --remove-service=ssh >/dev/null 2>&1 || true
+}
+
+cmd=${1:-status}
+shift || true
+
+case $cmd in
+  on)
+    mapfile -t srcs < <(sources "$@")
+    ((${#srcs[@]})) || exit 1
+    # Add the new rules first, then drop stale ones and the legacy open rule: no gap.
+    have=$(lan_rules --permanent)
+    for s in "${srcs[@]}"; do
+      grep -qxF -- "$(rule_for "$s")" <<<"$have" || fw --permanent --add-rich-rule="$(rule_for "$s")" >/dev/null
+    done
+    while IFS= read -r r; do
+      [[ -n $r ]] || continue
+      keep=0
+      for s in "${srcs[@]}"; do [[ $r == "$(rule_for "$s")" ]] && keep=1; done
+      ((keep)) || fw --permanent --remove-rich-rule="$r" >/dev/null
+    done < <(lan_rules --permanent)
+    remove_legacy
+    firewall-cmd --reload >/dev/null
+    refresh
+    echo "SSH allowed from (permanent; fixed now, so re-run after moving to another network):"
+    printf '  %s\n' "${srcs[@]}"
+    ;;
+  for)
+    dur=${1:-}
+    [[ $dur =~ ^[1-9][0-9]*[smh]$ ]] || die "duration with a unit required, like 30s, 30m or 2h"
+    shift
+    mapfile -t srcs < <(sources "$@")
+    ((${#srcs[@]})) || exit 1
+    live=$(lan_rules)
+    perm=$(lan_rules --permanent)
+    added=()
+    for s in "${srcs[@]}"; do
+      r=$(rule_for "$s")
+      # A rule that is already live must not get a (new) timeout.
+      if grep -qxF -- "$r" <<<"$perm"; then
+        echo "$s: already allowed permanently, unchanged"
+      elif grep -qxF -- "$r" <<<"$live"; then
+        echo "$s: already open temporarily, keeping its existing expiry (lan-ssh off first to reset it)"
+      else
+        fw --add-rich-rule="$r" --timeout="$dur" >/dev/null
+        added+=("$s")
+      fi
+    done
+    if ((${#added[@]})); then
+      echo "SSH allowed from, until it expires in $dur or the next reboot:"
+      printf '  %s\n' "${added[@]}"
+    fi
+    ;;
+  off)
+    for p in --permanent ""; do
+      while IFS= read -r r; do
+        [[ -n $r ]] && fw ${p:+"$p"} --remove-rich-rule="$r" >/dev/null
+      done < <(lan_rules ${p:+"$p"})
+    done
+    remove_legacy
+    firewall-cmd --reload >/dev/null
+    refresh
+    echo "LAN SSH off."
+    ;;
+  refresh) refresh ;;
+  legacy)
+    has_legacy && {
+      echo "$legacy_msg"
+      exit 0
+    }
+    exit 1
+    ;;
+  status)
+    [[ $# -eq 0 ]] || usage
+    mapfile -t perm < <(lan_rules --permanent)
+    mapfile -t run < <(lan_rules)
+    shown=0
+    if has_legacy; then
+      echo "WARNING: $legacy_msg"
+      shown=1
+    fi
+    for r in "${perm[@]}"; do
+      [[ -n $r ]] || continue
+      ((shown == 2)) || echo "LAN SSH is on, from:"
+      shown=2
+      echo "  $(rule_source "$r")"
+    done
+    for r in "${run[@]}"; do
+      [[ -n $r ]] || continue
+      in_perm=0
+      for p in "${perm[@]}"; do [[ $p == "$r" ]] && in_perm=1; done
+      ((in_perm)) && continue
+      ((shown == 2)) || echo "LAN SSH is on, from:"
+      shown=2
+      echo "  $(rule_source "$r") (temporary: gone when it expires or on reboot)"
+    done
+    ((shown)) || echo "LAN SSH is off."
+    [[ -e $state_dir/locked ]] || echo "Note: not locked down yet, so SSH is open on every network regardless."
+    ;;
+  *) usage ;;
+esac

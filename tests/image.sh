@@ -83,7 +83,8 @@ key_fpr() { GNUPGHOME=$(mktemp -d) gpg --show-keys --with-colons "$1" | awk -F: 
 
 need_enabled juniper-firstboot.service juniper-tailscale-join.service
 test -x /usr/libexec/juniper/tailscale-join
-need_enabled juniper-update.timer juniper-reboot.timer juniper-healthcheck.service
+test -x /usr/libexec/juniper/lan-ssh
+need_enabled juniper-update.timer juniper-reboot.timer juniper-healthcheck.service juniper-lan-ssh-status.service
 need_cmds rpi-bootc-bootloader
 grep -qx 'TRYBOOT=1' /etc/rpi-bootc-bootloader/tryboot.conf
 grep -qx 'OnCalendar=Tue \*-\*-\* 04:00:00' /usr/lib/systemd/system/juniper-reboot.timer || {
