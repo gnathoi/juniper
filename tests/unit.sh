@@ -702,50 +702,68 @@ test_healthcheck_unit_has_fallback_on_failure() {
     grep -qx 'ExecStart=/usr/libexec/juniper/healthcheck --fallback' "$u/juniper-healthcheck-fallback.service"
 }
 
-# Quarantine: a digest that failed its health check under tryboot is recorded in
-# $JUNIPER_STATE_DIR/bad-digests (/var survives the fallback) and never applied again.
+# Two strikes: a digest that fails its health check under tryboot gets a strike in
+# $JUNIPER_STATE_DIR/bad-digests ("DIGEST COUNT BOOT_ID"; /var survives the fallback) and is
+# retried at the next window. A second failure, on another boot, quarantines it: held until a
+# newer digest is staged.
 BAD=sha256:$(printf 'b%.0s' {1..64})
 NEW=sha256:$(printf 'c%.0s' {1..64})
 booted_digest() { stub bootc "echo '{\"status\":{\"booted\":{\"image\":{\"imageDigest\":\"$1\"}}}}'"; }
-
-test_healthcheck_fallback_records_booted_digest() {
+strikes() { awk -v d="$1" '$1 == d {print $2}' "$JUNIPER_STATE_DIR/bad-digests" 2>/dev/null; }
+# fail_boot BOOT_ID: a failed tryboot of $BAD on that boot (the OnFailure= fallback path).
+fail_boot() {
+  echo "$1" >"$JUNIPER_BOOT_ID_FILE"
+  "$LIBEXEC/healthcheck" --fallback 2>/dev/null
+}
+strike_env() {
   health_env
+  export JUNIPER_BOOT_ID_FILE=$T/boot_id
   printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
   booted_digest "$BAD"
-  "$LIBEXEC/healthcheck" 2>/dev/null || true
-  check "quarantine: failed tryboot digest recorded" grep -qx "$BAD" "$JUNIPER_STATE_DIR/bad-digests"
-  check "quarantine: still reboots" called "systemctl reboot"
 }
 
-test_healthcheck_fallback_mode_records_booted_digest() {
-  health_env
-  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
-  booted_digest "$BAD"
-  "$LIBEXEC/healthcheck" --fallback 2>/dev/null
-  check "quarantine: --fallback records the digest" grep -qx "$BAD" "$JUNIPER_STATE_DIR/bad-digests"
-  # The main check already recorded it, then OnFailure= runs --fallback: listed once.
-  "$LIBEXEC/healthcheck" --fallback 2>/dev/null
-  check "quarantine: recorded once" test "$(grep -cx "$BAD" "$JUNIPER_STATE_DIR/bad-digests")" = 1
+test_healthcheck_first_failure_records_a_strike() {
+  strike_env
+  echo boot-1 >"$JUNIPER_BOOT_ID_FILE"
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "strikes: first failure -> one strike" test "$(strikes "$BAD")" = 1
+  check "strikes: still reboots" called "systemctl reboot"
+}
+
+# The main check falls back, exits 1, and OnFailure= then runs --fallback on the same boot:
+# still one strike, or a single failure would quarantine.
+test_healthcheck_one_strike_per_boot() {
+  strike_env
+  echo boot-1 >"$JUNIPER_BOOT_ID_FILE"
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  fail_boot boot-1
+  check "strikes: main check + OnFailure fallback on one boot -> one strike" test "$(strikes "$BAD")" = 1
+  check "strikes: listed once" test "$(grep -c "^$BAD " "$JUNIPER_STATE_DIR/bad-digests")" = 1
+}
+
+test_healthcheck_second_failure_quarantines() {
+  strike_env
+  fail_boot boot-1
+  fail_boot boot-2
+  check "strikes: second failure on another boot -> two strikes" test "$(strikes "$BAD")" = 2
 }
 
 test_healthcheck_normal_boot_records_nothing() {
-  health_env
-  booted_digest "$BAD"
+  strike_env
+  printf '\x00\x00\x00\x00' >"$JUNIPER_TRYBOOT_FLAG"
   "$LIBEXEC/healthcheck" 2>/dev/null || true
-  "$LIBEXEC/healthcheck" --fallback 2>/dev/null
-  check "quarantine: normal boot records nothing" test ! -e "$JUNIPER_STATE_DIR/bad-digests"
+  fail_boot boot-1
+  check "strikes: normal boot records nothing" test ! -e "$JUNIPER_STATE_DIR/bad-digests"
 }
 
 test_healthcheck_quarantine_is_bounded() {
-  health_env
-  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  strike_env
   local i
-  for i in 0 1 2 3 4 5 6 7 8 9; do echo "sha256:$(printf "$i%.0s" {1..64})"; done >"$JUNIPER_STATE_DIR/bad-digests"
-  booted_digest "$BAD"
-  "$LIBEXEC/healthcheck" --fallback 2>/dev/null
-  check "quarantine: keeps the last 10" test "$(wc -l <"$JUNIPER_STATE_DIR/bad-digests")" = 10
-  check "quarantine: newest kept" test "$(tail -n1 "$JUNIPER_STATE_DIR/bad-digests")" = "$BAD"
-  check "quarantine: oldest dropped" fails grep -q "sha256:0000" "$JUNIPER_STATE_DIR/bad-digests"
+  for i in 0 1 2 3 4 5 6 7 8 9; do echo "sha256:$(printf "$i%.0s" {1..64}) 2 old"; done >"$JUNIPER_STATE_DIR/bad-digests"
+  fail_boot boot-1
+  check "strikes: keeps the last 10" test "$(wc -l <"$JUNIPER_STATE_DIR/bad-digests")" = 10
+  check "strikes: newest kept" test "$(tail -n1 "$JUNIPER_STATE_DIR/bad-digests")" = "$BAD 1 boot-1"
+  check "strikes: oldest dropped" fails grep -q "sha256:0000" "$JUNIPER_STATE_DIR/bad-digests"
 }
 
 test_healthcheck_quarantine_ignores_bad_bootc_output() {
@@ -766,27 +784,68 @@ test_healthcheck_quarantine_ignores_bad_bootc_output() {
 
 staged_digest() { stub bootc "echo '{\"status\":{\"staged\":{\"image\":{\"imageDigest\":\"$1\"}}}}'"; }
 
+test_apply_update_one_strike_still_applies() {
+  echo "$BAD 1 boot-1" >"$JUNIPER_STATE_DIR/bad-digests"
+  staged_digest "$BAD"
+  local out
+  out=$("$LIBEXEC/apply-update")
+  check "apply-update: one strike -> retried (tryreboot)" called "rpi-bootc-bootloader tryreboot"
+  check "apply-update: one strike -> not held" test ! -e "$JUNIPER_STATE_DIR/update-held"
+  check "apply-update: one strike logged" grep -q "1 failed attempt" <<<"$out"
+}
+
 test_apply_update_skips_quarantined_digest() {
-  echo "$BAD" >"$JUNIPER_STATE_DIR/bad-digests"
+  echo "$BAD 2 boot-2" >"$JUNIPER_STATE_DIR/bad-digests"
   staged_digest "$BAD"
   local out
   out=$("$LIBEXEC/apply-update")
   check "apply-update: quarantined digest -> no tryreboot" not_called "rpi-bootc-bootloader"
-  check "apply-update: quarantined digest logged" grep -q "update $BAD failed its health check; waiting for a newer image" <<<"$out"
+  check "apply-update: quarantined digest logged" grep -q "update $BAD failed its health check twice; waiting for a newer image" <<<"$out"
   check "apply-update: quarantine shown (update-held)" grep -q "failed its health check" "$JUNIPER_STATE_DIR/update-held"
 }
 
+# End to end: two failed tryboots of one digest hold it; the next digest goes ahead.
+test_two_strikes_then_newer_digest() {
+  strike_env
+  fail_boot boot-1
+  staged_digest "$BAD"
+  "$LIBEXEC/apply-update" >/dev/null
+  check "two strikes: after the first failure the update is retried" called "rpi-bootc-bootloader tryreboot"
+  : >"$CALLS"
+  booted_digest "$BAD"
+  fail_boot boot-2
+  staged_digest "$BAD"
+  "$LIBEXEC/apply-update" >/dev/null
+  check "two strikes: after the second failure it is held" not_called "rpi-bootc-bootloader"
+  check "two strikes: held is shown" test -s "$JUNIPER_STATE_DIR/update-held"
+  staged_digest "$NEW"
+  "$LIBEXEC/apply-update" >/dev/null
+  check "two strikes: a newer digest proceeds" called "rpi-bootc-bootloader tryreboot"
+  check "two strikes: a newer digest clears held" test ! -e "$JUNIPER_STATE_DIR/update-held"
+}
+
 test_apply_update_newer_digest_proceeds() {
-  echo "$BAD" >"$JUNIPER_STATE_DIR/bad-digests"
-  echo "update $BAD failed its health check; waiting for a newer image" >"$JUNIPER_STATE_DIR/update-held"
+  echo "$BAD 2 boot-2" >"$JUNIPER_STATE_DIR/bad-digests"
+  echo "update $BAD failed its health check twice; waiting for a newer image" >"$JUNIPER_STATE_DIR/update-held"
   staged_digest "$NEW"
   "$LIBEXEC/apply-update"
   check "apply-update: newer digest -> tryreboot" called "rpi-bootc-bootloader tryreboot"
   check "apply-update: newer digest clears update-held" test ! -e "$JUNIPER_STATE_DIR/update-held"
 }
 
+test_apply_update_held_mode() {
+  echo "$BAD 2 boot-2" >"$JUNIPER_STATE_DIR/bad-digests"
+  staged_digest "$BAD"
+  check "apply-update --held: quarantined -> exit 0" "$LIBEXEC/apply-update" --held
+  staged_digest "$NEW"
+  check "apply-update --held: newer -> exit 1" fails "$LIBEXEC/apply-update" --held
+  echo "$NEW 1 boot-1" >>"$JUNIPER_STATE_DIR/bad-digests"
+  check "apply-update --held: one strike -> exit 1" fails "$LIBEXEC/apply-update" --held
+  check "apply-update --held: never reboots" not_called "rpi-bootc-bootloader"
+}
+
 test_apply_update_check_mode_never_reboots() {
-  echo "$BAD" >"$JUNIPER_STATE_DIR/bad-digests"
+  echo "$BAD 2 boot-2" >"$JUNIPER_STATE_DIR/bad-digests"
   staged_digest "$BAD"
   "$LIBEXEC/apply-update" --check >/dev/null
   check "apply-update --check: quarantined -> update-held" grep -q "$BAD" "$JUNIPER_STATE_DIR/update-held"
@@ -1300,7 +1359,7 @@ test_flatpak_setup_offline_retries() {
 }
 
 idle_env() {
-  export JUNIPER_NOW=2000000000
+  export JUNIPER_NOW=2000000000 JUNIPER_APPLY_UPDATE=$LIBEXEC/apply-update
   stub bootc 'echo "{\"status\":{\"staged\":{}}}"'
   stub runuser ''
   # shellcheck disable=SC2016 # expands inside the stub
@@ -1400,6 +1459,28 @@ test_desktop_idle_notify_resets_after_reboot_allowed() {
   : >"$CALLS"
   JUNIPER_NOW=$((2000000000 + 3600)) "$LIBEXEC_DESKTOP/desktop-idle" >/dev/null || true
   check "notify: a new deferral notifies again" called "runuser -u nat"
+}
+
+# A held (quarantined) update won't be applied: no "Update ready" notice, no deferral. The
+# window's apply-update then declines it.
+test_desktop_idle_held_update_no_notice_no_deferral() {
+  notify_env
+  echo "$BAD 2 boot-2" >"$JUNIPER_STATE_DIR/bad-digests"
+  stub bootc "echo '{\"status\":{\"staged\":{\"image\":{\"imageDigest\":\"$BAD\"}}}}'"
+  check "idle: held update -> no deferral (exit 0)" "$LIBEXEC_DESKTOP/desktop-idle"
+  check "idle: held update -> no notice" not_called "runuser"
+  check "idle: held update -> no deferral recorded" test ! -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
+  echo $((2000000000 - 86400)) >"$JUNIPER_STATE_DIR/reboot-deferred-since"
+  "$LIBEXEC_DESKTOP/desktop-idle" >/dev/null || true
+  check "idle: held update -> an old deferral isn't extended" test ! -e "$JUNIPER_STATE_DIR/reboot-deferred-since"
+}
+
+test_desktop_idle_one_strike_still_defers() {
+  notify_env
+  echo "$BAD 1 boot-1" >"$JUNIPER_STATE_DIR/bad-digests"
+  stub bootc "echo '{\"status\":{\"staged\":{\"image\":{\"imageDigest\":\"$BAD\"}}}}'"
+  check "idle: one strike, desktop in use -> defer" fails "$LIBEXEC_DESKTOP/desktop-idle"
+  check "idle: one strike -> notice sent" called "runuser -u nat"
 }
 
 test_desktop_idle_any_active_nonidle_session_defers() {

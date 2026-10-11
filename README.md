@@ -273,10 +273,11 @@ with `ujust update-schedule`, or apply it now with `ujust update`.
 The new image boots once through firmware tryboot and is kept only if the boot health check
 passes (see [readiness checks](#readiness-checks-for-your-workload)); otherwise, or if the
 check itself fails, the Pi falls back to the previous image. A locked device that can't reach
-Tailscale's control plane after an update falls back too. An image that fell back is not
-tried again: the login status and `ujust pi-status` say "update … failed its health check;
-waiting for a newer image", and the next release proceeds as usual. To retry it anyway,
-remove its digest from `/var/lib/juniper/bad-digests`.
+Tailscale's control plane after an update falls back too. An image that fell back once is
+retried at the next window; one that fails twice is held: the login status and
+`ujust pi-status` say "update … failed its health check twice; waiting for a newer image",
+and the next release proceeds as usual. To retry a held image anyway, remove its line from
+`/var/lib/juniper/bad-digests`.
 
 ## Acknowledgements
 

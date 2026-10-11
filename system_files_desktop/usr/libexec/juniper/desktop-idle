@@ -21,6 +21,11 @@ allow() {
 [[ $(bootc status --json 2>/dev/null | jq '.status.staged != null' 2>/dev/null) == true ]] ||
   allow ""
 
+# A held update (it failed its health check twice) won't be applied: no deferral and no
+# "Update ready" notice. The window's apply-update then declines it. Any error counts as not held.
+"${JUNIPER_APPLY_UPDATE:-/usr/libexec/juniper/apply-update}" --held >/dev/null 2>&1 &&
+  allow "Staged update is held (failed its health check twice): nothing to defer."
+
 in_use=false
 for s in $(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}'); do
   [[ $(loginctl show-session "$s" -p Type --value 2>/dev/null) == wayland ]] || continue

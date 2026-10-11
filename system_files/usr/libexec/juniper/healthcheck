@@ -2,8 +2,8 @@
 # Every boot (juniper-healthcheck.service): if the system is healthy, make the booted
 # deployment the firmware default; if an update booted via tryboot is unhealthy, reboot
 # so the firmware falls back to the previous deployment.
-# An update that fails here under tryboot is quarantined (bad-digests, below): apply-update
-# skips that image until a newer one is staged.
+# An update that fails here under tryboot gets a strike (bad-digests, below) and is retried at
+# the next window; after a second failure apply-update holds it until a newer image is staged.
 set -euo pipefail
 
 state_dir=${JUNIPER_STATE_DIR:-/var/lib/juniper}
@@ -13,6 +13,7 @@ tryboot_flag=${JUNIPER_TRYBOOT_FLAG:-/proc/device-tree/chosen/bootloader/tryboot
 health_d=${JUNIPER_HEALTH_D:-/usr/lib/juniper/health.d}
 health_local_d=${JUNIPER_HEALTH_LOCAL_D:-/etc/juniper/health.d}
 local_owner=${JUNIPER_HEALTH_LOCAL_OWNER:-0}
+boot_id_file=${JUNIPER_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}
 hook_timeout=${JUNIPER_HEALTH_HOOK_TIMEOUT:-15}
 hook_kill=${JUNIPER_HEALTH_HOOK_KILL:-5}
 # Stop retrying after this many seconds, so the tryboot fallback below always runs well before
@@ -37,7 +38,8 @@ healthy() {
     # the node holds its map session with the coordination server (tailscaled sets it from
     # health.GetInPollNetMap). Offline policy: a locked device that can't reach Tailscale after
     # an update falls back. The previous image is known good, and the device stays reachable
-    # on it; the update is retried once a newer image ships (see the digest quarantine below).
+    # on it; the update is retried at the next window (one strike), and only a second failure
+    # holds it until a newer image ships (see quarantine below).
     [[ $(jq -r '.Self.Online // false' <<<"$ts" 2>/dev/null) == true ]] || return 1
     [[ $(probe tailscale debug prefs 2>/dev/null | jq -r '.RunSSH // false') == true ]] ||
       [[ $(probe systemctl is-active sshd.service 2>/dev/null) == active ]] || return 1
@@ -95,22 +97,37 @@ fall_back() {
   systemctl reboot
 }
 
-# Record the booted (failed tryboot) image digest in $state_dir/bad-digests, so apply-update
-# doesn't boot it again at every reboot window; a newer image proceeds. /var survives the
-# fallback. Best effort: it must never stand in the way of the reboot.
+# Two strikes: give the booted (failed tryboot) image digest a strike in $state_dir/bad-digests
+# ("DIGEST COUNT BOOT_ID" lines; /var survives the fallback). One strike: the update is retried
+# at the next window, so a transient outage or a one-off bootloader hiccup doesn't hold back a
+# good (maybe security) update. Two strikes, on different boots: apply-update holds that digest
+# until a newer one is staged. At most one strike per boot (the main check and the OnFailure=
+# fallback can both get here). Best effort: it must never stand in the way of the reboot.
 quarantine() {
-  local digest list=$state_dir/bad-digests
+  local digest boot count last list=$state_dir/bad-digests
   digest=$(probe bootc status --json 2>/dev/null | jq -r '.status.booted.image.imageDigest // empty' 2>/dev/null) || true
   if [[ ! $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
-    echo "No image digest for this deployment; not quarantined." >&2
+    echo "No image digest for this deployment; no strike recorded." >&2
     return 1
   fi
-  echo "Quarantining $digest: it won't be applied again; a newer image will." >&2
+  boot=$(tr -cd '0-9a-zA-Z-' <"$boot_id_file" 2>/dev/null) || true
+  boot=${boot:-unknown}
+  read -r count last < <(awk -v d="$digest" '$1 == d {print $2 + 0, $3}' "$list" 2>/dev/null) || true
+  count=${count:-0}
+  if [[ $count -gt 0 && ${last:-} == "$boot" ]]; then
+    return 0
+  fi
+  count=$((count + 1))
+  if ((count >= 2)); then
+    echo "Second failure of $digest: quarantined until a newer image is staged." >&2
+  else
+    echo "First failure of $digest: it will be retried at the next update window." >&2
+  fi
   mkdir -p "$state_dir"
-  # Newest last, each once, the last 10 only.
+  # Newest last, each digest once, the last 10 only.
   {
-    grep -vxF -- "$digest" "$list" 2>/dev/null || true
-    echo "$digest"
+    awk -v d="$digest" '$1 != d' "$list" 2>/dev/null || true
+    echo "$digest $count $boot"
   } | tail -n 10 >"$list.tmp"
   mv -f "$list.tmp" "$list"
 }

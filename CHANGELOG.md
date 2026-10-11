@@ -18,9 +18,10 @@ Unreleased as its release notes, then moves those entries under the release's ta
   world-writable) run with the image's hooks, so a quadlet appliance can require its
   workload to be ready (e.g. a sample stored in the last 10 minutes) before an update is
   kept. Example in `examples/appliance/health.d/`.
-- An update that fails its health check under tryboot is quarantined: its digest is recorded
-  in `/var/lib/juniper/bad-digests` and it isn't booted again; a newer image proceeds. The
-  login status and `ujust pi-status` show it.
+- An update that fails its health check under tryboot is retried at the next window; if the
+  same image fails a second time it is held (recorded in `/var/lib/juniper/bad-digests`) and
+  not booted again, while a newer image proceeds. The login status and `ujust pi-status` show
+  a held update, and on `juniper-desktop` it gets no "Update ready" notice or deferral.
 
 ### Changed
 
