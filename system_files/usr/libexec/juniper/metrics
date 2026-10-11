@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# juniper-metrics.timer: write Prometheus textfile metrics describing this device (booted and
+# staged image, last healthy boot, update/lockdown state, clock) to
+# $metrics_dir/juniper.prom, for node_exporter's textfile collector (ujust enable-metrics).
+# A missing input leaves its metric out; the file is replaced atomically, never half-written.
+set -uo pipefail
+
+state_dir=${JUNIPER_STATE_DIR:-/var/lib/juniper}
+run_dir=${JUNIPER_RUN_DIR:-/run/juniper}
+metrics_dir=${JUNIPER_METRICS_DIR:-$state_dir/metrics}
+os_release=${JUNIPER_OS_RELEASE:-/usr/lib/os-release}
+probe_timeout=${JUNIPER_METRICS_PROBE_TIMEOUT:-20}
+
+# Prometheus label value escaping: backslash, double quote, newline.
+esc() {
+  local v=$1
+  v=${v//\\/\\\\}
+  v=${v//\"/\\\"}
+  v=${v//$'\n'/\\n}
+  printf '%s' "$v"
+}
+
+out=
+family() { out+="# HELP $1 $2"$'\n'"# TYPE $1 gauge"$'\n'; }
+sample() { out+="$1 $2"$'\n'; }
+gauge() {
+  family "$1" "$2"
+  sample "$1" "$3"
+}
+# flag NAME HELP COMMAND...: 1 if the command succeeds, else 0.
+flag() {
+  local name=$1 help=$2 v=0
+  shift 2
+  "$@" && v=1
+  gauge "$name" "$help" "$v"
+}
+is_num() { [[ ${1:-} =~ ^[0-9]+$ ]]; }
+
+# Image: from bootc status. Metrics for a missing field are left out.
+bs=$(timeout -k 5 "$probe_timeout" bootc status --json 2>/dev/null) || bs=
+if [[ -n $bs ]]; then
+  # shellcheck source=/dev/null
+  version=$(. "$os_release" 2>/dev/null && printf '%s' "${IMAGE_VERSION:-${VERSION_ID:-}}")
+  image=$(jq -r '.status.booted.image.image.image // empty' <<<"$bs" 2>/dev/null) || image=
+  digest=$(jq -r '.status.booted.image.imageDigest // empty' <<<"$bs" 2>/dev/null) || digest=
+  ts=$(jq -r '.status.booted.image.timestamp // empty' <<<"$bs" 2>/dev/null) || ts=
+  sdigest=$(jq -r '.status.staged.image.imageDigest // empty' <<<"$bs" 2>/dev/null) || sdigest=
+  if [[ -n $digest ]]; then
+    family juniper_image_info "The booted image (value is always 1)."
+    sample "juniper_image_info{image=\"$(esc "$image")\",digest=\"$(esc "$digest")\",version=\"$(esc "$version")\"}" 1
+    if [[ -n $ts ]] && secs=$(date -d "$ts" +%s 2>/dev/null) && is_num "$secs"; then
+      gauge juniper_image_timestamp_seconds "Build time of the booted image, Unix seconds." "$secs"
+    fi
+  fi
+  if [[ -n $sdigest ]]; then
+    family juniper_staged_image_info "The image staged for the next reboot (value is always 1)."
+    sample "juniper_staged_image_info{digest=\"$(esc "$sdigest")\"}" 1
+  fi
+fi
+
+# Current health: the boot health check's probes, without its side effects (no sync, reboot or
+# strike). Exit 0 is healthy; anything else, including a timeout or crash, is unhealthy: a hung
+# check is itself a health problem, and an absent series would not trigger a `== 0` alert.
+healthy=0
+timeout -k 5 "${JUNIPER_METRICS_HEALTH_TIMEOUT:-90}" "${JUNIPER_HEALTHCHECK:-$(dirname "$0")/healthcheck}" --check >/dev/null 2>&1 && healthy=1
+gauge juniper_healthy "1 if the health check passes right now (route, Tailscale when locked, image and local hooks)." "$healthy"
+
+# healthcheck touches this when a boot is confirmed healthy.
+if ok=$(stat -c %Y "$state_dir/health-last-ok" 2>/dev/null) && is_num "$ok"; then
+  gauge juniper_health_last_ok_timestamp_seconds "Last boot whose health check confirmed the deployment, Unix seconds." "$ok"
+fi
+
+# The same marker files the login banner reads.
+flag juniper_update_held "1 if the staged update failed its health check twice and is held." test -s "$state_dir/update-held"
+flag juniper_update_skipped_space "1 if the last update was skipped for lack of disk space." test -s "$state_dir/update-skipped-space"
+flag juniper_tailscale_join_gave_up "1 if the first-boot Tailscale join gave up." test -e "$state_dir/tailscale-join-gave-up"
+flag juniper_locked "1 once the device is locked down to Tailscale only." test -e "$state_dir/locked"
+# Only after lockdown does the old unscoped `lan-ssh on` matter (as in the login banner).
+legacy=0
+[[ -e $state_dir/locked && -s $run_dir/lan-ssh-legacy ]] && legacy=1
+gauge juniper_lan_ssh_legacy "1 if locked down but SSH is still open to every network (old lan-ssh rule)." "$legacy"
+
+# Clock: yes/no from timedatectl; anything else leaves the metric out.
+sync=$(timeout -k 5 "$probe_timeout" timedatectl show -p NTPSynchronized --value 2>/dev/null) || sync=
+case $sync in
+  yes) gauge juniper_time_synced "1 if the system clock is NTP-synchronised." 1 ;;
+  no) gauge juniper_time_synced "1 if the system clock is NTP-synchronised." 0 ;;
+esac
+
+kb=$(timeout -k 5 "$probe_timeout" rpm -q --qf '%{BUILDTIME}\n' raspberrypi2-kernel4 2>/dev/null | sort -n | tail -n1) || kb=
+if is_num "$kb"; then
+  gauge juniper_kernel_build_timestamp_seconds "Build time of the installed Pi kernel package, Unix seconds." "$kb"
+fi
+
+mkdir -p "$metrics_dir" || exit 1
+tmp=$(mktemp "$metrics_dir/.juniper.prom.XXXXXX") || exit 1
+if printf '%s' "$out" >"$tmp" && chmod 0644 "$tmp" && mv -f "$tmp" "$metrics_dir/juniper.prom"; then
+  exit 0
+fi
+rm -f "$tmp"
+exit 1

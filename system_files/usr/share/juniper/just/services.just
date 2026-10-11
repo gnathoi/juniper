@@ -1,7 +1,8 @@
-# Run Prometheus node_exporter as a quadlet (reachable over Tailscale on :9100)
+# Run Prometheus node_exporter as a quadlet (reachable over Tailscale on :9100); re-run to update it
 enable-metrics:
     #!/usr/bin/bash
     set -euo pipefail
+    sudo mkdir -p /var/lib/juniper/metrics
     sudo tee /etc/containers/systemd/node-exporter.container >/dev/null <<'EOF'
     [Unit]
     Description=Prometheus node exporter
@@ -11,7 +12,10 @@ enable-metrics:
     Network=host
     PodmanArgs=--pid=host
     Volume=/:/host:ro,rslave
-    Exec=--path.rootfs=/host
+    # The textfile under /var/lib/juniper is var_lib_t, which container_t may not read under
+    # enforcing SELinux. Acceptable: read-only monitoring container, / is mounted read-only.
+    SecurityLabelDisable=true
+    Exec=--path.rootfs=/host --collector.textfile.directory=/host/var/lib/juniper/metrics
     User=65534
     Group=65534
     DropCapability=ALL
@@ -21,5 +25,6 @@ enable-metrics:
     WantedBy=multi-user.target
     EOF
     sudo systemctl daemon-reload
-    sudo systemctl start node-exporter.service
+    # restart, not start: re-running picks up a changed quadlet
+    sudo systemctl restart node-exporter.service
     echo "Metrics: http://$(tailscale ip -4 | head -1):9100/metrics"

@@ -12,6 +12,8 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ### Added
 
+- Status metrics for node_exporter: every image writes `juniper_*` metrics (booted and staged image digest, image build time, last healthy boot, update held or skipped, lockdown state, clock sync, kernel build time) to a textfile every 5 minutes. Re-run `ujust enable-metrics` on an existing device to serve them. README section "Monitoring" lists them with example alerts
+- The login banner warns "Clock not synchronised (NTP)" when the clock is not synced
 - The Pi kernel's age is now visible: release notes and the CI step summary state its build date (and any newer kernel waiting in AlmaLinux's Pi repo, with escalated wording past 14 days), and `ujust pi-status` shows the running kernel and how many days ago it was built. It never fails a release
 - Tab completion for `ujust` in bash: recipe names (including image-specific ones) and fixed arguments like `lan-ssh on|off|for|status`. Adds the small `bash-completion` package to every image
 - README section "If a device is lost or stolen": what a stolen card or board exposes today
