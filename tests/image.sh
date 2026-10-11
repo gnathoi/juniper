@@ -156,6 +156,27 @@ jq -e '[.transports.docker[][] | select(.type == "sigstoreSigned" and .keyPath =
 # R8: scoped to the namespace, not one image, so juniper <-> juniper-minimal switches stay enforced.
 jq -e '[.transports.docker | to_entries[] | select(.value[0].keyPath == "/usr/share/pki/containers/juniper.pub") | .key | contains("juniper") | not] == [true]' /etc/containers/policy.json >/dev/null
 grep -q 'use-sigstore-attachments: true' /etc/containers/registries.d/juniper.yaml
+# trust-images on a copy of the real policy, validated by the image's own skopeo.
+for r in trust-images untrust-images; do grep -qx "$r" <<<"$recipes" || {
+  echo "missing recipe: $r"
+  exit 1
+}; done
+tdir=$(mktemp -d)
+cp /etc/containers/policy.json "$tdir/policy.json"
+mkdir "$tdir/registries.d"
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 2>/dev/null | openssl pkey -pubout -out "$tdir/k.pub"
+export JUNIPER_POLICY=$tdir/policy.json JUNIPER_REGISTRIES_D=$tdir/registries.d JUNIPER_KEY_DIR=$tdir/pki
+/usr/libexec/juniper/trust-images ghcr.io/example "$tdir/k.pub" >/dev/null
+jq -e '.transports.docker["ghcr.io/example"][0].keyPath | endswith("/ghcr.io+example.pub")' "$tdir/policy.json" >/dev/null
+juniper_ns=$(jq -r '.transports.docker | to_entries[] | select(.value[0].keyPath == "/usr/share/pki/containers/juniper.pub") | .key' /etc/containers/policy.json)
+if /usr/libexec/juniper/trust-images "$juniper_ns" "$tdir/k.pub" 2>/dev/null; then
+  echo "trust-images changed Juniper's namespace" >&2
+  exit 1
+fi
+/usr/libexec/juniper/trust-images --remove ghcr.io/example >/dev/null
+[[ $(jq -cS . "$tdir/policy.json") == "$(jq -cS . /etc/containers/policy.json)" ]]
+unset JUNIPER_POLICY JUNIPER_REGISTRIES_D JUNIPER_KEY_DIR
+rm -rf "$tdir"
 
 if [[ $IMAGE_ID == juniper || $IMAGE_ID == juniper-desktop ]]; then
   # --- full image only ---

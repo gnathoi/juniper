@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+# Require a cosign signature for every image under a registry namespace: podman pulls (quadlets,
+# podman auto-update) and bootc switch/upgrade (derived OS images) then refuse anything unsigned.
+#   trust-images                          list the namespaces that need a signature, and the key
+#   trust-images NAMESPACE PUBKEY_FILE    trust NAMESPACE (e.g. ghcr.io/you), or change its key
+#   trust-images --remove NAMESPACE       stop requiring a signature (ujust untrust-images)
+# Juniper's own namespace (the entry using juniper.pub) can't be changed or removed here.
+# policy.json is validated (jq, then skopeo's strict parser) before it replaces the old one, which
+# is kept as policy.json.bak: a broken policy would stop every pull and every update.
+set -euo pipefail
+
+policy=${JUNIPER_POLICY:-/etc/containers/policy.json}
+regd=${JUNIPER_REGISTRIES_D:-/etc/containers/registries.d}
+keydir=${JUNIPER_KEY_DIR:-/etc/pki/containers}
+own_key=${JUNIPER_OWN_KEY:-/usr/share/pki/containers/juniper.pub}
+skopeo=${JUNIPER_SKOPEO:-skopeo}
+
+# Temporary files, removed on any exit.
+tmps=()
+trap 'rm -f "${tmps[@]}"' EXIT
+
+die() {
+  echo "$*" >&2
+  exit 1
+}
+usage() {
+  echo "usage: ujust trust-images [NAMESPACE PUBKEY_FILE]   e.g. ujust trust-images ghcr.io/you ~/cosign.pub" >&2
+  echo "       ujust untrust-images NAMESPACE" >&2
+  exit 2
+}
+
+# A registry host (with a dot or port, or localhost) and optional lowercase repository path,
+# as policy.json scopes them. No tags, digests or wildcards: a namespace covers what's under it.
+check_namespace() {
+  local label='[a-z0-9]([a-z0-9-]*[a-z0-9])?' comp='[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*'
+  local host="($label(\\.$label)+|localhost)(:[0-9]+)?|$label:[0-9]+"
+  [[ $1 =~ ^($host)(/$comp)*$ ]] ||
+    die "Not a namespace: '$1'. Use the registry and path, lowercase, no tag: e.g. ghcr.io/you or ghcr.io/you/app."
+}
+
+# File-name form: / and : can't appear in a path component, so + and = keep names unique.
+safe_name() {
+  local n=${1//\//+}
+  echo "${n//:/=}"
+}
+
+# Namespaces whose entry uses Juniper's key; trust-images never touches them or anything under them.
+juniper_namespaces() {
+  jq -r --arg k "$own_key" '.transports.docker // {} | to_entries[]
+    | select(any(.value[]?; .keyPath? == $k)) | .key' "$policy"
+}
+refuse_juniper() {
+  local j
+  while read -r j; do
+    [[ -n $j && ($1 == "$j" || $1 == "$j"/*) ]] &&
+      die "$1 is Juniper's own namespace ($j), signed with juniper.pub; trust-images won't change it."
+  done < <(juniper_namespaces)
+  return 0
+}
+
+restore_label() { if command -v restorecon >/dev/null; then restorecon "$@" 2>/dev/null || true; fi; }
+
+# Write a new policy (jq ARGS... applied to the current one) to $new and validate it; the
+# current policy stays in place until install_policy.
+new=
+new_policy() {
+  local j before after out
+  new=$(mktemp "$policy.XXXXXX.tmp")
+  tmps+=("$new")
+  jq "$@" "$policy" >"$new" || die "Couldn't edit $policy; it's unchanged."
+  jq -e '(.default | type == "array") and (.transports.docker | type == "object")' "$new" >/dev/null ||
+    die "The edited policy is invalid; $policy is unchanged."
+  while read -r j; do # Juniper's entry must come through exactly as it was.
+    before=$(jq -cS --arg ns "$j" '.transports.docker[$ns]' "$policy")
+    after=$(jq -cS --arg ns "$j" '.transports.docker[$ns]' "$new")
+    [[ $before == "$after" ]] || die "The edit would change Juniper's own entry ($j); $policy is unchanged."
+  done < <(juniper_namespaces)
+  if command -v "$skopeo" >/dev/null; then
+    # skopeo loads the policy strictly first, then fails on the dummy image name.
+    out=$("$skopeo" --policy "$new" copy juniper-policy-check: juniper-policy-check: 2>&1 || true)
+    [[ $out == *"Invalid source name"* ]] ||
+      die "The edited policy is invalid ($out); $policy is unchanged."
+  fi
+  chmod 0644 "$new"
+}
+install_policy() {
+  cp -p "$policy" "$policy.bak"
+  mv -f "$new" "$policy"
+  restore_label "$policy"
+}
+
+# install_file SRC DEST: atomic copy, mode 0644.
+install_file() {
+  local t=$2.tmp
+  tmps+=("$t")
+  cp "$1" "$t"
+  chmod 0644 "$t"
+  mv -f "$t" "$2"
+  restore_label "$2"
+}
+
+# The registries.d file other than $2 that already declares scope $1, if any. A scope in two
+# files is an error that stops every pull.
+declared_in() {
+  local f
+  for f in "$regd"/*.yaml; do
+    [[ -f $f && $f != "$2" ]] || continue
+    if awk -v k="$1" '{ gsub(/^[ \t]+|[ \t]+$/, "") } $0 == k ":" || $0 == "\"" k "\":" { f = 1 }
+      END { exit !f }' "$f"; then
+      echo "$f"
+      return
+    fi
+  done
+}
+
+list() {
+  jq -r --arg k "$own_key" '.transports.docker // {} | to_entries[]
+    | .key as $ns | .value[]? | select(.type == "sigstoreSigned" or .type == "signedBy")
+    | "\($ns)\t\(.keyPath // .keyPaths // "inline key" | tostring)\(if .keyPath? == $k then " (Juniper)" else "" end)"' \
+    "$policy" | awk -F '\t' '{ printf "%-40s %s\n", $1, $2 }'
+}
+
+trust() { # NAMESPACE PUBKEY_FILE
+  local ns=$1 src=$2 key yaml other pem
+  check_namespace "$ns"
+  refuse_juniper "$ns"
+  [[ -f $src && -r $src ]] || die "Can't read $src."
+  ! grep -q 'PRIVATE KEY' "$src" || die "$src is a private key. Give the public one (cosign.pub)."
+  pem=$(mktemp)
+  tmps+=("$pem")
+  grep -q -- '-----BEGIN PUBLIC KEY-----' "$src" && openssl pkey -pubin -in "$src" -pubout -out "$pem" 2>/dev/null ||
+    die "$src isn't a PEM public key (-----BEGIN PUBLIC KEY-----, as in cosign.pub)."
+
+  key=$keydir/$(safe_name "$ns").pub
+  yaml=$regd/$(safe_name "$ns").yaml
+  new_policy --arg ns "$ns" --arg key "$key" '.transports.docker[$ns] = [{"type": "sigstoreSigned",
+    "keyPath": $key, "signedIdentity": {"type": "matchRepository"}}]'
+
+  # Key and attachments config first: the policy entry can't verify anything without them.
+  mkdir -p -m 0755 "$keydir"
+  install_file "$pem" "$key"
+  other=$(declared_in "$ns" "$yaml")
+  if [[ -n $other ]]; then
+    echo "$ns is already set up in $other; it must have use-sigstore-attachments: true."
+  else
+    printf 'docker:\n  %s:\n    use-sigstore-attachments: true\n' "$ns" >"$pem"
+    install_file "$pem" "$yaml"
+  fi
+  install_policy
+  echo "Images under $ns now need a signature by $src (installed as $key)."
+}
+
+untrust() { # NAMESPACE
+  local ns=$1 key
+  check_namespace "$ns"
+  refuse_juniper "$ns"
+  jq -e --arg ns "$ns" '.transports.docker | has($ns)' "$policy" >/dev/null ||
+    die "$ns is not trusted (see ujust trust-images)."
+  key=$(jq -r --arg ns "$ns" '.transports.docker[$ns][0].keyPath? // ""' "$policy")
+  [[ $key == "$keydir/$(safe_name "$ns").pub" ]] ||
+    die "$ns's entry was not added by trust-images; edit $policy by hand if you mean it."
+  new_policy --arg ns "$ns" 'del(.transports.docker[$ns])'
+  install_policy
+  rm -f "$regd/$(safe_name "$ns").yaml" "$key"
+  echo "Images under $ns no longer need a signature."
+}
+
+jq empty "$policy" 2>/dev/null ||
+  die "$policy isn't valid JSON, so every pull fails; fix it (the last good one may be $policy.bak)."
+if (($# == 0)); then
+  list
+elif [[ $1 == --remove ]]; then
+  (($# == 2)) || usage
+  untrust "$2"
+elif (($# == 2)); then
+  trust "$1" "$2"
+else
+  usage
+fi
