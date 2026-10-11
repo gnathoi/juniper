@@ -197,6 +197,21 @@ fwkey_lock=$(JUNIPER_VCIO=/nonexistent /usr/libexec/juniper/fwkey lock) || fail 
 if /usr/libexec/juniper/fwkey card-id nosuchdisk0 >/dev/null 2>&1; then
   fail "fwkey card-id accepted a disk that is not in sysfs"
 fi
+# cryptroot (issue #50): runs in the image; with no root partition to find it does nothing.
+test -x /usr/libexec/juniper/cryptroot || fail "cryptroot missing or not executable"
+bash -n /usr/libexec/juniper/cryptroot || fail "cryptroot has a syntax error"
+crdir=$(mktemp -d)
+echo "root=UUID=00000000-0000-4000-8000-000000000000 rw" >"$crdir/cmdline"
+for crcmd in prepare unlock; do
+  JUNIPER_CMDLINE=$crdir/cmdline JUNIPER_ROOT_WAIT=0 JUNIPER_RUN_DIR=$crdir/run \
+    JUNIPER_CIDATA_MNT=$crdir/cidata JUNIPER_CRYPTSETUP_LOCKDIR=$crdir/lock \
+    /usr/libexec/juniper/cryptroot "$crcmd" 2>/dev/null || fail "cryptroot $crcmd without a root failed"
+done
+[[ ! -e $crdir/cidata && ! -e $crdir/lock ]] || fail "cryptroot touched CIDATA or cryptsetup without a root"
+crrc=0
+/usr/libexec/juniper/cryptroot bogus 2>/dev/null || crrc=$?
+[[ $crrc == 2 ]] || fail "cryptroot usage error exited $crrc, not 2"
+rm -rf "${crdir:?}"
 # /dev/vcio stays root-only: it is the only barrier without the HMAC lock (ruling 4).
 if grep -rlE 'vcio.*MODE|vcio.*GROUP' /usr/lib/udev/rules.d /etc/udev/rules.d 2>/dev/null; then
   echo "a udev rule widens /dev/vcio"
