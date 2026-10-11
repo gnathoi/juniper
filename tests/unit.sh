@@ -2291,6 +2291,13 @@ test_motd_warns_on_low_root_space() {
   check "motd: 13% and over 1 GiB -> no warning" not_stdout_has "disk space" "$LIBEXEC/motd"
 }
 
+test_motd_runs_clean() {
+  motd_env
+  df_queue "30000 20000"
+  check "motd: no shell errors" not_stderr_has "unbound\|syntax\|not found" "$LIBEXEC/motd"
+  check "motd: exits 0" "$LIBEXEC/motd"
+}
+
 test_pi_status_shows_storage_warnings() {
   local j=$ROOT/system_files/usr/share/juniper/just/pi.just
   check "pi-status: skipped-for-space line" grep -q 'update-skipped-space' "$j"
