@@ -23,8 +23,18 @@ deadline=${JUNIPER_HEALTH_DEADLINE:-420}
 # try: it is killed (SIGKILL if it ignores SIGTERM) and the try counts as unhealthy.
 probe_timeout=${JUNIPER_HEALTH_PROBE_TIMEOUT:-10}
 probe_kill=${JUNIPER_HEALTH_PROBE_KILL:-5}
+uptime_file=${JUNIPER_UPTIME_FILE:-/proc/uptime}
 
 probe() { timeout -k "$probe_kill" "$probe_timeout" "$@"; }
+
+# Whole seconds since boot (monotonic). Not $SECONDS: that follows the wall clock, and a Pi has
+# no RTC, so chrony steps the clock forward (by months, after a long power-off) a few seconds
+# into this check. With $SECONDS that step ended the retries after one early try (#89).
+boot_secs() {
+  local up
+  read -r up _ <"$uptime_file"
+  echo "${up%.*}"
+}
 
 healthy() {
   [[ -n $(probe ip route show default) || -n $(probe ip -6 route show default) ]] || return 1
@@ -166,14 +176,15 @@ case ${1:-} in
     ;;
 esac
 
-for ((i = 0; i < tries && SECONDS < deadline; i++)); do
+start=$(boot_secs)
+for ((i = 0; i < tries && $(boot_secs) - start < deadline; i++)); do
   if healthy; then
     "${JUNIPER_BOOTLOADER:-/usr/libexec/juniper/bootloader}" sync
     # Read by juniper-metrics (juniper_health_last_ok_timestamp_seconds); best effort.
     { mkdir -p "$state_dir" && touch "$state_dir/health-last-ok"; } 2>/dev/null || true
     exit 0
   fi
-  ((SECONDS + interval < deadline)) || break
+  (($(boot_secs) - start + interval < deadline)) || break
   sleep "$interval"
 done
 

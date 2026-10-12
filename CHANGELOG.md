@@ -10,6 +10,10 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+### Fixed
+
+- The boot health check no longer fails after one try when chrony steps the clock forward early in boot (Pi has no RTC; seen after a long power-off). Its retry deadline now runs on the monotonic boot clock instead of bash `$SECONDS`, which follows the wall clock. Under tryboot this could have rolled back a healthy update and given it a strike
+
 ## build-20261011 (2026-10-11)
 
 ### Added

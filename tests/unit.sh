@@ -19,7 +19,8 @@ setup() {
   unset JUNIPER_SYSFS JUNIPER_VCIO JUNIPER_CMDLINE JUNIPER_BLOCK_SYSFS JUNIPER_CIDATA_MNT \
     JUNIPER_RUN_DIR JUNIPER_CPUINFO JUNIPER_TRYBOOT_FLAG JUNIPER_ROOT_WAIT \
     JUNIPER_UNLOCK_FAIL_DELAY JUNIPER_FWKEY JUNIPER_CONSOLE JUNIPER_CRYPTSETUP_LOCKDIR FAKE_PASS \
-    JUNIPER_DT JUNIPER_FWKEY_WEDGED JUNIPER_FWKEY_DEADLINE
+    JUNIPER_DT JUNIPER_FWKEY_WEDGED JUNIPER_FWKEY_DEADLINE JUNIPER_UPTIME_FILE \
+    JUNIPER_HEALTH_TRIES JUNIPER_HEALTH_INTERVAL JUNIPER_HEALTH_DEADLINE
   T=$(mktemp -d)
   export CALLS=$T/calls JUNIPER_STATE_DIR=$T/state
   mkdir -p "$T/bin" "$JUNIPER_STATE_DIR"
@@ -504,6 +505,34 @@ test_healthcheck_always_hanging_hook_still_falls_back() {
   "$LIBEXEC/healthcheck" 2>/dev/null || true
   check "health: always-hanging hook -> deadline reached in time" test $((SECONDS - start)) -lt 15
   check "health: always-hanging hook under tryboot -> reboot" called "systemctl reboot"
+}
+
+# A Pi has no RTC: chrony steps the clock forward by months a few seconds into the check. The
+# deadline must run on the monotonic clock, or that step ends the retries at once (#89). Here
+# boot time stands still while each try takes wall time; all tries must still run.
+test_healthcheck_deadline_ignores_wall_clock() {
+  health_env
+  export JUNIPER_HEALTH_TRIES=3 JUNIPER_HEALTH_DEADLINE=1 JUNIPER_UPTIME_FILE=$T/uptime
+  echo "30.00 60.00" >"$JUNIPER_UPTIME_FILE"
+  # Unhealthy (and slow) on the first two tries, healthy on the third.
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub ip 'n=$(grep -c "^ip route" "$CALLS"); /usr/bin/sleep 0.6; ((n >= 3)) && echo "default via 192.168.1.1 dev wlan0"; exit 0'
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "health: wall-clock step doesn't end the retries" called "bootloader sync"
+}
+
+# ...and the deadline still holds as boot time advances: each sleep moves it on.
+test_healthcheck_deadline_on_boot_clock() {
+  health_env
+  export JUNIPER_HEALTH_TRIES=1000 JUNIPER_HEALTH_INTERVAL=15 JUNIPER_HEALTH_DEADLINE=60 \
+    JUNIPER_UPTIME_FILE=$T/uptime
+  echo "30.00 60.00" >"$JUNIPER_UPTIME_FILE"
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub sleep 'read -r u _ <"$JUNIPER_UPTIME_FILE"; echo "$((${u%.*} + $1)).00 0" >"$JUNIPER_UPTIME_FILE"'
+  printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
+  "$LIBEXEC/healthcheck" 2>/dev/null || true
+  check "health: boot-clock deadline -> 4 tries, not 1000" test "$(grep -c '^ip -6 route' "$CALLS")" -eq 4
+  check "health: boot-clock deadline under tryboot -> reboot" called "systemctl reboot"
 }
 
 test_healthcheck_deadline_below_unit_timeout() {
