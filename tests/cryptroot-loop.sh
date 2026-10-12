@@ -5,6 +5,7 @@
 #   sudo just image=juniper-minimal test-cryptroot     (privileged container, as CI runs it)
 #   sudo tests/cryptroot-loop.sh                       (on a Pi, from a checkout)
 # Knobs: CRYPTROOT=path (script under test; default: the checkout's, else the image's),
+# ADD_REBIND_SLOT=path (default: the checkout's disk/add-rebind-slot, else /disk/add-rebind-slot),
 # ONLY=REGEX (scenario names), WORKDIR=dir (default /var/tmp), GPT_SIZE=8G, DISK_SIZE=10G,
 # DATA_MIB=1024 (smaller values spare an SD card), KILL_DELAY=2 (seconds into the resume).
 # Each kill point SIGKILLs cryptroot's process group, emulates a reboot (unmount, detach,
@@ -35,6 +36,12 @@ else
   CRYPTROOT=/usr/libexec/juniper/cryptroot
 fi
 [[ -x $CRYPTROOT ]] || die "no cryptroot at $CRYPTROOT"
+# The laptop half of `just rebind-card` (disk/ in a checkout; /disk in `just test-cryptroot`).
+ADD_REBIND_SLOT=${ADD_REBIND_SLOT:-}
+for f in "$here/../disk/add-rebind-slot" /disk/add-rebind-slot; do
+  [[ -n $ADD_REBIND_SLOT || ! -r $f ]] || ADD_REBIND_SLOT=$f
+done
+[[ -n $ADD_REBIND_SLOT ]] || die "no disk/add-rebind-slot (mount the checkout's disk/ at /disk)"
 
 if ! command -v mkfs.vfat >/dev/null && [[ -e /run/.containerenv ]]; then
   echo "mkfs.vfat missing; installing dosfstools in this throwaway container"
@@ -107,7 +114,7 @@ case \$1 in
   probe) if [[ \$mode == unavailable ]]; then echo locked; else echo ok; fi ;;
   ensure) if [[ \$mode == unavailable ]]; then echo "unavailable:key locked"; exit 1; fi; echo ok ;;
   card-id) echo "mmc:0123456789abcdef0123456789abcdef" ;;
-  derive) if [[ \$mode == derive-fail ]]; then exit 1; fi; printf '%s' $KEY ;;
+  derive) if [[ \$mode == derive-fail ]]; then exit 1; fi; if [[ -r $W/board.key ]]; then cat $W/board.key; else printf '%s' $KEY; fi ;;
   lock) echo unavailable ;;
   *) exit 2 ;;
 esac
@@ -279,7 +286,7 @@ EOF
 # fresh MARKER RECIPIENTS: a copy of the template; MARKER (juniper-encrypt, - for none),
 # RECIPIENTS ed25519 | ecdsa | none.
 fresh() {
-  rm -f "$W/disk.img" "$W/hook.log" "$W/fwkey.log" "$W/kill."*
+  rm -f "$W/disk.img" "$W/hook.log" "$W/fwkey.log" "$W/kill."* "$W/board.key"
   rm -rf "$W/run"
   cp --sparse=always "$W/template.img" "$W/disk.img"
   attach
@@ -386,7 +393,12 @@ recovery_from_token() {
     sed -n 's/.*"age"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed 's|\\/|/|g; s/\\n/\n/g' |
     age -d -i "$W/id_ed25519" | cryptsetup open --test-passphrase --key-file - "$P3"
 }
-board_key_opens() { printf '%s' "$KEY" | cryptsetup open --test-passphrase --key-file - "$P3"; }
+# The board's key: $KEY, or another Pi's after new_board.
+board_key() { if [[ -r $W/board.key ]]; then cat "$W/board.key"; else printf '%s' "$KEY"; fi; }
+board_key_opens() { board_key | cryptsetup open --test-passphrase --key-file - "$P3"; }
+key_opens() { printf '%s' "$1" | cryptsetup open --test-passphrase --key-file - "$P3" 2>/dev/null; }
+key_fails() { ! key_opens "$1"; }
+key_opens_either() { key_opens "$1" || key_opens "$2"; }
 
 # encrypted_checks CIPHER: the end state of every encrypting path, unlock included.
 encrypted_checks() {
@@ -655,9 +667,113 @@ s_tryboot_plain() {
   check "fwkey never called" test ! -s "$W/fwkey.log"
 }
 
+# --- re-bind (#76): `just rebind-card` on a laptop, then a boot in another Pi ---
+KEY2=0d15ea5e0ddba11c0ffee000feedfacecafebabe1234567890abcdef00112233 # the other Pi's key
+# encrypted_card: the happy path's end state, as the owner's card is before it moves.
+encrypted_card() {
+  fresh on ed25519
+  cr prepare
+  check "setup: encrypted" eq "$(token0 recovery)" sealed
+  : >"$W/hook.log"
+}
+# laptop_rebind: what `just rebind-card` does as root, through the same script.
+laptop_rebind() {
+  local ct
+  c_mount || die "cannot mount CIDATA"
+  ct=$(cat "$W/c/juniper-recovery.age")
+  bash "$ADD_REBIND_SLOT" "$P3" "$W/c" age "$W/id_ed25519" "$ct"
+  RB_KEY=$(cat "$W/c/juniper-rebind.key")
+  c_umount
+}
+new_board() { printf '%s' "$KEY2" >"$W/board.key"; }
+rebind_checks() {
+  check "new board's key opens" key_opens "$KEY2"
+  check "old board's key no longer opens" key_fails "$KEY"
+  check "re-bind key no longer opens" key_fails "$RB_KEY"
+  check "re-bind file removed" eval '! cidata_has juniper-rebind.key'
+  check "re-bind key not on the header or in logs" no_leak "$RB_KEY" "$W/hook.log" "$W/out" "$W/run"
+  encrypted_checks aes-xts-plain64
+}
+
+s_rebind_new_board() {
+  encrypted_card
+  laptop_rebind
+  check "laptop: slot 2 added" eq "$(cryptsetup luksDump "$P3" | sed -n '/^Keyslots:/,/^Tokens:/p' | grep -cE '^  2: ')" 1
+  check "laptop: re-bind key opens" key_opens "$RB_KEY"
+  check "laptop: file is the key" eq "$(cidata juniper-rebind.key)" "$RB_KEY"
+  new_board
+  rm -rf "$W/run"
+  # The other Pi's first boot under tryboot changes nothing.
+  local h
+  h=$(header_sum)
+  cr prepare JUNIPER_TRYBOOT_FLAG="$W/tryboot-1"
+  check "tryboot: header unchanged" eq "$(header_sum)" "$h"
+  rm -rf "$W/run"
+  cr prepare
+  check "prepare exits 0" eq "$rc" 0
+  check "order: kill slot 0, add slot 0, kill slot 2" eq \
+    "$(grep -oE '^cryptsetup (luksKillSlot --batch-mode --key-file - \S+ [0-9]|luksAddKey --batch-mode --key-slot 0)' "$W/hook.log" |
+      sed -E 's|^cryptsetup ||; s|--batch-mode ||; s|--key-file - \S+ ||' | tr '\n' ,)" \
+    "luksKillSlot 0,luksAddKey --key-slot 0,luksKillSlot 2,"
+  rebind_checks
+}
+
+# A power cut after each step: the next boot in the new Pi finishes.
+rebind_kill() { # MATCH
+  encrypted_card
+  laptop_rebind
+  new_board
+  rm -rf "$W/run"
+  cr prepare KILL_WHEN=after KILL_MATCH="$1" KILL_NTH=1
+  check "prepare was SIGKILLed ($(cat "$KILL_DONE" 2>/dev/null || echo no kill))" test -e "$KILL_DONE"
+  check "a key still opens (re-bind or new board)" key_opens_either "$RB_KEY" "$KEY2"
+  check "recovery still opens" recovery_from_cidata
+  reboot
+  rm -f "$W/kill."*
+  cr prepare
+  check "rerun: prepare exits 0" eq "$rc" 0
+  rebind_checks
+}
+s_rebind_kill_after_killslot0() { rebind_kill '^cryptsetup luksKillSlot .* 0$'; }
+s_rebind_kill_after_addkey0() { rebind_kill '^cryptsetup luksAddKey --batch-mode --key-slot 0 '; }
+s_rebind_kill_after_killslot2() { rebind_kill '^cryptsetup luksKillSlot .* 2$'; }
+
+# Same Pi: nothing to move. The key file and slot 2 just go.
+s_rebind_same_board() {
+  encrypted_card
+  laptop_rebind
+  rm -rf "$W/run"
+  cr prepare
+  check "prepare exits 0" eq "$rc" 0
+  check "slot 0 untouched" not_called '^cryptsetup (luksAddKey|luksKillSlot .* 0$)' "$W/hook.log"
+  check "old (same) board's key opens" key_opens "$KEY"
+  check "re-bind key no longer opens" key_fails "$RB_KEY"
+  check "re-bind file removed" eval '! cidata_has juniper-rebind.key'
+  encrypted_checks aes-xts-plain64
+}
+
+# A key file that opens nothing (planted, or for another card): ignored, nothing changes.
+s_rebind_bogus_key() {
+  encrypted_card
+  c_mount || die "cannot mount CIDATA"
+  printf '%064d\n' 0 >"$W/c/juniper-rebind.key"
+  c_umount
+  new_board
+  local h
+  h=$(header_sum)
+  rm -rf "$W/run"
+  cr prepare
+  check "prepare exits 0" eq "$rc" 0
+  check "header unchanged" eq "$(header_sum)" "$h"
+  check "says why" grep -q "not re-binding" "$W/out"
+  check "file left for the owner" cidata_has juniper-rebind.key
+}
+
 scenarios=(plain_untouched happy adiantum kill_after_init_only kill_mid_resume kill_after_resume
   kill_after_token0 kill_after_age kill_after_addkey kill_after_token1 kill_after_grow
-  failopen_no_recipients failopen_ecdsa_only failopen_key_locked failopen_derive_fails tryboot_plain)
+  failopen_no_recipients failopen_ecdsa_only failopen_key_locked failopen_derive_fails tryboot_plain
+  rebind_new_board rebind_kill_after_killslot0 rebind_kill_after_addkey0 rebind_kill_after_killslot2
+  rebind_same_board rebind_bogus_key)
 
 echo "cryptroot under test: $CRYPTROOT"
 cryptsetup --version

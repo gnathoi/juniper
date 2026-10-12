@@ -3,7 +3,8 @@
 # initramfs from the 90juniper-cryptroot dracut module.
 #
 #   cryptroot prepare   before udev: first-boot in-place encryption (CIDATA marker `on`),
-#                       resume, recovery sealing, grow, record. Exits 0 unless it can't run.
+#                       resume, re-bind, recovery sealing, grow, record. Exits 0 unless it
+#                       can't run.
 #   cryptroot unlock    after udev: opens the root as /dev/mapper/juniper-root.
 #
 # The board passphrase (`fwkey derive`) and the recovery passphrase only move through pipes
@@ -28,7 +29,9 @@ lock_dir=${JUNIPER_CRYPTSETUP_LOCKDIR:-/run/cryptsetup}
 root_type=b921b045-1df0-41c3-af44-4c6f280d3fae # GPT root-arm64
 binding=juniper.luks.root.v1
 grow_sectors=131072 # 64 MiB: room for --reduce-device-size 32M
+slot0_re=$'(^|\n)[[:space:]]+0: luks2'
 slot1_re=$'(^|\n)[[:space:]]+1: luks2'
+rebind_file=juniper-rebind.key
 
 log() { printf 'juniper-cryptroot: %s\n' "$*" >&2; }
 first_line() { printf '%s' "${1%%$'\n'*}"; }
@@ -446,6 +449,59 @@ seal() {
   token_write "$dev" "$(token_read "$dev" id_type)" sealed "$(count_recipients)" --token-replace
 }
 
+# rebind DEV (#76): `just rebind-card` on a laptop added a one-time keyslot (slot 2) and wrote
+# its key T to CIDATA/juniper-rebind.key. Make slot 0 this Pi's key for this card, then remove T.
+# Each step leaves a working slot (T, or this Pi's key) beside the recovery slot, so a power cut
+# anywhere is picked up by the next boot. T never goes into argv or a file of ours.
+rebind() {
+  local dev=$1 t='' slot
+  [[ $cidata_disk == "$disk" && -e $mnt/$rebind_file ]] || return 0
+  IFS= read -r t <"$mnt/$rebind_file" || [[ -n $t ]] || t=
+  t=${t%$'\r'}
+  if [[ ! $t =~ ^[0-9a-f]{64}$ ]]; then
+    t=
+    log "$rebind_file is malformed; ignoring it"
+    return 0
+  fi
+  if ! with_key "$disk" cryptsetup open --test-passphrase --key-file - "$dev" 2>/dev/null; then
+    if ! printf '%s' "$t" | cryptsetup open --test-passphrase --key-file - "$dev" 2>/dev/null; then
+      t=
+      log "neither this Pi's key nor $rebind_file opens $dev; not re-binding"
+      return 0
+    fi
+    log "re-binding $dev to this Pi and card"
+    # Slot 0 holds the previous board's key: replace it (fixed slot, like recovery's slot 1).
+    if [[ $(cryptsetup luksDump "$dev" 2>/dev/null || true) =~ $slot0_re ]]; then
+      printf '%s' "$t" | cryptsetup luksKillSlot --batch-mode --key-file - "$dev" 0 || {
+        t=
+        return 1
+      }
+    fi
+    with_key "$disk" cryptsetup luksAddKey --batch-mode --key-slot 0 --pbkdf pbkdf2 \
+      --pbkdf-force-iterations 1000 --key-file /dev/fd/3 "$dev" /dev/stdin 3< <(printf '%s' "$t") || {
+      t=
+      return 1
+    }
+  fi
+  # This Pi's key opens it: drop T's slot (never 0 or 1), then the file, then record the binding.
+  slot=$(printf '%s' "$t" | cryptsetup open --test-passphrase -v --key-file - "$dev" 2>&1 |
+    sed -n 's/^Key slot \([0-9]*\) unlocked.*/\1/p') || slot=
+  t=
+  slot=$(first_line "$slot")
+  if [[ $slot =~ ^[0-9]+$ ]] && ((slot >= 2)); then
+    with_key "$disk" cryptsetup luksKillSlot --batch-mode --key-file - "$dev" "$slot" || return 1
+  fi
+  cidata_rw || return 1
+  if ! { rm -f "$mnt/$rebind_file" && sync; }; then
+    cidata_ro
+    return 1
+  fi
+  cidata_ro
+  token_write "$dev" "$(id_type_of "$disk" || echo board)" "$(token_read "$dev" recovery)" \
+    "$(token_read "$dev" recipients)" --token-replace || return 1
+  log "$dev is bound to this Pi and card"
+}
+
 # adopt DEV: import token 0 (recovery pending) on a finished header that has none yet (C1).
 adopt() {
   local it
@@ -478,6 +534,7 @@ luks_steps() {
     log "encryption of $dev finished"
   fi
   adopt "$dev" || return 1
+  rebind "$dev" || log "re-binding $dev did not finish; the next boot carries on"
   if [[ $(token_read "$dev" recovery) == pending ]]; then
     seal "$dev" || log "sealing the recovery key failed; it stays pending and the next boot retries"
   fi

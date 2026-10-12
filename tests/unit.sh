@@ -19,7 +19,7 @@ setup() {
   unset JUNIPER_SYSFS JUNIPER_VCIO JUNIPER_CMDLINE JUNIPER_BLOCK_SYSFS JUNIPER_CIDATA_MNT \
     JUNIPER_RUN_DIR JUNIPER_CPUINFO JUNIPER_TRYBOOT_FLAG JUNIPER_ROOT_WAIT \
     JUNIPER_UNLOCK_FAIL_DELAY JUNIPER_FWKEY JUNIPER_CONSOLE JUNIPER_CRYPTSETUP_LOCKDIR FAKE_PASS \
-    JUNIPER_DT JUNIPER_FWKEY_WEDGED JUNIPER_FWKEY_DEADLINE JUNIPER_UPTIME_FILE \
+    JUNIPER_DT JUNIPER_FWKEY_WEDGED JUNIPER_FWKEY_DEADLINE RP JUNIPER_UPTIME_FILE \
     JUNIPER_HEALTH_TRIES JUNIPER_HEALTH_INTERVAL JUNIPER_HEALTH_DEADLINE
   T=$(mktemp -d)
   export CALLS=$T/calls JUNIPER_STATE_DIR=$T/state
@@ -4104,6 +4104,23 @@ test_cryptroot_two_encrypted_cards_change_nothing() {
   check "prep two encrypted: no seal" not_called "cryptsetup luksAddKey"
 }
 
+# Re-bind (#76): a malformed CIDATA/juniper-rebind.key is ignored (the loop test covers the rest).
+test_cryptroot_rebind_malformed_key_ignored() {
+  cryptroot_env luks-sealed encrypted
+  echo "not-a-key" >"$T/cidata/juniper-rebind.key"
+  crt prepare 2>"$T/err"
+  check "rebind malformed: exit 0" test "$RC" = 0
+  check "rebind malformed: logged" grep -q "juniper-rebind.key is malformed" "$T/err"
+  check "rebind malformed: no slot changes" not_called "cryptsetup luksKillSlot"
+  check "rebind malformed: still recorded encrypted" test "$(runf state)" = encrypted
+}
+
+test_cryptroot_no_rebind_file_no_rebind() {
+  cryptroot_env luks-sealed encrypted
+  crt prepare 2>/dev/null
+  check "no rebind file: no test-passphrase" not_called "--test-passphrase"
+}
+
 test_cryptroot_firmware_unavailable_fails_open() {
   cryptroot_env plain on
   echo "unavailable:no /dev/vcio" >"$T/fw.mode"
@@ -4983,6 +5000,70 @@ test_unlock_card_close() {
   "$ROOT/disk/unlock-card" --close >/dev/null
   check "unlock: unmounts" called "run0 umount $T/media/juniper-recovered"
   check "unlock: closes" called "run0 cryptsetup close juniper-recovered"
+}
+
+# --- rebind-card (#76): the laptop half ---
+test_rebind_card_runs_add_rebind_slot_as_root() {
+  unlock_env
+  add_rebind_env # a real-looking recovery passphrase and a cryptsetup that takes slot 2
+  "$ROOT/disk/unlock-card" --rebind /dev/sdb >"$T/out"
+  check "rebind: CIDATA mounted read-write" called "udisksctl mount -b /dev/sdb1"
+  check "rebind: not read-only" not_called "udisksctl mount -b /dev/sdb1 -o ro"
+  check "rebind: add-rebind-slot as root" called "run0 bash $ROOT/disk/add-rebind-slot /dev/sdb3 $T/media/CIDATA"
+  check "rebind: with the CIDATA ciphertext" called "$T/home/.ssh/id_ed25519 CIPHERTEXT-FILE"
+  check "rebind: CIDATA unmounted after" called "udisksctl unmount -b /dev/sdb1"
+  check "rebind: nothing opened" not_called "cryptsetup open"
+  check "rebind: key file written on CIDATA" grep -qxE '[0-9a-f]{64}' "$T/media/CIDATA/juniper-rebind.key"
+  check "rebind: says to keep the card safe" grep -q "anyone holding the card can" "$T/out"
+  check "rebind: recipe" grep -q '^rebind-card device identity=""' "$ROOT/Justfile"
+}
+
+add_rebind_env() {
+  mkdir -p "$T/cidata"
+  export T
+  # The recovery passphrase: 64 hex, as cryptroot's seal makes it.
+  export RP=1111111111111111111111111111111111111111111111111111111111111111
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub age 'cat >/dev/null; printf %s "$RP"'
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub cryptsetup 'case $1 in
+  luksDump) cat "$T/dump" 2>/dev/null || printf "Keyslots:\n  0: luks2\n  1: luks2\nTokens:\n" ;;
+  luksAddKey) k=$(cat); [[ $k == "$RP" ]] || exit 2; for a; do [[ $a == /dev/fd/* ]] && cat "$a" >"$T/newkey"; done; [[ -e $T/addkey.fail ]] && exit 1; exit 0 ;;
+  luksKillSlot) k=$(cat); echo "killslot-auth-is-recovery=$([[ $k == "$RP" ]] && echo yes || echo no)" >>"$CALLS" ;;
+esac'
+}
+test_add_rebind_slot_adds_slot2_and_writes_the_key() {
+  add_rebind_env
+  bash "$ROOT/disk/add-rebind-slot" /dev/sdb3 "$T/cidata" age "$T/id" CT
+  check "add-rebind: slot 2" called "cryptsetup luksAddKey --batch-mode --key-slot 2 --pbkdf pbkdf2 --pbkdf-force-iterations 1000 --key-file - /dev/sdb3 /dev/fd/3"
+  check "add-rebind: file is the new key" test "$(cat "$T/cidata/juniper-rebind.key")" = "$(cat "$T/newkey")"
+  check "add-rebind: key is 64 hex" grep -qxE '[0-9a-f]{64}' "$T/cidata/juniper-rebind.key"
+  check "add-rebind: key not the recovery passphrase" test "$(cat "$T/newkey")" != "$RP"
+  check "add-rebind: no temp file" test ! -e "$T/cidata/juniper-rebind.key.new"
+  check "add-rebind: key never in argv" not_grep_dir "$(cat "$T/newkey")" "$CALLS"
+  check "add-rebind: no earlier slot 2, nothing killed" not_called "luksKillSlot"
+}
+test_add_rebind_slot_replaces_an_earlier_slot2() {
+  add_rebind_env
+  printf 'Keyslots:\n  0: luks2\n  1: luks2\n  2: luks2\nTokens:\n' >"$T/dump"
+  bash "$ROOT/disk/add-rebind-slot" /dev/sdb3 "$T/cidata" age "$T/id" CT
+  check "add-rebind: old slot 2 killed first" order "cryptsetup luksKillSlot --batch-mode --key-file - /dev/sdb3 2" "cryptsetup luksAddKey"
+  check "add-rebind: killed with the recovery key" called "killslot-auth-is-recovery=yes"
+}
+test_add_rebind_slot_failures() {
+  add_rebind_env
+  export RP=not-a-recovery-key
+  check "add-rebind: not a recovery key refused" stderr_has "not a Juniper recovery key" bash "$ROOT/disk/add-rebind-slot" /dev/sdb3 "$T/cidata" age "$T/id" CT
+  check "add-rebind: then nothing added" not_called "luksAddKey"
+  add_rebind_env
+  touch "$T/addkey.fail"
+  check "add-rebind: add failure refused" fails bash "$ROOT/disk/add-rebind-slot" /dev/sdb3 "$T/cidata" age "$T/id" CT
+  check "add-rebind: add failure, no file" test ! -e "$T/cidata/juniper-rebind.key"
+  rm "$T/addkey.fail"
+  chmod a-w "$T/cidata"
+  check "add-rebind: unwritable CIDATA refused" fails bash "$ROOT/disk/add-rebind-slot" /dev/sdb3 "$T/cidata" age "$T/id" CT
+  check "add-rebind: unusable slot taken out again, with the recovery key" called "killslot-auth-is-recovery=yes"
+  chmod u+w "$T/cidata"
 }
 
 test_unlock_card_recipe() {

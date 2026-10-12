@@ -140,7 +140,7 @@ test-image image=(image_ref + ":build"):
 # Run tests/cryptroot-loop.sh inside an image: first-boot encryption with the image's real
 # cryptroot and cryptsetup on loop devices. Needs root (sudo just ...): privileged, host /dev
 test-cryptroot image=(image_ref + ":build"):
-    podman run --rm --pull=never --privileged -v /dev:/dev -v ./tests:/tests:ro,z {{ image }} /tests/cryptroot-loop.sh
+    podman run --rm --pull=never --privileged -v /dev:/dev -v ./tests:/tests:ro,z -v ./disk:/disk:ro,z {{ image }} /tests/cryptroot-loop.sh
 
 # Flash a signed release (latest, a tag, or a local .raw.xz) to an SD card/USB disk with
 # first-boot settings from config (template: examples/flash.yaml)
@@ -159,6 +159,13 @@ unlock-card device identity="":
       exec {{ quote(justfile_directory()) }}/disk/unlock-card --close
     fi
     exec {{ quote(justfile_directory()) }}/disk/unlock-card {{ quote(device) }} {{ quote(identity) }}
+
+# Let an encrypted card move to another Pi (or a clone): its next boot binds it to that Pi and card
+rebind-card device identity="":
+    #!/usr/bin/bash
+    set -euo pipefail
+    cd {{ quote(invocation_directory()) }}
+    exec {{ quote(justfile_directory()) }}/disk/unlock-card --rebind {{ quote(device) }} {{ quote(identity) }}
 
 # Build a flashable GPT .raw from a pushed image ref, optionally pinned to a verified digest (root: loop devices)
 build-raw ref out="juniper.raw" digest="":

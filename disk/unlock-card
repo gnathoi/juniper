@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Opens an encrypted Juniper card on this Linux laptop, read-only, with your SSH private key.
-#   unlock-card DEVICE [IDENTITY]   e.g. unlock-card /dev/sdb ~/.ssh/id_ed25519
-#   unlock-card --close             unmount and close it again
+#   unlock-card DEVICE [IDENTITY]            e.g. unlock-card /dev/sdb ~/.ssh/id_ed25519
+#   unlock-card --close                      unmount and close it again
+#   unlock-card --rebind DEVICE [IDENTITY]   let the card move to another Pi (or a cloned card):
+#                                            adds a one-time key that its next boot, in any Pi,
+#                                            replaces with that Pi's key (add-rebind-slot, #76)
 # The recovery passphrase is age-encrypted to your SSH keys (flash.yaml). It is read from CIDATA
 # (juniper-recovery.age), else from LUKS token 1 on the root partition, decrypted by age and
 # piped into cryptsetup. It never touches a file or a command line.
@@ -35,7 +38,12 @@ if [[ ${1:-} == --close ]]; then
   exit 0
 fi
 
-dev=${1:?usage: unlock-card DEVICE [IDENTITY] | --close}
+rebind=0
+if [[ ${1:-} == --rebind ]]; then
+  rebind=1
+  shift
+fi
+dev=${1:?usage: unlock-card DEVICE [IDENTITY] | --close | --rebind DEVICE [IDENTITY]}
 ident=${2:-}
 bash "$here/check-target" "$dev"
 
@@ -49,6 +57,7 @@ while read -r path label; do
   esac
 done < <(lsblk -nrpo PATH,LABEL "$dev")
 [[ -n $part ]] || die "no recovery data on this card (not encrypted, or both copies lost)"
+((! rebind)) || [[ -n $cidata ]] || die "no CIDATA partition on this card; it can't be re-bound"
 
 if [[ -z $ident ]]; then
   for f in ~/.ssh/id_ed25519 ~/.ssh/id_rsa; do
@@ -60,7 +69,11 @@ fi
 # The ciphertext: the CIDATA copy first, else the copy in LUKS token 1 (I10).
 ct=
 if [[ -n $cidata ]]; then
-  out=$(udisksctl mount -b "$cidata" -o ro 2>&1 || true)
+  if ((rebind)); then
+    out=$(udisksctl mount -b "$cidata" 2>&1 || true)
+  else
+    out=$(udisksctl mount -b "$cidata" -o ro 2>&1 || true)
+  fi
   # "Mounted /dev/sdb1 at /run/media/u/CIDATA", or "...is already mounted at `/path'."
   m=
   if [[ $out == *" at "* ]]; then
@@ -70,9 +83,11 @@ if [[ -n $cidata ]]; then
     m=${m%\'}
   fi
   if [[ -n $m && -r $m/juniper-recovery.age ]]; then
-    ct=$(<"$m/juniper-recovery.age")
+    ct=$(cat "$m/juniper-recovery.age" 2>/dev/null) || ct=
   fi
-  [[ $out != Mounted* ]] || udisksctl unmount -b "$cidata" >/dev/null 2>&1 || true
+  if ((! rebind)) && [[ $out == Mounted* ]]; then
+    udisksctl unmount -b "$cidata" >/dev/null 2>&1 || true
+  fi
 fi
 if [[ -z $ct ]]; then
   tok=$("${as_root[@]}" cryptsetup token export --token-id 1 "$part" 2>/dev/null || true)
@@ -80,12 +95,24 @@ if [[ -z $ct ]]; then
 fi
 [[ -n $ct ]] || die "no recovery data on this card (not encrypted, or both copies lost)"
 
+# age may live only in the user's PATH (Homebrew), so resolve it here, not as root.
+age=$(command -v age) || die "age not found; install it (it decrypts the recovery key)"
+
+if ((rebind)); then
+  [[ -n $m && -d $m ]] || die "could not mount the card's CIDATA partition read-write"
+  rc=0
+  "${as_root[@]}" bash "$here/add-rebind-slot" "$part" "$m" "$age" "$ident" "$ct" || rc=$?
+  [[ $out != Mounted* ]] || udisksctl unmount -b "$cidata" >/dev/null 2>&1 || true
+  ((rc == 0)) || exit "$rc"
+  echo "Re-bind key added. Put the card in the Pi it should belong to and boot it: the first boot"
+  echo "binds it to that Pi and card and removes the key. Until then, anyone holding the card can"
+  echo "unlock it with CIDATA/juniper-rebind.key, so keep it with you."
+  exit 0
+fi
+
 if [[ -e /dev/mapper/$name ]]; then
   die "$name is already open; run: just unlock-card --close"
 fi
-
-# age may live only in the user's PATH (Homebrew), so resolve it here, not as root.
-age=$(command -v age) || die "age not found; install it (it decrypts the recovery key)"
 
 # The only place the passphrase exists is the pipe inside one root shell. run0 does not forward
 # our stdin, so the (non-secret) ciphertext goes in as an argument, and age and cryptsetup are

@@ -13,6 +13,7 @@ Unreleased as its release notes, then moves those entries under the release's ta
 ### Added
 
 - On an encrypted root, `ujust switch IMAGE` refuses an image without the new `org.juniper.cryptroot=v1` label (set on every Juniper image and inherited by images built `FROM` one), which couldn't unlock the root; `--force` skips the check
+- `just rebind-card DEVICE [IDENTITY]` moves an encrypted card to another Pi, or a cloned card to its new card, without reflashing: it adds a one-time key with your recovery key, and the card's next confirmed boot rebinds keyslot 0 to that Pi and card and removes it (power-cut safe)
 
 ### Fixed
 
