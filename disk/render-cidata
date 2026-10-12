@@ -5,6 +5,8 @@ writes it; the image's juniper-wifi-import applies it). Both are 0600: they hold
   render-cidata CONFIG OUTDIR
 """
 
+import base64
+import binascii
 import os
 import re
 import sys
@@ -19,6 +21,58 @@ KEY_PREFIXES = ("ssh-", "ecdsa-", "sk-ssh-", "sk-ecdsa-")
 
 def fail(msg):
     sys.exit(f"render-cidata: {msg}")
+
+
+BECH32 = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
+
+def bech32_ok(hrp, s):
+    """True if s is a valid lowercase bech32 string (BIP 173) with this human-readable part
+    and a whole number of bytes (age recipients: hrp "age", 32 bytes)."""
+    if not s.startswith(hrp + "1") or any(c not in BECH32 for c in s[len(hrp) + 1:]):
+        return False
+    data = [BECH32.index(c) for c in s[len(hrp) + 1:]]
+    chk = 1
+    for v in [ord(c) >> 5 for c in hrp] + [0] + [ord(c) & 31 for c in hrp] + data:
+        top, chk = chk >> 25, (chk & 0x1ffffff) << 5 ^ v
+        for i, g in enumerate((0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3)):
+            chk ^= g if top >> i & 1 else 0
+    pad = len(data[:-6]) * 5 % 8
+    return chk == 1 and len(data) > 6 and pad < 5 and data[-7] & ((1 << pad) - 1) == 0
+
+
+def ssh_key(k):
+    """Check one OpenSSH public key line: the base64 data decodes and names the same key type,
+    ed25519 keys are 32 bytes and RSA keys at least 2048 bits (age, which seals the recovery
+    key to them, refuses smaller ones, and so does the image's crypto policy for logins)."""
+    k = str(k)
+    if "\n" in k or "\r" in k:
+        fail("ssh_keys: one key per entry; this one spans several lines")
+    parts = k.split(None, 2)
+    if len(parts) < 2 or not parts[0].startswith(KEY_PREFIXES):
+        fail(f"ssh_keys: not an OpenSSH public key: {k[:20]}...")
+    kind, data = parts[:2]
+    try:
+        blob = base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError):
+        blob = b""
+    fields = []
+    while len(blob) >= 4:
+        n = int.from_bytes(blob[:4], "big")
+        if n > len(blob) - 4:
+            break
+        fields.append(blob[4:4 + n])
+        blob = blob[4 + n:]
+    if blob or not fields or fields[0] != kind.encode():
+        fail(f"ssh_keys: the key data of {kind} {data[:12]}... is damaged or isn't a {kind} key "
+             "(copy the whole line from the .pub file)")
+    if kind == "ssh-ed25519" and (len(fields) != 2 or len(fields[1]) != 32):
+        fail(f"ssh_keys: {kind} {data[:12]}... has the wrong length")
+    if kind == "ssh-rsa":
+        bits = int.from_bytes(fields[2], "big").bit_length() if len(fields) == 3 else 0
+        if bits < 2048:
+            fail(f"ssh_keys: {kind} {data[:12]}... is {bits} bits; use 2048 or more (or ed25519)")
+    return k
 
 
 def load(path):
@@ -51,9 +105,7 @@ def load(path):
     keys = cfg.get("ssh_keys")
     if not keys or not isinstance(keys, list):
         fail("ssh_keys: at least one public key is required (password login is off)")
-    for k in keys:
-        if not str(k).startswith(KEY_PREFIXES):
-            fail(f"ssh_keys: not an OpenSSH public key: {str(k)[:20]}...")
+    keys = [ssh_key(k) for k in keys]
 
     encrypt = cfg.get("encrypt", False)  # opt-in; Task 14 flips the default
     if not isinstance(encrypt, bool):
@@ -65,9 +117,12 @@ def load(path):
             fail("recovery_key: that's an age private key; use its public key (age1...)")
         if not re.fullmatch(r"age1[02-9ac-hj-np-z]{58}", recovery_key):
             fail("recovery_key: expected an age public key (age1 followed by 58 characters)")
+        if not bech32_ok("age", recovery_key):
+            fail("recovery_key: checksum doesn't match; a character is mistyped (copy it again "
+                 "from age-keygen's output)")
     # age can't encrypt to ecdsa or FIDO (sk-) SSH keys, only ssh-ed25519 and ssh-rsa.
     recipients = [recovery_key] if recovery_key else [
-        str(k) for k in keys if str(k).startswith(("ssh-ed25519 ", "ssh-rsa "))]
+        k for k in keys if k.startswith(("ssh-ed25519 ", "ssh-rsa "))]
     if encrypt and not recipients:
         fail("encrypt: no recovery recipient: age can't encrypt to ecdsa or FIDO (sk-) SSH keys; "
              "add an ssh-ed25519 or ssh-rsa key to ssh_keys, or set recovery_key: age1...")
@@ -90,7 +145,7 @@ def load(path):
             fail(f"wifi: unknown keys: {', '.join(sorted(unknown))}")
         if wifi.get("country") is not None:
             wifi = dict(wifi, country=country_code(wifi["country"]))
-    return (host, user, [str(k) for k in keys], cfg.get("timezone"), ts, wifi, pw_hash,
+    return (host, user, keys, cfg.get("timezone"), ts, wifi, pw_hash,
             encrypt, recipients)
 
 

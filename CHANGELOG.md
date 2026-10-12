@@ -12,6 +12,7 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ### Fixed
 
+- `just flash` checks keys on the laptop before writing the card: `recovery_key` must pass the age (bech32) checksum, and each `ssh_keys` entry must be one line whose key data decodes and matches its type, with RSA keys at least 2048 bits. Before, a mistyped key passed and the card stayed plain although flash said "Encrypt: yes" (or the key just didn't work for login)
 - The boot health check no longer fails after one try when chrony steps the clock forward early in boot (Pi has no RTC; seen after a long power-off). Its retry deadline now runs on the monotonic boot clock instead of bash `$SECONDS`, which follows the wall clock. Under tryboot this could have rolled back a healthy update and given it a strike
 
 ## build-20261011 (2026-10-11)
