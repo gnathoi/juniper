@@ -20,9 +20,11 @@
 #     about key material): exit 250 (KEY_NOT_SET) is the only answer that allows genkey.
 #     get-key-status is read only for the config-lock bit below, never for presence.
 #   - Every call has a deadline. One that overruns is left behind (it can't be killed), the
-#     wedged marker is written, and no further mailbox call is made this boot. Recovery is a
-#     reboot: the hardware watchdog or a forced one (a plain reboot may block on the wedged
-#     mailbox; `echo b >/proc/sysrq-trigger` doesn't). Callers fail open.
+#     wedged marker is written, and no further mailbox call is made this boot. Only a reboot
+#     recovers. The runtime watchdog doesn't: PID 1 keeps petting it while the caller sleeps.
+#     A reboot may block on the stuck process; RebootWatchdogSec (50-juniper-watchdog.conf)
+#     then resets the board, and `echo b >/proc/sysrq-trigger` doesn't block. Callers fail
+#     open; on an encrypted card the unlock fails and the console says to power-cycle.
 #   - Firmware < 2026-06-17 with status bit 8 (the global lock, set by an old image's config.txt
 #     lock_device_private_key=1) also blocks genkey: unavailable:key-locked-by-config, no genkey.
 #   - Unknown answers mean "don't know", never "ok", "not-set" or "locked".
