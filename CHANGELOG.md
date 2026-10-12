@@ -15,6 +15,7 @@ Unreleased as its release notes, then moves those entries under the release's ta
 - `just flash` checks keys on the laptop before writing the card: `recovery_key` must pass the age (bech32) checksum, and each `ssh_keys` entry must be one line whose key data decodes and matches its type, with RSA keys at least 2048 bits. Before, a mistyped key passed and the card stayed plain although flash said "Encrypt: yes" (or the key just didn't work for login)
 - An encrypted card that won't unlock because the firmware can't give the Pi's key (bootloader EEPROM rolled back below 2026-01-21, a wedged mailbox) now says so on the console, with what to do, instead of claiming the card is bound to another Pi
 - The boot health check no longer fails after one try when chrony steps the clock forward early in boot (Pi has no RTC; seen after a long power-off). Its retry deadline now runs on the monotonic boot clock instead of bash `$SECONDS`, which follows the wall clock. Under tryboot this could have rolled back a healthy update and given it a strike
+- Container policy: a `*.example.com` scope in the base policy now also protects `a.example.com:5000/...` (containers/image ignores the port for wildcards). The boot log says "its drop-in is gone" after `ujust untrust-images` instead of calling it a hand edit, and logs a hand edit of a trusted namespace's entry in policy.json (the generator keeps a copy of what it last installed in `/var/lib/juniper`)
 
 ## build-20261011 (2026-10-11)
 

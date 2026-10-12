@@ -2026,6 +2026,45 @@ test_containers_policy_drops_hand_edits() {
   check "hand edit: gone" test "$(ns_entry ghcr.io/hand)" = null
 }
 
+# #77: a removed drop-in isn't a hand edit; a hand edit of a drop-in's scope is.
+test_containers_policy_removed_dropin_wording() {
+  trust_env
+  dropin a.json ghcr.io/you
+  gen 2>/dev/null
+  rm "$JUNIPER_TRUST_DIR/a.json"
+  check "removed drop-in: says its drop-in is gone" stderr_has 'removed docker "ghcr.io/you" from policy.json: its drop-in is gone' gen
+  dropin a.json ghcr.io/you
+  gen 2>/dev/null
+  rm "$JUNIPER_TRUST_DIR/a.json"
+  check "removed drop-in: not called a hand edit" not_stdout_has "dropping" gen_stderr
+  check "removed drop-in: gone" test "$(ns_entry ghcr.io/you)" = null
+}
+# shellcheck disable=SC2069 # stderr only, stdout dropped
+gen_stderr() { gen 2>&1 >/dev/null; }
+
+test_containers_policy_logs_hand_edited_dropin_scope() {
+  trust_env
+  dropin a.json ghcr.io/you
+  gen 2>/dev/null
+  jq '.transports.docker["ghcr.io/you"] = [{"type": "insecureAcceptAnything"}]' "$JUNIPER_POLICY" >"$T/p" && cp "$T/p" "$JUNIPER_POLICY"
+  check "drop-in scope hand edit: logged" stderr_has 'docker "ghcr.io/you" entry was edited by hand; replaced by its drop-in' gen
+  check "drop-in scope hand edit: drop-in back in force" test "$(pol '.transports.docker["ghcr.io/you"][0].type')" = '"sigstoreSigned"'
+  # A changed drop-in (ujust trust-images with a new key) is not a hand edit.
+  dropin a.json ghcr.io/you '[{"type": "sigstoreSigned", "keyPath": "/etc/pki/containers/y.pub"}]'
+  check "changed drop-in: not called a hand edit" not_stdout_has "edited by hand" gen_stderr
+  check "changed drop-in: in force" test "$(pol '.transports.docker["ghcr.io/you"][0].keyPath')" = '"/etc/pki/containers/y.pub"'
+}
+
+# containers/image strips the port before matching *.domain scopes (DockerReferenceNamespaces).
+test_containers_policy_wildcard_covers_ports() {
+  trust_env
+  jq '.transports.docker["*.example.com"] = [{"type": "reject"}]' "$T/policy.orig" >"$JUNIPER_POLICY_BASE"
+  check "wildcard: host with a port is protected" stdout_has 'under \*.example.com' gen --protected a.example.com:5000/x
+  check "wildcard: deeper subdomain is protected" stdout_has 'under \*.example.com' gen --protected a.b.example.com/x
+  check "wildcard: the bare domain is not" fails gen --protected example.com/x
+  check "wildcard: lookalike domain is not" fails gen --protected badexample.com:5000/x
+}
+
 test_trust_images_adds_namespace() {
   trust_env
   trust ghcr.io/you "$T/cosign.pub" >/dev/null 2>&1
