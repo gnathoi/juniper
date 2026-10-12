@@ -115,7 +115,8 @@ d = sys.argv[2]
 ud = yaml.safe_load(open(os.path.join(d, "user-data")))
 u = ud["users"][0]
 print(f"Hostname:  {ud['hostname']}")
-print(f"User:      {u['name']} ({len(u['ssh_authorized_keys'])} SSH keys)")
+nk = len(u["ssh_authorized_keys"])
+print(f"User:      {u['name']} ({nk} SSH key{'' if nk == 1 else 's'})")
 print(f"Timezone:  {ud.get('timezone', 'UTC')}")
 print(f"Tailscale: {'auth key set' if 'write_files' in ud else 'none (log in later with ujust tailscale-up)'}")
 nc = os.path.join(d, "network-config")
@@ -135,7 +136,7 @@ PY
         n=$((n + 1))
         fps+="${fps:+, }$(printf '%s\n' "$l" | ssh-keygen -lf - | awk '{print $2}')"
       done <<<"$rec"
-      echo "Encrypt:   yes (recovery: $n SSH keys: $fps)"
+      echo "Encrypt:   yes (recovery: $n SSH key$( ((n == 1)) || echo s): $fps)"
     fi
   elif python3 -c 'import sys, yaml; sys.exit(0 if (yaml.safe_load(open(sys.argv[1])) or {}).get("encrypt") is False else 1)' "$1"; then
     echo "Encrypt:   no (encrypt: false)"
@@ -146,9 +147,12 @@ PY
 
 # print_warning CIDATA-DIR: shown just before the erase question when encryption is on.
 print_warning() {
+  local rec need="your SSH private key"
   if [[ $(<"$1/juniper-encrypt") == on ]]; then
+    rec=$(grep -v '^[[:space:]]*\(#\|$\)' "$1/juniper-recovery.txt")
+    [[ $rec == age1* ]] && need="the age identity for age1…${rec: -6}"
     echo
-    echo "Encryption: on first boot this Pi writes a permanent device key into its one-time-programmable memory (if it has none) and encrypts this card to this Pi and this card; first boot takes a few minutes longer (don't cut power; it resumes if you do); recovery needs your SSH private key. Set encrypt: false to skip."
+    echo "Encryption: on first boot this Pi writes a permanent device key into its one-time-programmable memory (if it has none) and encrypts this card to this Pi and this card; first boot takes a few minutes longer (don't cut power; it resumes if you do). It needs a Pi 5 with a bootloader EEPROM from 2026-01-21 or later; on a Pi 4 or an older EEPROM the card stays plain (ujust pi-status says why). Recovery needs $need. Set encrypt: false to skip."
     echo
   fi
 }

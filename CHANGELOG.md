@@ -16,6 +16,10 @@ Unreleased as its release notes, then moves those entries under the release's ta
 - An encrypted card that won't unlock because the firmware can't give the Pi's key (bootloader EEPROM rolled back below 2026-01-21, a wedged mailbox) now says so on the console, with what to do, instead of claiming the card is bound to another Pi
 - The boot health check no longer fails after one try when chrony steps the clock forward early in boot (Pi has no RTC; seen after a long power-off). Its retry deadline now runs on the monotonic boot clock instead of bash `$SECONDS`, which follows the wall clock. Under tryboot this could have rolled back a healthy update and given it a strike
 
+### Changed
+
+- `just flash`'s encryption warning says the card stays plain on a Pi 4 or a bootloader EEPROM older than 2026-01-21, and names the age identity instead of "your SSH private key" when `recovery_key` is set; "1 SSH key" is singular
+
 ## build-20261011 (2026-10-11)
 
 ### Added

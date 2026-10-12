@@ -1539,14 +1539,18 @@ test_flash_summary_and_warning() {
   "$ROOT/disk/render-cidata" "$T/e.yaml" "$T/o"
   stub ssh-keygen 'cat >/dev/null; echo "256 SHA256:fakeprint a@b (ED25519)"'
   out=$("$ROOT/disk/flash.sh" --summary-only "$T/e.yaml" "$T/o")
-  check "summary: encrypt yes with fingerprint" grep -qF "Encrypt:   yes (recovery: 1 SSH keys: SHA256:fakeprint)" <<<"$out"
+  check "summary: encrypt yes with fingerprint" grep -qF "Encrypt:   yes (recovery: 1 SSH key: SHA256:fakeprint)" <<<"$out"
+  check "summary: user line, three SSH keys" grep -qF "User:      me (3 SSH keys)" <<<"$out"
+  check "summary: needs a Pi 5 with a current EEPROM" grep -qF "Pi 5 with a bootloader EEPROM from 2026-01-21 or later; on a Pi 4 or an older EEPROM the card stays plain" <<<"$out"
   check "summary: warning" grep -qF "Encryption: on first boot this Pi writes a permanent device key" <<<"$out"
-  check "summary: warning ends" grep -qF "recovery needs your SSH private key. Set encrypt: false to skip." <<<"$out"
+  check "summary: warning ends" grep -qF "Recovery needs your SSH private key. Set encrypt: false to skip." <<<"$out"
   enc_config "$T/e2.yaml" "encrypt: true
 recovery_key: ${AGE_PUB}"
   "$ROOT/disk/render-cidata" "$T/e2.yaml" "$T/o2"
   out=$("$ROOT/disk/flash.sh" --summary-only "$T/e2.yaml" "$T/o2")
   check "summary: age key tail" grep -qF "Encrypt:   yes (recovery: age key age1…${AGE_PUB: -6})" <<<"$out"
+  check "summary: age recovery wording" grep -qF "Recovery needs the age identity for age1…${AGE_PUB: -6}. Set encrypt: false to skip." <<<"$out"
+  check "summary: age recovery, no SSH-key wording" not_stdout_has "your SSH private key" echo "$out"
   enc_config "$T/e3.yaml" "encrypt: false"
   "$ROOT/disk/render-cidata" "$T/e3.yaml" "$T/o3"
   out=$("$ROOT/disk/flash.sh" --summary-only "$T/e3.yaml" "$T/o3")
@@ -1556,6 +1560,11 @@ recovery_key: ${AGE_PUB}"
   "$ROOT/disk/render-cidata" "$T/e4.yaml" "$T/o4"
   out=$("$ROOT/disk/flash.sh" --summary-only "$T/e4.yaml" "$T/o4")
   check "summary: not requested" grep -qF "Encrypt:   no (not requested)" <<<"$out"
+  printf 'user: me\nssh_keys: [%s me]\n' "$ED_KEY" >"$T/e5.yaml"
+  chmod 600 "$T/e5.yaml"
+  "$ROOT/disk/render-cidata" "$T/e5.yaml" "$T/o5"
+  out=$("$ROOT/disk/flash.sh" --summary-only "$T/e5.yaml" "$T/o5")
+  check "summary: user line, one SSH key" grep -qF "User:      me (1 SSH key)" <<<"$out"
 }
 
 # lsblk_json JSON: stub lsblk to print JSON (the -J output check-target asks for)
