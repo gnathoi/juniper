@@ -1,4 +1,4 @@
-# Juniper — project status (2026-10-11, evening)
+# Juniper — project status (2026-10-12, evening)
 
 Start here when picking the project up on another machine.
 
@@ -8,15 +8,29 @@ Start here when picking the project up on another machine.
 |---|---|---|---|---|
 | A | Images (`juniper-minimal`, `juniper`), CI, releases | `specs/2026-10-09-juniper-image-design.md` | `plans/2026-10-09-juniper-image-core.md` | Done and hardened; second release `build-20261011` passed hardware acceptance (#79). Task 11 (Pi 5 hardware acceptance) passed, including 7b; one unexplained first-boot hang to reproduce (see Next); results in `docs/acceptance.md` |
 | B | Tailscale field in Raspberry Pi Imager (own-use fork) | `specs/2026-10-09-imager-tailscale-design.md` | `plans/2026-10-09-imager-tailscale.md` | **Parked** (2026-10-10): `just flash` covers it. Read the plan's "Parked" note before resuming |
-| C | Encryption at rest (OTP-bound LUKS2 root + age recovery keyslot), issue #50 Phase 0 + Phase 2 | `specs/2026-10-11-encryption-design.md` | `plans/2026-10-11-encryption.md` | **Shipped opt-in (`encrypt: true`, #78) and hardware-verified on the owner's Pi 5** (EEPROM 2026-05-11; `docs/acceptance.md`): encrypts on first boot (~3.5 min), unlocks unattended, tryboot both ways, laptop recovery works. Fixes from the run: #86 (config.txt key lock blocked genkey), #87 (`unlock-card` stdin). Next: #83 (M5: single-command `unlock-card` re-test, clone check), then flip the default (Task 14). Re-bind deferred to #76 |
+| C | Encryption at rest (OTP-bound LUKS2 root + age recovery keyslot), issue #50 Phase 0 + Phase 2 | `specs/2026-10-11-encryption-design.md` | `plans/2026-10-11-encryption.md` | **Shipped opt-in (`encrypt: true`, #78) and hardware-verified on the owner's Pi 5** (EEPROM 2026-05-11; `docs/acceptance.md`): encrypts on first boot (~3.5 min), unlocks unattended, tryboot both ways, laptop recovery works. Fixes from the run: #86 (config.txt key lock blocked genkey), #87 (`unlock-card` stdin). 2026-10-12: #83's M1–M5 and Task 11 done (#91–#96), **re-bind shipped** (`just rebind-card`, #99, loop-tested). Before flipping the default (Task 14), the owner's hardware checks: single-command `unlock-card` and `rebind-card` on a laptop, a re-bind into a second Pi (or a `dd` clone), and the clone check |
 | D | **Experimental `juniper-desktop` (niri)** | `specs/2026-10-10-juniper-desktop-design.md` | `plans/2026-10-10-juniper-desktop.md` | **Published as experimental** (#49 merged 2026-10-11: signed image, disk image, release assets; not in `os-list.json`). Boots to greetd's text login; niri after authentication. Hardware desktop test pending a micro-HDMI cable (#58); then the Tested-hardware cell. Research below |
 
 ## Next, in order
 
+0. **Owner hardware checks for encryption** (gate for Task 14, encrypt by default): on the laptop, `just unlock-card /dev/sdX` as one command (after #87), then `just rebind-card /dev/sdX` and boot the card in another Pi, or boot a `dd` clone (`juniper-rebind.key` gone afterwards; `ujust pi-status` says encrypted). Also: a `dd` clone without re-bind must *not* unlock in the same Pi.
 1. **Investigate the one unexplained first-boot hang** (`docs/acceptance.md`, 7b′): flash `juniper-minimal` again, add `console=ttyAMA10,115200` to the entry's `cmdline.txt` (the FTDI cable is on the Pi 5 debug UART; with two `console=` the kernel only enabled ttyAMA0), boot **with Ethernet**, capture with `stty -F /dev/ttyUSB0 115200 raw -echo; cat /dev/ttyUSB0`. If it reproduces, the log shows the stuck unit.
 2. Delete the repo-level `SIGNING_SECRET` and `RELEASE_DEPLOY_KEY` (the `release` environment has its own since 2026-10-10 and the first release under it succeeded): `gh secret delete SIGNING_SECRET --repo gnathoi/juniper` and the same for `RELEASE_DEPLOY_KEY`.
-3. Housekeeping: `gh auth refresh -h github.com -r write:packages,delete:packages` if not done; remove the `claude-probe` machine from the tailnet; `podman rm -f ts-probe`.
+3. Housekeeping: `gh auth refresh -h github.com -r write:packages,delete:packages` if not done; the `claude-probe` container (ephemeral key, in-memory state) drops off the tailnet when removed: `podman rm -f claude-probe`.
 4. Sub-project D (below). The Pi 5 is on `juniper` (switched from `juniper-minimal`, hostname `juniper-minimal`).
+
+## What happened on 2026-10-12
+
+Merged: #90–#100. Closed: #76, #77, #89.
+
+- **#89 health check failed after boot**: bash `$SECONDS` follows the wall clock, and chrony stepped the RTC-less Pi's clock by 11.3 M s mid-check, so the deadline expired after one try. Now on `/proc/uptime` (#90). Under tryboot this would have rolled back a healthy update.
+- **bash 5.2 quirk** (the image's and CI's bash): a failed `x=$(<file)` exits the whole script under `set -e`, `|| return 1` notwithstanding. Made the loop-device test flaky on main and could cut `cryptroot prepare` short; `$(<` is now banned in shipped scripts by a unit test (#97).
+- Encryption follow-ups (#83): host-side key validation in `just flash` (bech32 checksum, SSH key data, RSA ≥ 2048; #91), firmware-aware unlock hint (#92), flash warning wording (#93), no disk changed while another card of the release is attached (#94; the boot disk can't be told apart), `ujust switch` refuses images without `org.juniper.cryptroot=v1` on an encrypted root (#95), fwkey wedge comment (#96).
+- **Re-bind** (#76, #99): `just rebind-card` adds a one-time slot-2 key; the next confirmed boot in any Pi swaps slot 0 to that Pi's key and removes it; power-cut safe; waits for a usable firmware key on a new board. Loop test: 7 scenarios, real cryptsetup.
+- Container policy (#98, closes #77): wildcard scopes cover ports; removed drop-ins and hand edits logged correctly; boot ordering verified on the Pi.
+- Loop harness (#100): `no_leak` fails on unreadable paths, token set checked exactly, plaintext canary must be gone from the raw disk.
+- #55's done items ticked (#72 had shipped them); a real data snapshot/restore stays open.
+- Owner decisions open: bounded remote log shipping for #54 (package and protocol), whether a first-boot firmware wedge should be retried rather than final (#83 M4), `ujust recovery-reseal` (Task 12, optional).
 
 ## What happened on 2026-10-11
 
@@ -37,7 +51,7 @@ Hardware: `build-20261011` (#79) and opt-in encryption (#84) passed on the Pi 5;
 ## Open roadmap
 
 - #54, #55 (remainders); #56 (delivery path); #57 (canary, deferred by the owner).
-- #73 secure boot (deferred); #76 (encryption re-bind); #77; #83 (encryption M5); #85.
+- #73 secure boot (deferred); #83 (remaining: owner hardware checks, `root_wait`, Task 12 optional, then Task 14 default-on); #85 (YubiKey recovery, low priority).
 - #58 desktop hardware test (micro-HDMI cable).
 
 ## What happened on 2026-10-10
