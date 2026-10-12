@@ -2,9 +2,45 @@
 # ujust switch IMAGE: switch to another image and reboot into it now. juniper-desktop starts at
 # a login prompt for the first human user (uid 1000), so make sure that account has a password
 # before switching to it, whoever runs this (root included).
+#
+# On an encrypted root, the image must carry org.juniper.cryptroot=v1 (Juniper's initramfs
+# unlock, inherited by images built FROM Juniper): without it the next boot can't open the
+# root. tryboot would fall back to this image, but only after a failed boot. --force skips it.
 set -euo pipefail
-image=${1:?usage: ujust switch IMAGE}
+usage() {
+  echo "usage: ujust switch IMAGE [--force]" >&2
+  exit 2
+}
+image='' force=0
+for a; do
+  case $a in
+    --force) force=1 ;;
+    -*) usage ;;
+    *)
+      [[ -z $image ]] || usage
+      image=$a
+      ;;
+  esac
+done
+[[ -n $image ]] || usage
 apply=${JUNIPER_APPLY_UPDATE:-/usr/libexec/juniper/apply-update}
+
+src=$(findmnt -no SOURCE /sysroot 2>/dev/null) || src=
+src=${src%%[[]*}
+if ((! force)) && [[ -n $src ]] && lsblk -no TYPE -s "$src" 2>/dev/null | grep -qx crypt; then
+  auth=()
+  for f in /etc/ostree/auth.json /run/ostree/auth.json; do
+    if sudo test -r "$f"; then auth=(--authfile "$f") && break; fi
+  done
+  if ! inspect=$(sudo skopeo inspect --no-tags "${auth[@]}" "docker://$image"); then
+    echo "Could not inspect $image to check that it can unlock this encrypted root; not switching. Use --force to switch anyway." >&2
+    exit 1
+  fi
+  if [[ $(jq -r '.Labels["org.juniper.cryptroot"] // empty' <<<"$inspect") != v1 ]]; then
+    echo "$image can't unlock this encrypted root (no org.juniper.cryptroot label; build it FROM a Juniper image); tryboot would fall back to this one after a failed boot. Use --force to try anyway." >&2
+    exit 1
+  fi
+fi
 
 if [[ $image == *juniper-desktop* ]]; then
   user=$(getent passwd 1000 | cut -d: -f1) || user=

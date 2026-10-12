@@ -107,6 +107,16 @@ jobs:
           echo "org.opencontainers.image.version=$got (want $VERSION)"
           [[ $got == "$VERSION" ]]
 
+      # `ujust switch` on an encrypted Pi refuses images without it.
+      - name: Check cryptroot label
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.image_ref }}
+        run: |
+          got=$(sudo podman image inspect "$IMAGE_REF:latest" \
+            --format '{{index .Labels "org.juniper.cryptroot"}}')
+          echo "org.juniper.cryptroot=$got (want v1)"
+          [[ $got == v1 ]]
+
       - name: Image size
         env:
           IMAGE_REF: ${{ steps.meta.outputs.image_ref }}

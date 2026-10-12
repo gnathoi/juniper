@@ -1833,6 +1833,15 @@ switch_env() {
   stub apply-update ''
   # shellcheck disable=SC2016 # expands inside the stub
   stub getent '[[ "$1 $2" == "passwd 1000" && -z ${NO_UID_1000:-} ]] && echo "nat:x:1000:1000::/var/home/nat:/bin/bash" || exit 2'
+  # A plain root unless a test says otherwise; skopeo answers with $T/labels.json.
+  stub findmnt 'echo /dev/mmcblk0p3'
+  stub lsblk 'printf "part\ndisk\n"'
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub skopeo '[[ -e $T/skopeo.fail ]] && { echo "manifest unknown" >&2; exit 1; }; printf "{\"Labels\":%s}\n" "$(cat "$T/labels.json" 2>/dev/null || echo null)"'
+}
+encrypted_root() {
+  stub findmnt 'echo /dev/mapper/juniper-root'
+  stub lsblk 'printf "crypt\npart\ndisk\n"'
 }
 
 test_switch_desktop_without_password_asks_first() {
@@ -1891,6 +1900,45 @@ test_switch_headless_needs_no_password() {
   "$LIBEXEC/switch-image" ghcr.io/gnathoi/juniper-minimal:latest >/dev/null
   check "switch: headless -> no password check" not_called "passwd -S"
   check "switch: headless switched" called "bootc switch ghcr.io/gnathoi/juniper-minimal:latest"
+}
+
+# Task 11 (#83): an image without Juniper's initramfs unlock can't boot an encrypted root.
+test_switch_encrypted_root_needs_cryptroot_label() {
+  switch_env
+  encrypted_root
+  echo '{"org.opencontainers.image.version":"1"}' >"$T/labels.json"
+  check "switch encrypted: unlabelled image refused" fails "$LIBEXEC/switch-image" ghcr.io/you/other:latest
+  check "switch encrypted: says why" stderr_has "can't unlock this encrypted root" "$LIBEXEC/switch-image" ghcr.io/you/other:latest
+  check "switch encrypted: nothing staged" not_called "bootc switch"
+  check "switch encrypted: inspected the image" called "skopeo inspect --no-tags docker://ghcr.io/you/other:latest"
+  echo '{"org.juniper.cryptroot":"v1"}' >"$T/labels.json"
+  "$LIBEXEC/switch-image" ghcr.io/you/sensor-box:latest >/dev/null
+  check "switch encrypted: labelled image switched" called "bootc switch ghcr.io/you/sensor-box:latest"
+}
+
+test_switch_encrypted_root_force_and_failures() {
+  switch_env
+  encrypted_root
+  touch "$T/skopeo.fail"
+  check "switch encrypted: inspect failure refused" fails "$LIBEXEC/switch-image" ghcr.io/you/other:latest
+  check "switch encrypted: inspect failure mentions --force" stderr_has "--force" "$LIBEXEC/switch-image" ghcr.io/you/other:latest
+  check "switch encrypted: inspect failure, nothing staged" not_called "bootc switch"
+  "$LIBEXEC/switch-image" ghcr.io/you/other:latest --force >/dev/null 2>&1
+  check "switch encrypted: --force switches" called "bootc switch ghcr.io/you/other:latest"
+  check "switch: unknown option refused" fails "$LIBEXEC/switch-image" ghcr.io/you/other:latest --frce
+}
+
+test_switch_plain_root_skips_the_label_check() {
+  switch_env
+  "$LIBEXEC/switch-image" ghcr.io/you/other:latest >/dev/null
+  check "switch plain: no inspect" not_called "skopeo"
+  check "switch plain: switched" called "bootc switch ghcr.io/you/other:latest"
+}
+
+test_cryptroot_label_in_containerfile() {
+  check "Containerfile: minimal stage sets org.juniper.cryptroot=v1" \
+    awk '/^FROM .* AS minimal$/ {m = 1; next} /^FROM / {m = 0} m && /^LABEL org.juniper.cryptroot="v1"$/ {f = 1} END {exit !f}' "$ROOT/Containerfile"
+  check "ujust switch passes --force through" grep -q '^switch image \*flags:' "$ROOT/system_files/usr/share/juniper/just/update.just"
 }
 
 # --- trust-images + containers-policy: Juniper's base policy plus per-namespace drop-ins ---

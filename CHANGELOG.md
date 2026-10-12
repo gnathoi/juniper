@@ -10,6 +10,10 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+### Added
+
+- On an encrypted root, `ujust switch IMAGE` refuses an image without the new `org.juniper.cryptroot=v1` label (set on every Juniper image and inherited by images built `FROM` one), which couldn't unlock the root; `--force` skips the check
+
 ### Fixed
 
 - `just flash` checks keys on the laptop before writing the card: `recovery_key` must pass the age (bech32) checksum, and each `ssh_keys` entry must be one line whose key data decodes and matches its type, with RSA keys at least 2048 bits. Before, a mistyped key passed and the card stayed plain although flash said "Encrypt: yes" (or the key just didn't work for login)
