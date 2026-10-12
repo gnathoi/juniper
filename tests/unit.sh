@@ -1269,14 +1269,22 @@ stderr_has() {
 # yq-free YAML lookups for the flash tests: yget FILE PYTHON-EXPR (d is the parsed document)
 yget() { python3 -c 'import sys, yaml; d = yaml.safe_load(open(sys.argv[1])); print(eval(sys.argv[2]))' "$1" "$2"; }
 
+# Real public keys (private halves discarded): render-cidata parses the key data.
+ED_KEY='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBxDBcp9jLiMI+JGo5hPl0GYBnhpvPUsmJ4q5BI3ud3y'
+ED_KEY2='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMUh1qSPQjwa6GRcyDRQAMyC4LnxaXxT43PQc8Wa2jgM'
+RSA_KEY='ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCW3fOy347CclSduhQ0SxZgiclX55pR0SvUy9FAPrgnx8KmiMTTCXicBIhFc54NB/PUIx3mTDPWvtxNn9UFEZQ2gjf9/kCCqmrtc0B+K00SLqEoPxxgOKPAp96Hq47uwjHLVkrDwdwiVSJreGZMQjd9NtY/RHUEyQsZ7vN9AjLPaa/cdHkYqzhEoyC/7TVSoSvxq1BceHIQApyh7yBtLLBth8lpI1WbmBngq4a/rtm+KANmqdV8Oiz5hhunj2P1TLhmC5Wu8YB5H6Ew9hwyh08JqhRK6SjXi8JW6OYqhdnL/XN506vpqdAZbGXjk/D6NxCMAdEZVf0nGpV18//KExil'
+RSA1024_KEY='ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQDCFYp8sRqd4LVjna+xj88qFpOwHxm/54BLsOzfag460qsSoBuElDWpzwbmuHlQ/ghMnMAPYK6F+VeH9HBCgE6WpdMTAQaZ2F3oPD8wimXrYVyDrHnHqXXvowb3nBPzbPs6mWmfTJ5PZi9R5mfZbQWldowsgzKEFo2H2waC67c7Tw=='
+ECDSA_KEY='ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBOBsPKa4oLN4wPUj/MIjxSNriJhIBox04L3dXW4zRN2tRw91g2KPjUvyXiSReSyaLJXiomLlWbeVwLNlU14WQaY='
+SK_KEY='sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29tAAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fAAAABHNzaDo='
+
 flash_config() {
-  cat >"$T/flash.yaml" <<'EOF'
+  cat >"$T/flash.yaml" <<EOF
 hostname: pi-one
 user: nat
 timezone: Europe/London
 ssh_keys:
-  - ssh-ed25519 AAAAC3one laptop
-  - ssh-ed25519 AAAAC3two yubikey
+  - $ED_KEY laptop
+  - $ED_KEY2 yubikey
 tailscale_authkey: tskey-auth-abc123
 wifi:
   ssid: 'My "Home" Network: 5G'
@@ -1317,7 +1325,7 @@ test_render_cidata_network_config() {
 
 # wifi.country ends up in a root-owned modprobe config on the device: two letters only.
 test_render_cidata_wifi_country() {
-  local base='user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\nwifi:\n  ssid: home\n  country: %s\n'
+  local base='user: me\nssh_keys: ['"$ED_KEY"' me]\nwifi:\n  ssid: home\n  country: %s\n'
   # shellcheck disable=SC2059 # base is the format
   printf "$base" gb >"$T/lower.yaml"
   "$ROOT/disk/render-cidata" "$T/lower.yaml" "$T/o1" 2>/dev/null
@@ -1339,7 +1347,7 @@ test_render_cidata_wifi_country() {
 }
 
 test_render_cidata_minimal_config() {
-  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\n' >"$T/flash.yaml"
+  printf 'user: me\nssh_keys: [%s me]\n' "$ED_KEY" >"$T/flash.yaml"
   "$ROOT/disk/render-cidata" "$T/flash.yaml" "$T/out" 2>/dev/null
   check "cidata minimal: no network-config" test ! -e "$T/out/network-config"
   check "cidata minimal: hostname defaults to juniper" test "$(yget "$T/out/user-data" 'd["hostname"]')" = juniper
@@ -1347,7 +1355,7 @@ test_render_cidata_minimal_config() {
 }
 
 test_render_cidata_authkey_file() {
-  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\ntailscale_authkey_file: key.txt\n' >"$T/flash.yaml"
+  printf 'user: me\nssh_keys: [%s me]\ntailscale_authkey_file: key.txt\n' "$ED_KEY" >"$T/flash.yaml"
   printf 'tskey-auth-fromfile\n' >"$T/key.txt"
   "$ROOT/disk/render-cidata" "$T/flash.yaml" "$T/out"
   check "cidata: key from file (relative to config, stripped)" test \
@@ -1355,7 +1363,7 @@ test_render_cidata_authkey_file() {
 }
 
 test_render_cidata_password_hash() {
-  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\nimage: juniper-desktop\n' >"$T/flash.yaml"
+  printf 'user: me\nssh_keys: [%s me]\nimage: juniper-desktop\n' "$ED_KEY" >"$T/flash.yaml"
   hash=$(printf '%s' 'a pass "word" with $ and ü' | openssl passwd -6 -stdin)
   JUNIPER_PASSWORD_HASH=$hash "$ROOT/disk/render-cidata" "$T/flash.yaml" "$T/out" 2>/dev/null
   check "cidata: hashed password set" test "$(yget "$T/out/user-data" 'd["users"][0]["passwd"]')" = "$hash"
@@ -1366,28 +1374,28 @@ test_render_cidata_password_hash() {
 test_render_cidata_sudo_follows_password() {
   local good
   good=$(printf '%s' 'fake pass' | openssl passwd -6 -stdin)
-  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\nimage: juniper-desktop\n' >"$T/desk.yaml"
+  printf 'user: me\nssh_keys: [%s me]\nimage: juniper-desktop\n' "$ED_KEY" >"$T/desk.yaml"
   JUNIPER_PASSWORD_HASH=$good "$ROOT/disk/render-cidata" "$T/desk.yaml" "$T/o1" 2>/dev/null
   check "cidata: password -> sudo asks for it" \
     test "$(yget "$T/o1/user-data" 'd["users"][0]["sudo"]')" = "['ALL=(ALL) ALL']"
-  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\n' >"$T/headless.yaml"
+  printf 'user: me\nssh_keys: [%s me]\n' "$ED_KEY" >"$T/headless.yaml"
   "$ROOT/disk/render-cidata" "$T/headless.yaml" "$T/o2" 2>/dev/null
   check "cidata: no password -> NOPASSWD sudo" \
     test "$(yget "$T/o2/user-data" 'd["users"][0]["sudo"]')" = "['ALL=(ALL) NOPASSWD:ALL']"
 }
 
 test_render_cidata_desktop_needs_password() {
-  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\nimage: juniper-desktop\n' >"$T/flash.yaml"
+  printf 'user: me\nssh_keys: [%s me]\nimage: juniper-desktop\n' "$ED_KEY" >"$T/flash.yaml"
   check "cidata: desktop without a password refused" stderr_has "needs a password" \
     "$ROOT/disk/render-cidata" "$T/flash.yaml" "$T/out"
 }
 
 test_render_cidata_refuses_plaintext_and_bad_hash() {
-  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\npassword: hunter2\n' >"$T/plain.yaml"
+  printf 'user: me\nssh_keys: [%s me]\npassword: hunter2\n' "$ED_KEY" >"$T/plain.yaml"
   check "cidata: plain-text password refused" stderr_has "password: prompt" \
     "$ROOT/disk/render-cidata" "$T/plain.yaml" "$T/out1"
-  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\n' >"$T/ok.yaml"
-  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\npassword: prompt\n' >"$T/okp.yaml"
+  printf 'user: me\nssh_keys: [%s me]\n' "$ED_KEY" >"$T/ok.yaml"
+  printf 'user: me\nssh_keys: [%s me]\npassword: prompt\n' "$ED_KEY" >"$T/okp.yaml"
   # shellcheck disable=SC2016  # a literal crypt hash
   check "cidata: non-SHA-512 hash refused" fails env JUNIPER_PASSWORD_HASH='$1$abc$def' \
     "$ROOT/disk/render-cidata" "$T/okp.yaml" "$T/out2"
@@ -1397,33 +1405,33 @@ test_render_cidata_refuses_plaintext_and_bad_hash() {
 test_render_cidata_hash_only_when_asked_for() {
   local good
   good=$(printf '%s' 'fake pass' | openssl passwd -6 -stdin)
-  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\n' >"$T/headless.yaml"
+  printf 'user: me\nssh_keys: [%s me]\n' "$ED_KEY" >"$T/headless.yaml"
   JUNIPER_PASSWORD_HASH=$good "$ROOT/disk/render-cidata" "$T/headless.yaml" "$T/o1" 2>/dev/null
   check "cidata: stray hash ignored on a headless config" test "$(yget "$T/o1/user-data" '"passwd" in d["users"][0] or "lock_passwd" in d["users"][0]')" = False
-  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\npassword: prompt\n' >"$T/prompt.yaml"
+  printf 'user: me\nssh_keys: [%s me]\npassword: prompt\n' "$ED_KEY" >"$T/prompt.yaml"
   JUNIPER_PASSWORD_HASH=$good "$ROOT/disk/render-cidata" "$T/prompt.yaml" "$T/o2" 2>/dev/null
   check "cidata: password: prompt uses the hash" test "$(yget "$T/o2/user-data" 'd["users"][0]["passwd"]')" = "$good"
-  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\nimage: juniper-desktop\n' >"$T/desk.yaml"
+  printf 'user: me\nssh_keys: [%s me]\nimage: juniper-desktop\n' "$ED_KEY" >"$T/desk.yaml"
   # shellcheck disable=SC2016  # a literal crypt hash
   check "cidata: short-body hash refused" fails env JUNIPER_PASSWORD_HASH='$6$salt$abc' "$ROOT/disk/render-cidata" "$T/desk.yaml" "$T/o3"
   check "cidata: empty hash refused for desktop" fails env JUNIPER_PASSWORD_HASH= "$ROOT/disk/render-cidata" "$T/desk.yaml" "$T/o4"
 }
 
 test_render_cidata_rejects_bad_config() {
-  printf 'ssh_keys: [ssh-ed25519 AAAAC3x me]\n' >"$T/nouser.yaml"
+  printf 'ssh_keys: [%s me]\n' "$ED_KEY" >"$T/nouser.yaml"
   printf 'user: me\n' >"$T/nokeys.yaml"
   printf 'user: me\nssh_keys: [not-a-key]\n' >"$T/badkey.yaml"
-  printf 'user: me\nssh_keys: [ssh-ed25519 AAAAC3x me]\ntailscale_authkey: hunter2\n' >"$T/badts.yaml"
+  printf 'user: me\nssh_keys: [%s me]\ntailscale_authkey: hunter2\n' "$ED_KEY" >"$T/badts.yaml"
   for c in nouser nokeys badkey badts; do
     check "cidata: rejects $c" fails "$ROOT/disk/render-cidata" "$T/$c.yaml" "$T/out-$c"
   done
 }
 
 enc_config() { # enc_config FILE 'extra yaml lines'
-  printf 'user: me\nssh_keys:\n  - ssh-ed25519 AAAAC3ed25519 a@b\n  - ecdsa-sha2-nistp256 AAAAE2ecdsa c@d\n  - sk-ssh-ed25519@openssh.com AAAAsk e@f\n%s\n' "$2" >"$1"
+  printf 'user: me\nssh_keys:\n  - %s a@b\n  - %s c@d\n  - %s e@f\n%s\n' "$ED_KEY" "$ECDSA_KEY" "$SK_KEY" "$2" >"$1"
   chmod 600 "$1"
 }
-AGE_PUB=age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqx
+AGE_PUB=age1udkewfc8ag7em6el4ek94rnc8l7pe36hl0w9p6kr4n9k8dzwxgsqjallpw
 
 test_render_cidata_encrypt_default_off() {
   enc_config "$T/e.yaml" ""
@@ -1437,12 +1445,12 @@ test_render_cidata_encrypt_on_uses_ssh_recipients() {
   enc_config "$T/e.yaml" "encrypt: true"
   "$ROOT/disk/render-cidata" "$T/e.yaml" "$T/o"
   check "encrypt: marker on" test "$(cat "$T/o/juniper-encrypt")" = on
-  check "encrypt: only the ed25519 key" test "$(cat "$T/o/juniper-recovery.txt")" = "ssh-ed25519 AAAAC3ed25519 a@b"
+  check "encrypt: only the ed25519 key" test "$(cat "$T/o/juniper-recovery.txt")" = "$ED_KEY a@b"
   check "encrypt: recovery mode 0644" test "$(stat -c %a "$T/o/juniper-recovery.txt")" = 644
   enc_config "$T/rsa.yaml" "encrypt: true"
-  sed -i 's/^  - ssh-ed25519.*/  - ssh-rsa AAAArsa r@s/' "$T/rsa.yaml"
+  sed -i "s|^  - ssh-ed25519.*|  - $RSA_KEY r@s|" "$T/rsa.yaml"
   "$ROOT/disk/render-cidata" "$T/rsa.yaml" "$T/o2"
-  check "encrypt: ssh-rsa accepted" test "$(cat "$T/o2/juniper-recovery.txt")" = "ssh-rsa AAAArsa r@s"
+  check "encrypt: ssh-rsa accepted" test "$(cat "$T/o2/juniper-recovery.txt")" = "$RSA_KEY r@s"
 }
 
 test_render_cidata_recovery_key_overrides() {
@@ -1453,7 +1461,7 @@ recovery_key: $AGE_PUB"
 }
 
 test_render_cidata_encrypt_refuses_without_recipient() {
-  printf 'user: me\nencrypt: true\nssh_keys:\n  - ecdsa-sha2-nistp256 AAAAE2ecdsa c@d\n  - sk-ssh-ed25519@openssh.com AAAAsk e@f\n' >"$T/n.yaml"
+  printf 'user: me\nencrypt: true\nssh_keys:\n  - %s c@d\n  - %s e@f\n' "$ECDSA_KEY" "$SK_KEY" >"$T/n.yaml"
   chmod 600 "$T/n.yaml"
   check "encrypt: no recipient refused" fails "$ROOT/disk/render-cidata" "$T/n.yaml" "$T/o"
   check "encrypt: no-recipient message" stderr_has "no recovery recipient" "$ROOT/disk/render-cidata" "$T/n.yaml" "$T/o"
@@ -1469,6 +1477,47 @@ recovery_key: age1short"
 recovery_key: AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ"
   check "recovery_key: private key refused" fails "$ROOT/disk/render-cidata" "$T/e2.yaml" "$T/o2"
   check "recovery_key: private key message" stderr_has "that's an age private key" "$ROOT/disk/render-cidata" "$T/e2.yaml" "$T/o2"
+}
+
+# A mistyped recipient would leave the card plain although flash said "Encrypt: yes" (#83 M5):
+# the age1 checksum and every key's data are checked on the host.
+test_render_cidata_recovery_key_checksum() {
+  enc_config "$T/ok.yaml" "encrypt: true
+recovery_key: age1udkewfc8ag7em6el4ek94rnc8l7pe36hl0w9p6kr4n9k8dzwxgsqjallpw"
+  check "recovery_key: real age key accepted" "$ROOT/disk/render-cidata" "$T/ok.yaml" "$T/o0"
+  # one character changed (w -> q): right length and alphabet, wrong checksum
+  enc_config "$T/typo.yaml" "encrypt: true
+recovery_key: age1udkewfc8ag7em6el4ek94rnc8l7pe36hl0w9p6kr4n9k8dzwxgsqjallpq"
+  check "recovery_key: typo refused" fails "$ROOT/disk/render-cidata" "$T/typo.yaml" "$T/o1"
+  check "recovery_key: typo message" stderr_has "checksum" "$ROOT/disk/render-cidata" "$T/typo.yaml" "$T/o1"
+}
+
+test_render_cidata_checks_ssh_key_data() {
+  local bad
+  for bad in "ssh-ed25519 AAAAC3x" "${ED_KEY%?}" "ssh-rsa ${ED_KEY#* }" "${ED_KEY}AAAA" "${ECDSA_KEY%??????}"; do
+    printf 'user: me\nssh_keys:\n  - "%s me"\n' "$bad" >"$T/k.yaml"
+    chmod 600 "$T/k.yaml"
+    check "ssh_keys: refuses ${bad:0:12}...${bad: -6}" fails "$ROOT/disk/render-cidata" "$T/k.yaml" "$T/o"
+  done
+  printf 'user: me\nssh_keys:\n  - "%s me"\n' "${ED_KEY#* }" >"$T/k.yaml"
+  check "ssh_keys: bare key data refused" fails "$ROOT/disk/render-cidata" "$T/k.yaml" "$T/o"
+  printf 'user: me\nssh_keys:\n  - %s\n  - %s\n  - %s me\n  - %s\n' \
+    "$ECDSA_KEY" "$SK_KEY" "$RSA_KEY" "$ED_KEY" >"$T/k.yaml"
+  check "ssh_keys: all four real types accepted" "$ROOT/disk/render-cidata" "$T/k.yaml" "$T/o2"
+}
+
+test_render_cidata_refuses_small_rsa() {
+  printf 'user: me\nssh_keys:\n  - %s me\n' "$RSA1024_KEY" >"$T/r.yaml"
+  chmod 600 "$T/r.yaml"
+  check "ssh_keys: 1024-bit RSA refused" fails "$ROOT/disk/render-cidata" "$T/r.yaml" "$T/o"
+  check "ssh_keys: RSA size message" stderr_has "1024 bits" "$ROOT/disk/render-cidata" "$T/r.yaml" "$T/o"
+}
+
+test_render_cidata_refuses_multiline_key() {
+  printf 'user: me\nssh_keys:\n  - "%s a@b\\n%s c@d"\n' "$ED_KEY" "$ED_KEY2" >"$T/m.yaml"
+  chmod 600 "$T/m.yaml"
+  check "ssh_keys: two keys in one entry refused" fails "$ROOT/disk/render-cidata" "$T/m.yaml" "$T/o"
+  check "ssh_keys: multi-line message" stderr_has "one key per entry" "$ROOT/disk/render-cidata" "$T/m.yaml" "$T/o"
 }
 
 test_render_cidata_encrypt_must_be_bool() {
