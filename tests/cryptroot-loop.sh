@@ -195,7 +195,7 @@ attach() {
 node_ready() {
   local sys=/sys/class/block/${1##*/}/dev want maj min
   [[ -r $sys && -b $1 ]] || return 1
-  want=$(<"$sys") || return 1
+  read -r want <"$sys" 2>/dev/null || return 1
   read -r maj min < <(stat -c '%t %T' "$1") || return 1
   [[ $want == "$((16#$maj)):$((16#$min))" ]]
 }
@@ -248,7 +248,7 @@ group_alive() {
 group_gone() {
   local pg i
   [[ -r $KILL_DONE.pg ]] || return 0
-  pg=$(<"$KILL_DONE.pg")
+  read -r pg <"$KILL_DONE.pg" || [[ -n ${pg:-} ]] || return 0
   for ((i = 0; i < 100; i++)); do
     group_alive "$pg" || return 0
     sleep 0.1

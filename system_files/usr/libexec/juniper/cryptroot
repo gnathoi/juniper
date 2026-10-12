@@ -79,7 +79,7 @@ part_info() {
   [[ $part =~ ^[A-Za-z0-9]+$ ]] || return 1
   p=$bsys/class/block/$part
   [[ -r $p/partition ]] || return 1
-  n=$(<"$p/partition")
+  read -r n <"$p/partition" || return 1
   d=$(readlink -f "$p/..") || return 1
   disk=${d##*/}
   [[ $disk =~ ^[A-Za-z0-9]+$ && $n =~ ^[0-9]+$ ]]
@@ -90,9 +90,9 @@ p_start=0
 p_size=0
 d_size=0
 sizes() {
-  p_start=$(<"$bsys/class/block/$part/start") || return 1
-  p_size=$(<"$bsys/class/block/$part/size") || return 1
-  d_size=$(<"$bsys/class/block/$disk/size") || return 1
+  read -r p_start <"$bsys/class/block/$part/start" || return 1
+  read -r p_size <"$bsys/class/block/$part/size" || return 1
+  read -r d_size <"$bsys/class/block/$disk/size" || return 1
   [[ $p_start =~ ^[0-9]+$ && $p_size =~ ^[0-9]+$ && $d_size =~ ^[0-9]+$ ]]
 }
 free_after() { printf '%s' "$((d_size - (p_start + p_size + 34)))"; }
@@ -363,8 +363,8 @@ first_boot() {
   # I15: an absolute size from the kernel's view, never sfdisk's relative +N. The kernel must
   # see the new size: --reduce-device-size takes 32 MiB from the end of the partition.
   step=grow
-  cur=$(<"$bsys/class/block/$part/size")
-  if [[ ! $cur =~ ^[0-9]+$ ]] || ! grow_abs "$((cur + grow_sectors))" || ! new=$(<"$bsys/class/block/$part/size") ||
+  read -r cur <"$bsys/class/block/$part/size"
+  if [[ ! $cur =~ ^[0-9]+$ ]] || ! grow_abs "$((cur + grow_sectors))" || ! read -r new <"$bsys/class/block/$part/size" ||
     ((new < cur + grow_sectors)); then
     fail_open "$step failed"
     return 0
@@ -436,7 +436,7 @@ seal() {
   unset r
   ((rc == 0)) || return 1
   # I10: a second copy of the ciphertext in the header, JSON-escaped.
-  armor=$(<"$mnt/juniper-recovery.age.new") || return 1
+  armor=$(cat "$mnt/juniper-recovery.age.new") || return 1
   armor=${armor//\\/\\\\}
   armor=${armor//\"/\\\"}
   armor=${armor//$'\n'/\\n}\\n
