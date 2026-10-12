@@ -279,7 +279,7 @@ EOF
     head -c 64M /dev/urandom >"$W/m/data$i"
   done
   # Recognisable plaintext: after encryption it must be nowhere on the raw disk.
-  yes "$CANARY" | head -c 4M >"$W/m/data-canary"
+  head -c 4M < <(yes "$CANARY") >"$W/m/data-canary" # not a pipe: yes dies of SIGPIPE
   (cd "$W/m" && sha256sum data* >SHA256SUMS)
   cp "$W/m/SHA256SUMS" "$W/SHA256SUMS"
   umount "$W/m"
