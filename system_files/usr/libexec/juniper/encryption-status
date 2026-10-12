@@ -21,7 +21,7 @@ kv() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1 | tr -cd '[:print:]'; }
 
 # retries RAW: does the next boot try again by itself (rather than needing a reflash)?
 retries() {
-  case $1 in 'encryption unfinished'* | 'encryption deferred'* | *'disks carry this root'*) return 0 ;; esac
+  case $1 in 'encryption unfinished'* | 'encryption deferred'* | *'disks carry this root'* | *'the next boot retries'*) return 0 ;; esac
   return 1
 }
 
@@ -30,6 +30,7 @@ human() {
   case $1 in
     *firmware-too-old*) echo "the Pi's firmware is too old to hold the key; update the Pi's EEPROM: sudo rpi-eeprom-update -a" ;;
     *pi4-unverified*) echo "the Pi 4 firmware key interface is unverified, so it was not used" ;;
+    'firmware key interface stopped answering'*) echo "the Pi's firmware key interface stopped answering; encryption is tried again on the next boot (${1##*retries })" ;;
     *firmware-wedged*) echo "the Pi's firmware key interface stopped answering" ;;
     *'firmware key interface unavailable'*) echo "the Pi's firmware key interface is unavailable (${1#*unavailable: })" ;;
     'encryption unfinished'*) echo "encryption was interrupted and will finish on the next boot" ;;

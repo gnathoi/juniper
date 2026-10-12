@@ -4182,6 +4182,53 @@ test_no_dollar_lt_file_reads() {
   check "no \$(<file) in shipped scripts (bash 5.2 exits on a failed one): ${bad[*]:-none}" test ${#bad[@]} = 0
 }
 
+# #83 M4: a wedged firmware mailbox on the first boot is retried on the next boot, three
+# boots in a row at most (a firmware that always hangs must not degrade every boot forever).
+test_cryptroot_firmware_wedge_retries_then_final() {
+  local i
+  cryptroot_env plain on
+  echo "unavailable:firmware-wedged" >"$T/fw.mode"
+  for i in 1 2; do
+    crt prepare 2>/dev/null
+    check "wedge $i: exit 0" test "$RC" = 0
+    check "wedge $i: marker still on" grep -qx on "$T/cidata/juniper-encrypt"
+    check "wedge $i: counted" grep -qx "$i" "$T/cidata/juniper-fwkey-wedges"
+    check "wedge $i: retries" grep -q "the next boot retries ($i of 3)" <<<"$(runf reason)"
+    check "wedge $i: nothing touched" not_called sfdisk
+  done
+  crt prepare 2>/dev/null
+  check "wedge 3: final" grep -qxF "not-encrypted:firmware key interface unavailable: firmware-wedged (3 boots in a row)" "$T/cidata/juniper-encrypt"
+  # The derive path's wedge (probe says so) counts the same.
+  cryptroot_env plain on
+  touch "$T/fw.derive-fail"
+  echo unavailable:firmware-wedged >"$T/fw.probe"
+  crt prepare 2>/dev/null
+  check "derive wedge: marker still on" grep -qx on "$T/cidata/juniper-encrypt"
+  check "derive wedge: counted" grep -qx 1 "$T/cidata/juniper-fwkey-wedges"
+  # Other firmware answers stay final at once.
+  cryptroot_env plain on
+  echo "unavailable:firmware-too-old" >"$T/fw.mode"
+  crt prepare 2>/dev/null
+  check "too old: final at once" grep -q "^not-encrypted:firmware key interface unavailable: firmware-too-old" "$T/cidata/juniper-encrypt"
+}
+
+test_cryptroot_wedge_counter_cleared_on_success() {
+  cryptroot_env plain on
+  echo 2 >"$T/cidata/juniper-fwkey-wedges"
+  crt prepare 2>/dev/null
+  check "after a wedge: encrypts" called "--init-only"
+  check "after a wedge: counter removed" test ! -e "$T/cidata/juniper-fwkey-wedges"
+}
+
+test_encryption_status_wedge_retry() {
+  enc_env
+  stub lsblk 'printf "part\ndisk\n"'
+  enc_run state=not-encrypted 'reason=firmware key interface stopped answering; the next boot retries (1 of 3)'
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: wedge retry says so" stdout_has 'The next boot retries' "$LIBEXEC/encryption-status" --print
+  check "encryption-status: wedge retry, no reflash" not_stdout_has 'Reflash' "$LIBEXEC/encryption-status" --print
+}
+
 test_cryptroot_firmware_unavailable_fails_open() {
   cryptroot_env plain on
   echo "unavailable:no /dev/vcio" >"$T/fw.mode"
@@ -4201,10 +4248,11 @@ test_cryptroot_firmware_unavailable_fails_open() {
   check "prep: derive failure, no cryptsetup" not_called cryptsetup
 }
 
-# Task 3b: fwkey's firmware gate reasons all fail open, recorded with the reason.
+# Task 3b: fwkey's firmware gate reasons all fail open, recorded with the reason (a wedge is
+# retried first: test_cryptroot_firmware_wedge_retries_then_final).
 test_cryptroot_firmware_gate_reasons_fail_open() {
   local r
-  for r in firmware-too-old pi4-unverified unsupported-board firmware-wedged invalid-key; do
+  for r in firmware-too-old pi4-unverified unsupported-board invalid-key; do
     cryptroot_env plain on
     echo "unavailable:$r" >"$T/fw.mode"
     crt prepare 2>/dev/null
@@ -4217,8 +4265,9 @@ test_cryptroot_firmware_gate_reasons_fail_open() {
   cryptroot_env plain on
   touch "$T/fw.derive-fail"
   echo unavailable:firmware-wedged >"$T/fw.probe"
+  echo 2 >"$T/cidata/juniper-fwkey-wedges"
   crt prepare 2>/dev/null
-  check "prep: wedged during derive fails open" grep -qxF "not-encrypted:firmware key interface unavailable: derive failed (firmware-wedged)" "$T/cidata/juniper-encrypt"
+  check "prep: wedged during derive, third boot, fails open" grep -qxF "not-encrypted:firmware key interface unavailable: derive failed (firmware-wedged) (3 boots in a row)" "$T/cidata/juniper-encrypt"
   check "prep: wedged during derive, no cryptsetup" not_called cryptsetup
 }
 
