@@ -13,6 +13,14 @@ pi-status:
     @cat /var/lib/juniper/update-skipped-space 2>/dev/null || true
     @fs=/sysroot; [ -d "$fs" ] || fs=/; df -Pm "$fs" | awk -v fs="$fs" 'NR == 2 && ($4 * 10 < $2 || $4 < 1024) {print "Low disk space: " $4 " MiB free of " $2 " MiB on " fs "; free some or move data to a USB disk"}'
 
+# FILE holds ssh-ed25519/ssh-rsa or age1 public keys (- reads stdin); the old recovery key stops working.
+# Re-seal the encryption recovery key to the keys in FILE at the next boot (or --status, --cancel)
+recovery-reseal keys_or_flag:
+    #!/usr/bin/bash
+    set -euo pipefail
+    cd {{ quote(invocation_directory()) }}
+    exec sudo /usr/libexec/juniper/recovery-reseal {{ quote(keys_or_flag) }}
+
 # Bootloader EEPROM: show status, or `apply` to stage the latest default release for the next
 # reboot. Manual on purpose: EEPROM writes have no tryboot fallback.
 pi-eeprom action="status":

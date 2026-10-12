@@ -174,6 +174,7 @@ export REAL_PATH TEST_PGID KILL_DELAY HOOK_LOG=$W/hook.log FWKEY_LOG=$W/fwkey.lo
 # --- recovery recipients ---
 ssh-keygen -q -t ed25519 -N '' -C juniper-test -f "$W/id_ed25519"
 ssh-keygen -q -t ecdsa -b 256 -N '' -C juniper-test -f "$W/id_ecdsa"
+ssh-keygen -q -t ed25519 -N '' -C juniper-test-new -f "$W/id_new"
 printf 'Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 cpuid\n' >"$W/cpuinfo-aes"
 printf 'Features\t: fp asimd evtstrm crc32 cpuid\n' >"$W/cpuinfo-noaes"
 printf '\0\0\0\1' >"$W/tryboot-1"
@@ -291,6 +292,7 @@ EOF
 # RECIPIENTS ed25519 | ecdsa | none.
 fresh() {
   rm -f "$W/disk.img" "$W/hook.log" "$W/fwkey.log" "$W/kill."* "$W/board.key"
+  RECOVERY_ID=$W/id_ed25519
   rm -rf "$W/run"
   cp --sparse=always "$W/template.img" "$W/disk.img"
   attach
@@ -414,7 +416,7 @@ no_leak() {
 recovery_from_cidata() {
   local r=0
   c_mount ro || return 1
-  age -d -i "$W/id_ed25519" "$W/c/juniper-recovery.age" |
+  age -d -i "${RECOVERY_ID:-$W/id_ed25519}" "$W/c/juniper-recovery.age" |
     cryptsetup open --test-passphrase --key-file - "$P3" || r=1
   c_umount
   return "$r"
@@ -422,7 +424,7 @@ recovery_from_cidata() {
 recovery_from_token() {
   cryptsetup token export --token-id 1 "$P3" |
     sed -n 's/.*"age"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed 's|\\/|/|g; s/\\n/\n/g' |
-    age -d -i "$W/id_ed25519" | cryptsetup open --test-passphrase --key-file - "$P3"
+    age -d -i "${RECOVERY_ID:-$W/id_ed25519}" | cryptsetup open --test-passphrase --key-file - "$P3"
 }
 # The board's key: $KEY, or another Pi's after new_board.
 board_key() { if [[ -r $W/board.key ]]; then cat "$W/board.key"; else printf '%s' "$KEY"; fi; }
@@ -823,11 +825,85 @@ s_rebind_bogus_key() {
   check "file left for the owner" cidata_has juniper-rebind.key
 }
 
+# --- re-seal (#83 Task 12): `ujust recovery-reseal` writes CIDATA/juniper-reseal.txt ---
+reseal_request() { # CONTENT
+  c_mount || die "cannot mount CIDATA"
+  printf '%s\n' "$1" >"$W/c/juniper-reseal.txt"
+  c_umount
+}
+old_recovery_fails() {
+  local r=0
+  c_mount ro || return 1
+  if age -d -i "$W/id_ed25519" "$W/c/juniper-recovery.age" >/dev/null 2>&1; then r=1; fi
+  c_umount
+  return "$r"
+}
+reseal_checks() {
+  RECOVERY_ID=$W/id_new
+  check "request removed" eval '! cidata_has juniper-reseal.txt'
+  check "recipients are the new key" eq "$(cidata juniper-recovery.txt)" "$(cat "$W/id_new.pub")"
+  check "old SSH key can't decrypt the recovery file" old_recovery_fails
+  encrypted_checks aes-xts-plain64
+}
+
+s_reseal_new_key() {
+  encrypted_card
+  reseal_request "$(cat "$W/id_new.pub")"
+  local h
+  h=$(header_sum)
+  rm -rf "$W/run"
+  cr prepare JUNIPER_TRYBOOT_FLAG="$W/tryboot-1"
+  check "tryboot: header unchanged" eq "$(header_sum)" "$h"
+  rm -rf "$W/run"
+  cr prepare
+  check "prepare exits 0" eq "$rc" 0
+  check "order: age, kill slot 1, add slot 1, token 1" eq \
+    "$(grep -oE '^(age -R|cryptsetup (luksKillSlot --batch-mode --key-file - \S+ 1|luksAddKey --batch-mode --key-slot 1|token import --token-id 1))' "$W/hook.log" |
+      sed -E 's|^cryptsetup ||; s|--batch-mode ||; s|--key-file - \S+ ||' | tr '\n' ,)" \
+    "age -R,age -R,luksKillSlot 1,luksAddKey --key-slot 1,token import --token-id 1,"
+  reseal_checks
+}
+
+reseal_kill() { # MATCH
+  encrypted_card
+  reseal_request "$(cat "$W/id_new.pub")"
+  rm -rf "$W/run"
+  cr prepare KILL_WHEN=after KILL_MATCH="$1" KILL_NTH=1
+  check "prepare was SIGKILLed ($(cat "$KILL_DONE" 2>/dev/null || echo no kill))" test -e "$KILL_DONE"
+  check "board key still opens" board_key_opens
+  check "request still there" cidata_has juniper-reseal.txt
+  reboot
+  rm -f "$W/kill."*
+  cr prepare
+  check "rerun: prepare exits 0" eq "$rc" 0
+  reseal_checks
+}
+s_reseal_kill_after_age() { reseal_kill '^age -R .*juniper-reseal\.txt -a '; }
+s_reseal_kill_after_killslot1() { reseal_kill '^cryptsetup luksKillSlot .* 1$'; }
+s_reseal_kill_after_addkey1() { reseal_kill '^cryptsetup luksAddKey --batch-mode --key-slot 1 '; }
+s_reseal_kill_after_token1() { reseal_kill '^cryptsetup token import --token-id 1 '; }
+
+# A request age can't use: ignored, nothing changes, the old recovery key still works.
+s_reseal_bad_request() {
+  encrypted_card
+  reseal_request "not a key"
+  local h
+  h=$(header_sum)
+  rm -rf "$W/run"
+  cr prepare
+  check "prepare exits 0" eq "$rc" 0
+  check "header unchanged" eq "$(header_sum)" "$h"
+  check "says why" grep -q "no usable recipient; not re-sealing" "$W/out"
+  check "old recovery key still opens" recovery_from_cidata
+}
+
 scenarios=(plain_untouched happy adiantum kill_after_init_only kill_mid_resume kill_after_resume
   kill_after_token0 kill_after_age kill_after_addkey kill_after_token1 kill_after_grow
   failopen_no_recipients failopen_ecdsa_only failopen_key_locked failopen_derive_fails tryboot_plain
   rebind_new_board rebind_kill_after_killslot0 rebind_kill_after_addkey0 rebind_kill_after_killslot2
-  rebind_same_board rebind_bogus_key rebind_firmware_unavailable)
+  rebind_same_board rebind_bogus_key rebind_firmware_unavailable
+  reseal_new_key reseal_kill_after_age reseal_kill_after_killslot1 reseal_kill_after_addkey1
+  reseal_kill_after_token1 reseal_bad_request)
 
 echo "cryptroot under test: $CRYPTROOT"
 cryptsetup --version

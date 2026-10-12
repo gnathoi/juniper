@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# ujust recovery-reseal (#83 Task 12): seal the encrypted root's recovery key to new keys, on the
+# device, without reflashing. Runs as root.
+#   recovery-reseal FILE     ask for a re-seal to the keys in FILE (- reads stdin): SSH public
+#                            keys (ssh-ed25519, ssh-rsa) or age public keys (age1...)
+#   recovery-reseal --status say whether a request is waiting
+#   recovery-reseal --cancel drop a waiting request
+# The request goes to CIDATA/juniper-reseal.txt; the next confirmed boot (cryptroot prepare, never
+# under tryboot) makes a new recovery key sealed to those keys, and the old one stops working.
+set -euo pipefail
+cidata_device=${JUNIPER_CIDATA_DEVICE:-/usr/libexec/juniper/cidata-device}
+root_mount=${JUNIPER_ROOT_MOUNT:-/sysroot}
+req=juniper-reseal.txt
+
+die() {
+  echo "recovery-reseal: $*" >&2
+  exit 1
+}
+usage() {
+  echo "usage: ujust recovery-reseal FILE|-|--status|--cancel" >&2
+  exit 2
+}
+(($# == 1)) || usage
+
+src=$(findmnt -no SOURCE "$root_mount" 2>/dev/null) || src=
+src=${src%%[[]*}
+if [[ -z $src ]] || ! lsblk -no TYPE -s "$src" 2>/dev/null | grep -qx crypt; then
+  die "this Pi's root isn't encrypted; there is no recovery key to re-seal"
+fi
+
+# open_cidata: CIDATA mounted read-write at $dir until exit (JUNIPER_CIDATA_DIR: tests).
+dir=
+mounted=
+cleanup() {
+  if [[ -n $mounted ]]; then
+    umount "$dir" 2>/dev/null || true
+    rmdir "$dir" 2>/dev/null || true
+  fi
+  rm -f "${tmp:-}" "${stdin_copy:-}"
+}
+trap cleanup EXIT
+open_cidata() {
+  local dev
+  if [[ -n ${JUNIPER_CIDATA_DIR:-} ]]; then
+    dir=$JUNIPER_CIDATA_DIR
+    return 0
+  fi
+  dev=$("$cidata_device") || die "can't find this card's CIDATA partition"
+  dir=$(mktemp -d)
+  mount -o rw "$dev" "$dir" || die "can't mount CIDATA ($dev)"
+  mounted=1
+}
+
+case $1 in
+  --status)
+    open_cidata
+    if [[ -e $dir/$req ]]; then
+      echo "Re-seal waiting for the next boot, to:"
+      sed 's/^/  /' "$dir/$req"
+    else
+      echo "No re-seal waiting."
+    fi
+    exit 0
+    ;;
+  --cancel)
+    open_cidata
+    if [[ -e $dir/$req ]]; then
+      rm -f "$dir/$req" && sync
+      echo "Re-seal request dropped; the recovery key stays as it is."
+    else
+      echo "No re-seal waiting."
+    fi
+    exit 0
+    ;;
+  -) ;; # stdin
+  -*) usage ;;
+esac
+
+# The recipients: as just flash takes them from flash.yaml (age encrypts to ssh-ed25519 and
+# ssh-rsa keys, not to ecdsa or FIDO sk- ones), or age1 keys.
+[[ $1 == - || -r $1 ]] || die "can't read $1"
+tmp=$(mktemp)
+input=$1
+stdin_copy=
+if [[ $1 == - ]]; then
+  stdin_copy=$(mktemp)
+  cat >"$stdin_copy"
+  input=$stdin_copy
+fi
+n=0
+skipped=0
+while IFS= read -r l || [[ -n $l ]]; do
+  l=${l%$'\r'}
+  [[ $l =~ ^[[:space:]]*(#|$) ]] && continue
+  if [[ $l =~ ^(ssh-ed25519|ssh-rsa)[[:space:]] || $l =~ ^age1[02-9ac-hj-np-z]+$ ]]; then
+    printf '%s\n' "$l" >>"$tmp"
+    n=$((n + 1))
+  else
+    skipped=$((skipped + 1))
+  fi
+done <"$input"
+((skipped == 0)) || echo "Skipped $skipped line(s): only ssh-ed25519, ssh-rsa and age1 keys can hold the recovery key." >&2
+((n > 0)) || die "no usable key in $1 (ssh-ed25519, ssh-rsa or age1...)"
+age -R "$tmp" -o /dev/null </dev/null >/dev/null 2>&1 || die "age doesn't accept these keys (a typo?)"
+
+open_cidata
+{ cp "$tmp" "$dir/$req.new" && sync && mv -f "$dir/$req.new" "$dir/$req" && sync; } ||
+  die "can't write the request to CIDATA"
+echo "Re-seal to $n key(s) requested. It happens on the next boot (sudo systemctl reboot, or the"
+echo "next update window); after it, only these keys can open the recovery key. Check with"
+echo "ujust recovery-reseal --status; undo before then with ujust recovery-reseal --cancel."

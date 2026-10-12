@@ -3,7 +3,7 @@
 # initramfs from the 90juniper-cryptroot dracut module.
 #
 #   cryptroot prepare   before udev: first-boot in-place encryption (CIDATA marker `on`),
-#                       resume, re-bind, recovery sealing, grow, record. Exits 0 unless it
+#                       resume, re-bind, recovery (re-)sealing, grow, record. Exits 0 unless it
 #                       can't run.
 #   cryptroot unlock    after udev: opens the root as /dev/mapper/juniper-root.
 #
@@ -32,6 +32,7 @@ grow_sectors=131072 # 64 MiB: room for --reduce-device-size 32M
 slot0_re=$'(^|\n)[[:space:]]+0: luks2'
 slot1_re=$'(^|\n)[[:space:]]+1: luks2'
 rebind_file=juniper-rebind.key
+reseal_file=juniper-reseal.txt
 
 log() { printf 'juniper-cryptroot: %s\n' "$*" >&2; }
 first_line() { printf '%s' "${1%%$'\n'*}"; }
@@ -142,17 +143,18 @@ marker_read() {
   printf '%s' "${l%"${l##*[![:space:]]}"}"
 }
 
-# Recipient lines in juniper-recovery.txt (blank lines and comments don't count).
+# count_recipients [FILE]: recipient lines in FILE (default juniper-recovery.txt; blank lines
+# and comments don't count).
 count_recipients() {
-  local c=0 l
-  [[ -r $mnt/juniper-recovery.txt ]] || {
+  local c=0 l f=${1:-$mnt/juniper-recovery.txt}
+  [[ -r $f ]] || {
     printf 0
     return 0
   }
   while IFS= read -r l || [[ -n $l ]]; do
     l=${l%$'\r'}
     [[ $l =~ ^[[:space:]]*(#|$) ]] || c=$((c + 1))
-  done <"$mnt/juniper-recovery.txt"
+  done <"$f"
   printf '%s' "$c"
 }
 
@@ -430,8 +432,11 @@ unfinished() {
 }
 
 # --- resume, seal, grow, record (each skips itself when there is nothing to do) ---
+# seal DEV [RECIPIENTS]: a new random recovery key in slot 1, age-encrypted to RECIPIENTS (default
+# CIDATA's juniper-recovery.txt) as CIDATA's juniper-recovery.age and token 1. Returns 2 if age
+# can't encrypt to them (nothing changed), 1 on any other failure.
 seal() {
-  local dev=$1 r rc=0 armor
+  local dev=$1 rcpt=${2:-$mnt/juniper-recovery.txt} r rc=0 armor
   if [[ $cidata_disk != "$disk" ]]; then
     log "no CIDATA on $disk; the recovery key stays pending"
     return 1
@@ -445,12 +450,12 @@ seal() {
     r=
     return 1
   }
-  printf '%s' "$r" | age -R "$mnt/juniper-recovery.txt" -a -o "$mnt/juniper-recovery.age.new" || rc=1
+  printf '%s' "$r" | age -R "$rcpt" -a -o "$mnt/juniper-recovery.age.new" || rc=1
   cidata_ro
   if ((rc)); then
     r=
-    log "age could not seal the recovery key; it stays pending and the next boot retries"
-    return 0
+    log "age could not seal the recovery key; it stays as it is and the next boot retries"
+    return 2
   fi
   # I5: slot 1 is the recovery slot. A cut-short earlier try may have left one: replace it.
   if [[ $(cryptsetup luksDump "$dev" 2>/dev/null || true) =~ $slot1_re ]]; then
@@ -474,7 +479,28 @@ seal() {
   { mv -f "$mnt/juniper-recovery.age.new" "$mnt/juniper-recovery.age" && sync; } || rc=1
   cidata_ro
   ((rc == 0)) || return 1
-  token_write "$dev" "$(token_read "$dev" id_type)" sealed "$(count_recipients)" --token-replace
+  token_write "$dev" "$(token_read "$dev" id_type)" sealed "$(count_recipients "$rcpt")" --token-replace
+}
+
+# reseal DEV (Task 12): `ujust recovery-reseal` left new recipients in CIDATA/juniper-reseal.txt.
+# Seal a new recovery key to them, then make them the card's recipients (juniper-recovery.txt).
+# The old recovery key stops working; the board slot keeps the card unlockable throughout, and a
+# cut anywhere leaves the request, so the next boot re-seals again.
+reseal() {
+  local dev=$1 rc=0
+  [[ $cidata_disk == "$disk" && -e $mnt/$reseal_file ]] || return 0
+  [[ $(token_read "$dev" type) == juniper ]] || return 0
+  if ! age -R "$mnt/$reseal_file" -o /dev/null </dev/null >/dev/null 2>&1; then
+    log "$reseal_file has no usable recipient; not re-sealing"
+    return 0
+  fi
+  log "re-sealing the recovery key of $dev to $(count_recipients "$mnt/$reseal_file") recipient(s)"
+  seal "$dev" "$mnt/$reseal_file" || return 1
+  cidata_rw || return 1
+  { mv -f "$mnt/$reseal_file" "$mnt/juniper-recovery.txt" && sync; } || rc=1
+  cidata_ro
+  ((rc == 0)) || return 1
+  log "the recovery key of $dev is re-sealed"
 }
 
 # rebind DEV (#76): `just rebind-card` on a laptop added a one-time keyslot (slot 2) and wrote
@@ -557,7 +583,7 @@ adopt() {
 }
 
 luks_steps() {
-  local dev=$1 fresh=$2 m dump it
+  local dev=$1 fresh=$2 m dump it rc
   part_info "$dev" || {
     log "$dev not found in sysfs"
     return 1
@@ -579,8 +605,11 @@ luks_steps() {
   fi
   adopt "$dev" || return 1
   rebind "$dev" || log "re-binding $dev did not finish; the next boot carries on"
+  reseal "$dev" || log "re-sealing the recovery key of $dev did not finish; the next boot retries"
   if [[ $(token_read "$dev" recovery) == pending ]]; then
-    seal "$dev" || log "sealing the recovery key failed; it stays pending and the next boot retries"
+    rc=0
+    seal "$dev" || rc=$?
+    ((rc == 0 || rc == 2)) || log "sealing the recovery key failed; it stays pending and the next boot retries"
   fi
   if [[ $m == converting ]]; then
     # I1/ruling 6: the initramfs grows only on the encrypting path, after sealing (I13).

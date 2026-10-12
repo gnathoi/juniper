@@ -226,6 +226,11 @@ few extra minutes; don't cut the power (it resumes if you do). `ujust pi-status`
   `id_rsa`): it mounts the root read-only at `/run/media/$USER/juniper-recovered`;
   `just unlock-card --close` undoes it. Keep that SSH private key as a file: age can't use an
   agent or a hardware key.
+- **Changing the recovery keys** (a lost laptop, a new key): on the Pi,
+  `ujust recovery-reseal FILE` (`-` reads stdin) with ssh-ed25519, ssh-rsa or `age1…` public
+  keys. The next boot seals a new recovery key to them and the old one stops working;
+  `ujust recovery-reseal --status` or `--cancel` until then. A power cut during it is picked
+  up by the next boot; the Pi's own key keeps the card unlockable throughout.
 - **Moving a card to another Pi** (or to a `dd` clone on a new card): on the laptop,
   `just rebind-card /dev/sdX [IDENTITY]` adds a one-time key (keyslot 2, and
   `CIDATA/juniper-rebind.key`). The card's next confirmed boot, in whichever Pi it is in,

@@ -5176,6 +5176,47 @@ test_add_rebind_slot_failures() {
   chmod u+w "$T/cidata"
 }
 
+# --- ujust recovery-reseal (#83 Task 12): the request; the loop test covers the re-seal ---
+reseal_env() {
+  export T JUNIPER_CIDATA_DIR=$T/cidata
+  mkdir -p "$T/cidata"
+  stub findmnt 'echo /dev/mapper/juniper-root'
+  stub lsblk 'printf "crypt\npart\ndisk\n"'
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub age '[[ -e $T/age.fail ]] && exit 1; cat >/dev/null; exit 0'
+  printf '%s me@laptop\n# a comment\n\n%s\n%s\n' "$ED_KEY" "$ECDSA_KEY" "$AGE_PUB" >"$T/keys"
+}
+test_recovery_reseal_writes_the_request() {
+  reseal_env
+  "$LIBEXEC/recovery-reseal" "$T/keys" >"$T/out" 2>"$T/err"
+  check "reseal: request has the usable keys" test "$(cat "$T/cidata/juniper-reseal.txt")" = "$(printf '%s me@laptop\n%s' "$ED_KEY" "$AGE_PUB")"
+  check "reseal: ecdsa skipped, said so" grep -q "Skipped 1 line" "$T/err"
+  check "reseal: validated with age" called "age -R"
+  check "reseal: no temp file" test ! -e "$T/cidata/juniper-reseal.txt.new"
+  check "reseal: says when" grep -q "next boot" "$T/out"
+  check "reseal: --status shows it" stdout_has "waiting for the next boot" "$LIBEXEC/recovery-reseal" --status
+  "$LIBEXEC/recovery-reseal" --cancel >/dev/null
+  check "reseal: --cancel drops it" test ! -e "$T/cidata/juniper-reseal.txt"
+  check "reseal: then --status says none" stdout_has "No re-seal waiting" "$LIBEXEC/recovery-reseal" --status
+  "$LIBEXEC/recovery-reseal" - <"$T/keys" >/dev/null 2>&1
+  check "reseal: stdin works" test -s "$T/cidata/juniper-reseal.txt"
+  check "reseal: the key file itself is left alone" test -s "$T/keys"
+  check "reseal: recipe" grep -q '^recovery-reseal keys_or_flag:' "$ROOT/system_files/usr/share/juniper/just/pi.just"
+}
+test_recovery_reseal_refusals() {
+  reseal_env
+  printf '%s\n' "$ECDSA_KEY" >"$T/ecdsa-only"
+  check "reseal: no usable key refused" stderr_has "no usable key" "$LIBEXEC/recovery-reseal" "$T/ecdsa-only"
+  touch "$T/age.fail"
+  check "reseal: age refusal refused" stderr_has "age doesn't accept" "$LIBEXEC/recovery-reseal" "$T/keys"
+  rm "$T/age.fail"
+  check "reseal: unreadable file refused" stderr_has "can't read" "$LIBEXEC/recovery-reseal" "$T/nope"
+  check "reseal: nothing written" test ! -e "$T/cidata/juniper-reseal.txt"
+  stub lsblk 'printf "part\ndisk\n"'
+  check "reseal: plain root refused" stderr_has "isn't encrypted" "$LIBEXEC/recovery-reseal" "$T/keys"
+  check "reseal: usage" fails "$LIBEXEC/recovery-reseal"
+}
+
 test_unlock_card_recipe() {
   check "unlock: Justfile recipe" grep -q '^unlock-card device identity' "$ROOT/Justfile"
 }
