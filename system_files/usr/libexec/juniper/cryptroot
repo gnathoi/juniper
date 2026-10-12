@@ -589,7 +589,7 @@ try_open() {
 }
 
 unlock() {
-  local a tries=3 seen=0 reason='' msg
+  local a tries=3 seen=0 reason='' msg fw
   trap cleanup EXIT
   read_cmdline
   if [[ -z $X ]]; then
@@ -621,8 +621,18 @@ unlock() {
     log "unlock failed under tryboot; failing so the firmware returns to the previous deployment"
     return 1
   fi
+  # Whose fault: a Pi whose firmware can't give its key may well be the card's own Pi (an
+  # EEPROM rolled back, a wedged mailbox). `ok` or `not-set` (no key at all): another Pi's card.
+  fw=$(first_line "$("$fwkey" probe 2>/dev/null || true)")
   if ((unfinished_conv)); then
     msg="juniper-cryptroot: encrypting this card could not resume (see the messages above); every boot retries. If it keeps failing, reflash the card: its recovery key is not sealed yet"
+  elif [[ $fw == unavailable:* ]]; then
+    case ${fw#unavailable:} in
+      firmware-too-old) msg="the bootloader EEPROM is older than 2026-01-21 (rolled back?): update it (rpi-eeprom-update -a, from another card) and boot this card again" ;;
+      firmware-wedged) msg="the firmware mailbox is wedged: power-cycle the Pi (unplug it) and boot again" ;;
+      *) msg="${fw#unavailable:}: power-cycle the Pi and boot again; if it persists, check the bootloader EEPROM" ;;
+    esac
+    msg="juniper-cryptroot: the firmware can't give this Pi's key, so this card may still belong here; $msg. Or unlock it on a laptop with the recovery key (just unlock-card)"
   else
     msg="juniper-cryptroot: this card is bound to another Raspberry Pi or another card; unlock it on a laptop with the recovery key (just unlock-card)"
   fi
