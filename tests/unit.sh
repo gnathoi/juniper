@@ -4395,6 +4395,37 @@ test_cryptroot_unlock_failure_normal_boot_hint() {
   check "unlock: no lock on failure" not_called "fwkey lock"
 }
 
+# When the firmware can't give this Pi's key, the card may well belong here: say so (#83 M2).
+test_cryptroot_unlock_failure_firmware_hint() {
+  local p
+  for p in unavailable:firmware-too-old unavailable:firmware-wedged "unavailable:firmware error 3 (exit 1)"; do
+    cryptroot_env luks-sealed encrypted
+    touch "$T/fw.derive-fail"
+    echo "$p" >"$T/fw.probe"
+    crt unlock 2>/dev/null
+    check "unlock $p: exit 1" test "$RC" = 1
+    check "unlock $p: names the firmware" grep -q "firmware can't give this Pi's key" "$T/console"
+    check "unlock $p: not 'another Pi'" not_grep_dir "another Raspberry Pi" "$T/console"
+    check "unlock $p: recovery still offered" grep -q "just unlock-card" "$T/console"
+  done
+  cryptroot_env luks-sealed encrypted
+  touch "$T/fw.derive-fail"
+  echo unavailable:firmware-too-old >"$T/fw.probe"
+  crt unlock 2>/dev/null
+  check "unlock too-old: update the bootloader EEPROM" grep -q "EEPROM" "$T/console"
+  cryptroot_env luks-sealed encrypted
+  touch "$T/fw.derive-fail"
+  echo unavailable:firmware-wedged >"$T/fw.probe"
+  crt unlock 2>/dev/null
+  check "unlock wedged: power-cycle" grep -q "power" "$T/console"
+  # A Pi with no key of its own (not-set) can't have encrypted this card: another Pi did.
+  cryptroot_env luks-sealed encrypted
+  touch "$T/fw.derive-fail"
+  echo not-set >"$T/fw.probe"
+  crt unlock 2>/dev/null
+  check "unlock not-set: bound to another Pi" grep -q "another Raspberry Pi" "$T/console"
+}
+
 test_cryptroot_unlock_no_device_leaves_it_to_dracut() {
   cryptroot_env plain on
   : >"$T/blkid.db"
