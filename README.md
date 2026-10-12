@@ -383,7 +383,10 @@ checks the signature on every pull, point it back at the tag:
     ujust switch ghcr.io/gnathoi/juniper:latest
 
 On a Juniper device, `ujust switch IMAGE` switches and reboots in one step. A plain reboot
-keeps the current image; use `ujust switch`/`ujust update`.
+keeps the current image; use `ujust switch`/`ujust update`. On an encrypted root it first
+checks that IMAGE carries the `org.juniper.cryptroot=v1` label (Juniper's initramfs unlock;
+images built `FROM` Juniper inherit it) and refuses one that doesn't, since that image
+couldn't open the root; `ujust switch IMAGE --force` skips the check.
 
 ## Build
 

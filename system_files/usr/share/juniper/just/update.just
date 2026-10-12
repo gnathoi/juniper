@@ -7,9 +7,9 @@ update:
 update-schedule day_or_time="" time="":
     sudo /usr/libexec/juniper/update-schedule {{ if day_or_time == "" { "" } else { quote(day_or_time) } }} {{ if time == "" { "" } else { quote(time) } }}
 
-# Switch to another image (e.g. ghcr.io/you/sensor-box:latest) and reboot into it now
-switch image:
-    /usr/libexec/juniper/switch-image {{ quote(image) }}
+# Switch to another image (e.g. ghcr.io/you/sensor-box:latest) and reboot into it now (--force: skip the encrypted-root check)
+switch image *flags:
+    /usr/libexec/juniper/switch-image {{ quote(image) }} {{ flags }}
 
 # List images that need a signature, or require one for NAMESPACE (ghcr.io/you ~/cosign.pub)
 trust-images namespace="" pubkey="":

@@ -28,6 +28,9 @@ ARG IMAGE_VERSION=dev
 
 # `bootc status` shows this as the image's Version (the base's label says e.g. 10.2.20261002.0).
 LABEL org.opencontainers.image.version=$IMAGE_VERSION
+# The initramfs can unlock Juniper's encrypted root (90juniper-cryptroot); `ujust switch`
+# refuses images without it on an encrypted device. Images built FROM Juniper inherit it.
+LABEL org.juniper.cryptroot="v1"
 
 RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=bind,from=fwcrypto,source=/out,target=/fwcrypto \
