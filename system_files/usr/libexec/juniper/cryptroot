@@ -454,7 +454,7 @@ seal() {
 # Each step leaves a working slot (T, or this Pi's key) beside the recovery slot, so a power cut
 # anywhere is picked up by the next boot. T never goes into argv or a file of ours.
 rebind() {
-  local dev=$1 t='' slot
+  local dev=$1 t='' slot out
   [[ $cidata_disk == "$disk" && -e $mnt/$rebind_file ]] || return 0
   IFS= read -r t <"$mnt/$rebind_file" || [[ -n $t ]] || t=
   t=${t%$'\r'}
@@ -467,6 +467,22 @@ rebind() {
     if ! printf '%s' "$t" | cryptsetup open --test-passphrase --key-file - "$dev" 2>/dev/null; then
       t=
       log "neither this Pi's key nor $rebind_file opens $dev; not re-binding"
+      return 0
+    fi
+    # This Pi must be able to give its key (a new board may not have one yet: ensure makes it)
+    # before anything changes; otherwise the card keeps opening with T on a Pi that can.
+    out=$(first_line "$("$fwkey" ensure 2>/dev/null || true)")
+    case $out in
+      ok | generated) ;;
+      *)
+        t=
+        log "this Pi's firmware key is unavailable (${out#unavailable:}); not re-binding $dev"
+        return 0
+        ;;
+    esac
+    if ! with_key "$disk" cat >/dev/null; then
+      t=
+      log "this Pi can't derive its key for $disk; not re-binding $dev"
       return 0
     fi
     log "re-binding $dev to this Pi and card"

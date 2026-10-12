@@ -752,6 +752,27 @@ s_rebind_same_board() {
   encrypted_checks aes-xts-plain64
 }
 
+# The new Pi's firmware can't give a key (old EEPROM, locked): change nothing, keep T; once it
+# can, the next boot re-binds.
+s_rebind_firmware_unavailable() {
+  encrypted_card
+  laptop_rebind
+  new_board
+  local h
+  h=$(header_sum)
+  rm -rf "$W/run"
+  cr prepare FWKEY_MODE=unavailable
+  check "prepare exits 0" eq "$rc" 0
+  check "header unchanged" eq "$(header_sum)" "$h"
+  check "says why" grep -q "firmware key is unavailable" "$W/out"
+  check "re-bind key still opens" key_opens "$RB_KEY"
+  check "file kept" cidata_has juniper-rebind.key
+  rm -rf "$W/run"
+  cr prepare
+  check "then: prepare exits 0" eq "$rc" 0
+  rebind_checks
+}
+
 # A key file that opens nothing (planted, or for another card): ignored, nothing changes.
 s_rebind_bogus_key() {
   encrypted_card
@@ -773,7 +794,7 @@ scenarios=(plain_untouched happy adiantum kill_after_init_only kill_mid_resume k
   kill_after_token0 kill_after_age kill_after_addkey kill_after_token1 kill_after_grow
   failopen_no_recipients failopen_ecdsa_only failopen_key_locked failopen_derive_fails tryboot_plain
   rebind_new_board rebind_kill_after_killslot0 rebind_kill_after_addkey0 rebind_kill_after_killslot2
-  rebind_same_board rebind_bogus_key)
+  rebind_same_board rebind_bogus_key rebind_firmware_unavailable)
 
 echo "cryptroot under test: $CRYPTROOT"
 cryptsetup --version
