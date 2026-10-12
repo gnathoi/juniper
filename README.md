@@ -225,8 +225,13 @@ few extra minutes; don't cut the power (it resumes if you do). `ujust pi-status`
   laptop and run `just unlock-card /dev/sdX [IDENTITY]` (default `~/.ssh/id_ed25519`, then
   `id_rsa`): it mounts the root read-only at `/run/media/$USER/juniper-recovered`;
   `just unlock-card --close` undoes it. Keep that SSH private key as a file: age can't use an
-  agent or a hardware key. Moving a card to a new board (re-binding) isn't built yet (#76);
-  copy the data off and reflash.
+  agent or a hardware key.
+- **Moving a card to another Pi** (or to a `dd` clone on a new card): on the laptop,
+  `just rebind-card /dev/sdX [IDENTITY]` adds a one-time key (keyslot 2, and
+  `CIDATA/juniper-rebind.key`). The card's next confirmed boot, in whichever Pi it is in,
+  replaces the old board's key with that Pi's key for that card, then removes the one-time key.
+  A power cut at any step is picked up by the next boot. Until that boot, anyone holding the
+  card can unlock it with that file, so keep it with you. Under tryboot nothing changes.
 - **Alert.** `juniper_encrypted == 0 or juniper_encryption_recovery_sealed == 0` catches a
   device that is plain or whose recovery key isn't sealed yet.
 

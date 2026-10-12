@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Adds the one-time re-bind keyslot to an encrypted Juniper card (#76). Run as root, by
+# `just rebind-card` (unlock-card --rebind) and by tests/cryptroot-loop.sh.
+#   add-rebind-slot PART CIDATA_DIR AGE IDENTITY CIPHERTEXT
+# The recovery passphrase (age-decrypted from CIPHERTEXT with IDENTITY) authorises a new random
+# key T in slot 2, and T is written to CIDATA_DIR/juniper-rebind.key. The card's next confirmed
+# boot, in whichever Pi, makes slot 0 that Pi's key for that card and removes T (cryptroot
+# rebind). Neither secret goes into argv or any file but that one.
+set -euo pipefail
+die() {
+  echo "rebind-card: $*" >&2
+  exit 1
+}
+(($# == 5)) || die "usage: add-rebind-slot PART CIDATA_DIR AGE IDENTITY CIPHERTEXT"
+part=$1 dir=$2 age=$3 ident=$4 ct=$5
+slot2_re=$'(^|\n)[[:space:]]+2: luks2'
+
+p=$("$age" -d -i "$ident" <<<"$ct") || die "could not decrypt the recovery key (wrong SSH key?)"
+[[ $p =~ ^[0-9a-f]{64}$ ]] || {
+  p=
+  die "that is not a Juniper recovery key"
+}
+t=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
+[[ $t =~ ^[0-9a-f]{64}$ ]] || die "could not make a key"
+
+# A slot 2 left by an earlier rebind-card that never booted: replace it.
+if [[ $(cryptsetup luksDump "$part") =~ $slot2_re ]]; then
+  printf '%s' "$p" | cryptsetup luksKillSlot --batch-mode --key-file - "$part" 2 ||
+    die "could not replace the earlier re-bind key (not this card's recovery key?)"
+fi
+printf '%s' "$p" | cryptsetup luksAddKey --batch-mode --key-slot 2 --pbkdf pbkdf2 \
+  --pbkdf-force-iterations 1000 --key-file - "$part" /dev/fd/3 3< <(printf '%s' "$t") ||
+  die "could not add the re-bind key (not this card's recovery key?)"
+umask 077
+if ! { printf '%s\n' "$t" >"$dir/juniper-rebind.key.new" && sync &&
+  mv -f "$dir/juniper-rebind.key.new" "$dir/juniper-rebind.key" && sync; }; then
+  rm -f "$dir/juniper-rebind.key.new"
+  # Without the file nobody can use the slot; take it out again. luksKillSlot wants a key of
+  # another slot: the recovery passphrase, not T.
+  printf '%s' "$p" | cryptsetup luksKillSlot --batch-mode --key-file - "$part" 2 || true
+  p='' t=''
+  die "could not write $dir/juniper-rebind.key"
+fi
+p='' t=''

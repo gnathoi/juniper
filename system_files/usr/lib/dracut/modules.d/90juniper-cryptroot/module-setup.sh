@@ -17,7 +17,7 @@ installkernel() {
 # scripts run (tests/script-commands.py) is missing here; tests/image.sh checks the initramfs.
 install() {
   inst_multiple cryptsetup rpi-fw-crypto age sfdisk partx blkid mount umount mkdir cat grep sed \
-    head tr od cut readlink sync mv sleep basename modprobe env bash wc
+    head tr od cut readlink sync mv rm sleep basename modprobe env bash wc
   inst_simple /usr/libexec/juniper/cryptroot
   inst_simple /usr/libexec/juniper/fwkey
   inst_simple "$moddir/juniper-cryptroot-prepare.service" "$systemdsystemunitdir/juniper-cryptroot-prepare.service"
