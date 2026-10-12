@@ -272,28 +272,22 @@ guard_fire() {
   exit 0
 }
 
-# A failed first boot is final for every disk carrying this root (one of them is mounted).
+# A failed first boot is final (prepare only gets here with one disk carrying this root).
 fail_open() {
-  local d
   guard_off
   log "not encrypting: $1"
   record "not-encrypted:$1"
-  for d in "${plain[@]:1}"; do
-    if part_info "$d" && cidata_open "$disk"; then
-      case $(marker_read) in on | converting) cidata_write juniper-encrypt "not-encrypted:$1" || true ;; esac
-    fi
-  done
 }
 
 why=
 precheck() {
   local out k
-  if ((${#plain[@]} > 1)); then
-    why="two disks carry this root filesystem"
+  if [[ $(part_type "/dev/$part") != "$root_type" ]]; then
+    why="root partition is not a GPT arm64 root partition"
     return 1
   fi
-  if [[ $(part_type "/dev/$part") != "$root_type" || $cidata_disk != "$disk" ]]; then
-    why="root partition not on the boot disk"
+  if [[ $cidata_disk != "$disk" ]]; then
+    why="no CIDATA partition on the root partition's disk"
     return 1
   fi
   if ! sizes || (($(free_after) < grow_sectors)); then
@@ -507,6 +501,17 @@ prepare() {
     return 0
   fi
   wait_for_root
+  find_luks
+  # M1 (#83): every card of a release has the same root and boot UUIDs, so nothing here tells
+  # the card the Pi booted from apart from another one plugged in (a card in a USB reader).
+  # Change no disk then, final or not: the next boot without the other disk carries on.
+  d=$((${#plain[@]} + ${#luks[@]} + ${#c1[@]}))
+  if ((d > 1)); then
+    log "$d disks carry root UUID=$X (another card of this release attached?); changing none of them: remove the others and reboot"
+    if ((${#plain[@]})); then m=not-encrypted; else m=encrypted; fi
+    run_write "state=$m" "reason=$d disks carry this root filesystem; remove the others and reboot"
+    return 0
+  fi
   if ((${#plain[@]})); then
     if ! part_info "${plain[0]}"; then
       log "${plain[0]} not found in sysfs; leaving it plain"
@@ -526,7 +531,6 @@ prepare() {
     esac
     return 0
   fi
-  find_luks
   if ((${#luks[@]} + ${#c1[@]} == 0)); then
     log "no partition carries root UUID=$X"
     return 0

@@ -3989,9 +3989,9 @@ setup_case() {
 test_cryptroot_genkey_only_last() { # I7
   local c
   declare -A why=([norecipient]="no usable recovery recipient" [norecipientfile]="no usable recovery recipient"
-    [twocands]="two disks carry this root filesystem" [wrongtype]="root partition not on the boot disk"
+    [wrongtype]="root partition is not a GPT arm64 root partition"
     [nospace]="no free space after the root partition" [nocardid]="disk not found in sysfs")
-  for c in norecipient norecipientfile twocands wrongtype nospace nocardid; do
+  for c in norecipient norecipientfile wrongtype nospace nocardid; do
     cryptroot_env plain on
     setup_case "$c"
     crt prepare 2>/dev/null
@@ -4000,6 +4000,51 @@ test_cryptroot_genkey_only_last() { # I7
     check "prep ($c): no cryptsetup" not_called cryptsetup
     check "prep ($c): reason" grep -qxF "not-encrypted:${why[$c]}" "$T/cidata/juniper-encrypt"
   done
+}
+
+# M1 (#83): which disk the Pi booted from can't be told apart from another card of the same
+# release (same root and boot UUIDs). So with a second disk carrying this root, prepare changes
+# nothing on any disk, final or not, and says why; the next boot without it carries on.
+second_card() { # second_card [luks RECOVERY]: the same release's card in a USB reader (sda)
+  echo "/dev/sda1 TYPE=vfat LABEL=CIDATA UUID=C1 PART_ENTRY_TYPE=c12a7328-f81f-11d2-ba4b-00a0c93ec93b" >>"$T/blkid.db"
+  echo "/dev/sda3 TYPE=xfs LABEL=root UUID=U1 PART_ENTRY_TYPE=b921b045-1df0-41c3-af44-4c6f280d3fae" >>"$T/blkid.db"
+  bsys_part sda 1 2048 2097152
+  bsys_part sda 3 4192256 12584927
+  echo 62521344 >"$T/bsys/devices/sda/size"
+  if [[ ${1:-} == luks ]]; then luks_card sda3 "$2" 0; fi
+}
+multi_disk_untouched() { # multi_disk_untouched LABEL
+  local writes='^cryptsetup (reencrypt|luksAddKey|luksKillSlot|token import|repair)|^sfdisk|remount,rw'
+  check "prep $1: exit 0" test "$RC" = 0
+  check "prep $1: no header, partition or CIDATA write" test "$(grep -cE "$writes" "$CALLS")" = 0
+  check "prep $1: no fwkey ensure" not_called "fwkey ensure"
+  check "prep $1: says why" grep -q "2 disks carry this root filesystem" <<<"$(runf reason)"
+}
+
+test_cryptroot_two_plain_cards_change_nothing() {
+  cryptroot_env plain on
+  second_card
+  crt prepare 2>/dev/null
+  multi_disk_untouched "two plain"
+  check "prep two plain: marker still on (not final)" grep -qx on "$T/cidata/juniper-encrypt"
+  check "prep two plain: state" test "$(runf state)" = not-encrypted
+}
+
+# The boot card is encrypted; a fresh card (marker on) in a USB reader must not be encrypted.
+test_cryptroot_fresh_card_beside_encrypted_one_untouched() {
+  cryptroot_env luks-pending on
+  second_card
+  crt prepare 2>/dev/null
+  multi_disk_untouched "encrypted + fresh"
+  check "prep encrypted + fresh: no encryption started" not_called "--init-only"
+}
+
+test_cryptroot_two_encrypted_cards_change_nothing() {
+  cryptroot_env luks-pending encrypted
+  second_card luks pending
+  crt prepare 2>/dev/null
+  multi_disk_untouched "two encrypted"
+  check "prep two encrypted: no seal" not_called "cryptsetup luksAddKey"
 }
 
 test_cryptroot_firmware_unavailable_fails_open() {
@@ -4601,6 +4646,17 @@ test_encryption_status_firmware_reasons() {
   enc_run state=not-encrypted 'reason=encryption unfinished; the next boot retries'
   "$LIBEXEC/encryption-status"
   check "encryption-status: unfinished retries" stdout_has 'The next boot retries' "$LIBEXEC/encryption-status" --print
+}
+
+# M1 (#83): another card of the release was attached, so prepare changed nothing.
+test_encryption_status_other_disk_attached() {
+  enc_env
+  stub lsblk 'printf "part\ndisk\n"'
+  enc_run state=not-encrypted 'reason=2 disks carry this root filesystem; remove the others and reboot'
+  "$LIBEXEC/encryption-status"
+  check "encryption-status: other disk named" stdout_has 'another disk with this release' "$LIBEXEC/encryption-status" --print
+  check "encryption-status: other disk retries" stdout_has 'The next boot retries' "$LIBEXEC/encryption-status" --print
+  check "encryption-status: other disk, no reflash" not_stdout_has 'Reflash' "$LIBEXEC/encryption-status" --print
 }
 
 test_encryption_status_legacy_device() {
