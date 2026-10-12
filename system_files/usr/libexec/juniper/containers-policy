@@ -22,6 +22,8 @@ usrdir=${JUNIPER_TRUST_DIR_USR:-/usr/lib/juniper/trusted-images.d}
 etcdir=${JUNIPER_TRUST_DIR:-/etc/juniper/trusted-images.d}
 own_key=${JUNIPER_OWN_KEY:-/usr/share/pki/containers/juniper.pub}
 skopeo=${JUNIPER_SKOPEO:-skopeo}
+# The policy this script last installed: tells a hand edit of policy.json from a drop-in change.
+last=${JUNIPER_POLICY_LAST:-${JUNIPER_STATE_DIR:-/var/lib/juniper}/containers-policy.last.json}
 
 tmps=()
 trap 'rm -f "${tmps[@]}"' EXIT
@@ -37,14 +39,15 @@ ns_re="^(($label(\\.$label)+|localhost)(:[0-9]+)?|$label:[0-9]+)(/[a-z0-9]+(([._
 
 # protected NS: why NS can't be trusted, if it equals or sits under a scope the base sets (any
 # transport, any key format; path components, so ghcr.io/gnathoi covers ghcr.io/gnathoi/x but
-# not ghcr.io/gnathoi2; *.example.com covers its subdomains). Prints nothing if NS is free.
+# not ghcr.io/gnathoi2; *.example.com covers its subdomains on any port, as containers/image
+# strips the port before matching wildcards). Prints nothing if NS is free.
 protected() {
   # shellcheck disable=SC2016 # jq variables
   jq -r --arg ns "$1" --arg k "$own_key" '
     [.transports // {} | to_entries[] | .key as $t | .value | to_entries[]
       | select(.key != "") | .key as $s
       | select($ns == $s or ($ns | startswith($s + "/"))
-          or (($s | startswith("*.")) and ($ns | split("/")[0] | endswith($s[1:]))))
+          or (($s | startswith("*.")) and ($ns | split("/")[0] | sub(":[0-9]+$"; "") | endswith($s[1:]))))
       | {$t, $s, juniper: any(.value[]?; .keyPath? == $k or any((.keyPaths? // [])[]; . == $k))}]
     | first // empty
     | "\($ns) is at or under \(.s), which the image'"'"'s base policy sets\(if .t != "docker" then " (\(.t))" else "" end)\(if .juniper then ": Juniper'"'"'s own namespace" else "" end)"' "$base"
@@ -180,26 +183,42 @@ fi
 valid_policy "$new" || die "The base policy $base is invalid; $policy left as it is."
 
 # Say what changes compared with the current policy.json that nobody asked for here: hand edits,
-# or what a derived image baked in. Docker scopes that come and go with drop-ins aren't news.
+# or what a derived image baked in. Docker scopes that come and go with drop-ins aren't news;
+# with a record of the last install, a drop-in scope edited by hand since then is, and a scope
+# whose drop-in was removed is named as such.
 if jq empty "$policy" 2>/dev/null; then
+  lastf=$last
+  jq empty "$lastf" 2>/dev/null || lastf=/dev/null
   while read -r line; do
     log "$line"
-  done < <(jq -r --slurpfile n "$new" --slurpfile b "$base" '. as $c | $n[0] as $n | $b[0] as $b
+  done < <(jq -r --slurpfile n "$new" --slurpfile b "$base" --slurpfile l "$lastf" '. as $c | $n[0] as $n | $b[0] as $b
+    | ($l[0].transports.docker // null) as $ld
     | (if $c.default != $n.default then "policy.json default \($c.default | tojson) replaced by \($n.default | tojson)." else empty end),
-      ($c.transports // {} | to_entries[] | .key as $t | .value | to_entries[] | .key as $s
+      ($c.transports // {} | to_entries[] | .key as $t | .value | to_entries[] | .key as $s | .value as $v
         | (($n.transports[$t] // {}) | has($s)) as $kept
-        | select($n.transports[$t][$s] != .value)
-        | select($t != "docker" or ($kept | not) or ($b.transports.docker // {} | has($s)))
-        | if $kept
+        | ($t == "docker" and ($b.transports.docker // {} | has($s) | not)) as $dropin_scope
+        | ($ld != null and ($ld | has($s)) and $ld[$s] == $v) as $as_installed
+        | select($n.transports[$t][$s] != $v)
+        | if $kept and ($dropin_scope | not)
           then "policy.json had a different \($t) \($s | tojson) entry than the base policy; replaced by the base one."
+          elif $kept
+          then (if $ld != null and ($as_installed | not) then "policy.json'"'"'s docker \($s | tojson) entry was edited by hand; replaced by its drop-in'"'"'s (edit the drop-in instead)." else empty end)
+          elif $dropin_scope and $as_installed
+          then "removed docker \($s | tojson) from policy.json: its drop-in is gone."
           else "dropping \($t) \($s | tojson) from policy.json: not in the base policy or a drop-in (use ujust trust-images)." end)' "$policy")
 fi
 
-if [[ -f $policy && $(<"$new") == "$(<"$policy")" ]]; then
+# record FILE: keep what was installed (best effort; without it, hand edits of drop-in scopes go
+# unlogged and a removed drop-in's scope is logged as a hand edit).
+record() { { mkdir -p "${last%/*}" && cp "$1" "$last.tmp" && mv -f "$last.tmp" "$last"; } 2>/dev/null || rm -f "$last.tmp"; }
+
+if [[ -f $policy ]] && cmp -s "$new" "$policy"; then
+  record "$new"
   exit 0
 fi
 chmod 0644 "$new"
 [[ ! -f $policy ]] || cp -p "$policy" "$policy.bak"
 mv -f "$new" "$policy"
+record "$policy"
 if command -v restorecon >/dev/null; then restorecon "$policy" 2>/dev/null || true; fi
 log "installed $policy: the base policy and ${#good[@]} drop-in(s)."
