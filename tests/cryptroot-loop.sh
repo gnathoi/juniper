@@ -871,8 +871,8 @@ reseal_kill() { # MATCH
   cr prepare KILL_WHEN=after KILL_MATCH="$1" KILL_NTH=1
   check "prepare was SIGKILLed ($(cat "$KILL_DONE" 2>/dev/null || echo no kill))" test -e "$KILL_DONE"
   check "board key still opens" board_key_opens
+  reboot # first: the kill can leave cryptroot's CIDATA mount behind
   check "request still there" cidata_has juniper-reseal.txt
-  reboot
   rm -f "$W/kill."*
   cr prepare
   check "rerun: prepare exits 0" eq "$rc" 0
