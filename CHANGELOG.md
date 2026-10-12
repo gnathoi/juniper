@@ -10,6 +10,10 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+### Changed
+
+- First-boot encryption no longer gives up for good when the Pi's firmware key interface stops answering (a wedged mailbox, maybe a one-off): the card boots plain this time and the next boot tries again, up to three boots in a row; `ujust pi-status` says so
+
 ### Added
 
 - On an encrypted root, `ujust switch IMAGE` refuses an image without the new `org.juniper.cryptroot=v1` label (set on every Juniper image and inherited by images built `FROM` one), which couldn't unlock the root; `--force` skips the check

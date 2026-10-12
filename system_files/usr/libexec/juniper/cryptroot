@@ -283,8 +283,10 @@ fail_open() {
 }
 
 why=
+wedge=0
 precheck() {
   local out k
+  wedge=0
   if [[ $(part_type "/dev/$part") != "$root_type" ]]; then
     why="root partition is not a GPT arm64 root partition"
     return 1
@@ -311,6 +313,7 @@ precheck() {
     ok | generated) ;;
     *)
       out=${out#unavailable:}
+      [[ $out != firmware-wedged ]] || wedge=1
       why="firmware key interface unavailable: ${out:-no answer}"
       return 1
       ;;
@@ -320,10 +323,30 @@ precheck() {
     k=
     out=$(first_line "$("$fwkey" probe 2>/dev/null || true)")
     out=${out#unavailable:}
+    [[ $out != firmware-wedged ]] || wedge=1
     why="firmware key interface unavailable: derive failed (${out:-no answer})"
     return 1
   fi
   k=
+}
+
+# M4 (#83): a wedged firmware mailbox may be a one-off; the next boot (a fresh firmware) retries,
+# three boots in a row at most, counted on CIDATA. wedge_retry returns 1 once they are used up.
+wedge_file=juniper-fwkey-wedges
+wedge_max=3
+wedge_retry() {
+  local n=0
+  if [[ -r $mnt/$wedge_file ]]; then read -r n <"$mnt/$wedge_file" || n=0; fi
+  [[ $n =~ ^[0-9]+$ ]] || n=0
+  n=$((n + 1))
+  if ((n >= wedge_max)); then
+    why="$why ($wedge_max boots in a row)"
+    return 1
+  fi
+  guard_off
+  cidata_write "$wedge_file" "$n" || log "could not count the wedge on CIDATA"
+  log "the firmware key interface stopped answering; not encrypting this boot, the next boot retries ($n of $wedge_max)"
+  run_write state=not-encrypted "reason=firmware key interface stopped answering; the next boot retries ($n of $wedge_max)"
 }
 
 grow_abs() {
@@ -345,8 +368,13 @@ first_boot() {
   step=preconditions
   guard_on
   if ! precheck; then
+    if ((wedge)) && wedge_retry; then return 0; fi
     fail_open "$why"
     return 0
+  fi
+  if [[ -e $mnt/$wedge_file ]]; then
+    { cidata_rw && rm -f "$mnt/$wedge_file" && sync; } || log "could not clear $wedge_file"
+    cidata_ro
   fi
   log "encrypting the root partition $dev in place; this takes a few minutes, don't cut power"
 
