@@ -21,7 +21,7 @@ kv() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1 | tr -cd '[:print:]'; }
 
 # retries RAW: does the next boot try again by itself (rather than needing a reflash)?
 retries() {
-  case $1 in 'encryption unfinished'* | 'encryption deferred'*) return 0 ;; esac
+  case $1 in 'encryption unfinished'* | 'encryption deferred'* | *'disks carry this root'*) return 0 ;; esac
   return 1
 }
 
@@ -34,7 +34,7 @@ human() {
     *'firmware key interface unavailable'*) echo "the Pi's firmware key interface is unavailable (${1#*unavailable: })" ;;
     'encryption unfinished'*) echo "encryption was interrupted and will finish on the next boot" ;;
     'encryption deferred'*) echo "encryption starts after the first confirmed boot" ;;
-    'two disks carry'*) echo "two disks carry this root filesystem" ;;
+    *'disks carry this root'*) echo "another disk with this release's root is attached, so nothing was changed; remove it and reboot" ;;
     'no free space'*) echo "no free space after the root partition" ;;
     'no usable recovery recipient'*) echo "no usable recovery key was supplied" ;;
     *) echo "$1" ;;
