@@ -4160,6 +4160,28 @@ test_cryptroot_no_rebind_file_no_rebind() {
   check "no rebind file: no test-passphrase" not_called "--test-passphrase"
 }
 
+# bash 5.2 (the image's) exits the whole script when `x=$(<file)` fails, even under `|| return 1`
+# or in a function called from a condition. A sysfs size that can't be read must fail the
+# check it belongs to, not kill prepare.
+test_cryptroot_unreadable_sysfs_fails_the_check() {
+  cryptroot_env plain on
+  rm "$T/bsys/devices/mmcblk0/size"
+  crt prepare 2>/dev/null
+  check "prep: unreadable disk size -> exit 0" test "$RC" = 0
+  check "prep: unreadable disk size -> its own reason" grep -qxF "not-encrypted:no free space after the root partition" "$T/cidata/juniper-encrypt"
+}
+
+# The same, as a rule: shipped scripts read files with read/cat, never $(<file).
+test_no_dollar_lt_file_reads() {
+  local f bad=()
+  while IFS= read -r f; do
+    # shellcheck disable=SC2016 # a literal $(<
+    if grep -n '\$(<' "$f" >/dev/null; then bad+=("$f"); fi
+  done < <(grep -rlE '^#!.*(bash|sh)' "$ROOT/system_files" "$ROOT/system_files_desktop" "$ROOT/disk" \
+    "$ROOT/build_files" "$ROOT/tests/cryptroot-loop.sh" 2>/dev/null)
+  check "no \$(<file) in shipped scripts (bash 5.2 exits on a failed one): ${bad[*]:-none}" test ${#bad[@]} = 0
+}
+
 test_cryptroot_firmware_unavailable_fails_open() {
   cryptroot_env plain on
   echo "unavailable:no /dev/vcio" >"$T/fw.mode"

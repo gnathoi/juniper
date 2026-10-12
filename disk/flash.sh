@@ -125,7 +125,7 @@ print(f"Wi-Fi:     {ssids[0] if ssids else 'none (Ethernet)'}")
 print(f"Password:  {'set' if 'passwd' in u else 'none (SSH keys only)'}")
 PY
   local marker rec n fps l
-  marker=$(<"$2/juniper-encrypt")
+  read -r marker <"$2/juniper-encrypt" || marker=
   if [[ $marker == on ]]; then
     rec=$(grep -v '^[[:space:]]*\(#\|$\)' "$2/juniper-recovery.txt")
     if [[ $rec == age1* ]]; then
@@ -147,8 +147,9 @@ PY
 
 # print_warning CIDATA-DIR: shown just before the erase question when encryption is on.
 print_warning() {
-  local rec need="your SSH private key"
-  if [[ $(<"$1/juniper-encrypt") == on ]]; then
+  local m='' rec need="your SSH private key"
+  read -r m <"$1/juniper-encrypt" || true
+  if [[ $m == on ]]; then
     rec=$(grep -v '^[[:space:]]*\(#\|$\)' "$1/juniper-recovery.txt")
     [[ $rec == age1* ]] && need="the age identity for age1…${rec: -6}"
     echo
