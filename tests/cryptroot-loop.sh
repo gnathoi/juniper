@@ -70,7 +70,8 @@ scenario=
 cleanup() {
   set +e
   trap - ERR
-  detach
+  # detach can die (exit), which would end this trap before the work dir goes: a subshell.
+  (detach) || echo "cleanup: could not detach cleanly" >&2
   for m in "$W/m" "$W/c" "$W/cidata-mnt"; do
     while mountpoint -q "$m" 2>/dev/null; do umount -l "$m"; done
   done
@@ -258,6 +259,7 @@ group_gone() {
 
 # The plaintext disk, made once: GPT written on GPT_SIZE then the file grown to DISK_SIZE
 # (bib's backup GPT is not at the end of the card), p3 XFS root with DATA_MIB of random files.
+CANARY="juniper-plaintext-canary-$U"
 make_template() {
   truncate -s "$GPT_SIZE" "$W/disk.img"
   sfdisk -q "$W/disk.img" <<EOF
@@ -276,6 +278,8 @@ EOF
   for ((i = 0; i < n; i++)); do
     head -c 64M /dev/urandom >"$W/m/data$i"
   done
+  # Recognisable plaintext: after encryption it must be nowhere on the raw disk.
+  yes "$CANARY" | head -c 4M >"$W/m/data-canary"
   (cd "$W/m" && sha256sum data* >SHA256SUMS)
   cp "$W/m/SHA256SUMS" "$W/SHA256SUMS"
   umount "$W/m"
@@ -377,8 +381,35 @@ unlock_left_plain() { [[ $rc == 0 && ! -e /dev/mapper/juniper-root ]]; }
 unlock_refused() { [[ $rc != 0 && ! -e /dev/mapper/juniper-root ]]; }
 is_hex64() { [[ $1 =~ ^[0-9a-f]{64}$ ]]; }
 not_called() { ! grep -qE -- "$1" "$2"; }
-no_leak() { # STRING PATH...: not in any file
-  ! grep -rqaF -D skip -- "$@" 2>/dev/null
+# no_leak STRING PATH...: STRING is in no file under PATH. A missing or unreadable file fails
+# (grep's exit 2 used to pass); inside a directory, entries that vanish mid-scan are tolerated.
+no_leak() {
+  local s=$1 p rc
+  shift
+  for p; do
+    [[ -e $p ]] || {
+      echo "     no_leak: $p does not exist"
+      return 1
+    }
+    rc=0
+    if [[ -d $p ]]; then
+      grep -rqaF -D skip -s -- "$s" "$p" || rc=$?
+      ((rc != 2)) || rc=1
+    else
+      grep -qaF -- "$s" "$p" || rc=$?
+    fi
+    case $rc in
+      0)
+        echo "     no_leak: found in $p"
+        return 1
+        ;;
+      1) ;;
+      *)
+        echo "     no_leak: could not read $p"
+        return 1
+        ;;
+    esac
+  done
 }
 recovery_from_cidata() {
   local r=0
@@ -417,6 +448,7 @@ encrypted_checks() {
   check "token 1 type juniper-recovery" eq "$(jfield "$t1" type)" juniper-recovery
   slots=$(printf '%s\n' "$dump" | sed -n '/^Keyslots:/,/^Tokens:/p' | sed -n 's/^  \([0-9]\+\): .*/\1/p' | tr '\n' ' ')
   check "keyslots exactly 0 and 1" eq "$slots" "0 1 "
+  check "tokens exactly 0 and 1" eq "$(printf '%s\n' "$dump" | sed -n '/^Tokens:/,/^Digests:/p' | sed -n 's/^  \([0-9]\+\): .*/\1/p' | tr '\n' ' ')" "0 1 "
   check "cipher $cipher" eq "$(printf '%s\n' "$dump" | sed -n '/^Data segments:/,/^Keyslots:/s/^[[:space:]]*cipher:[[:space:]]*//p')" "$cipher"
   check "sector size 512" eq "$(printf '%s\n' "$dump" | sed -n '/^Data segments:/,/^Keyslots:/s/^[[:space:]]*sector:[[:space:]]*\([0-9]*\).*/\1/p')" 512
   off=$(printf '%s\n' "$dump" | sed -n '/^Data segments:/,/^Keyslots:/s/^[[:space:]]*offset:[[:space:]]*\([0-9]*\).*/\1/p')
@@ -491,6 +523,7 @@ s_happy() {
     c_umount
   )
   check "recovery key is 64 hex" is_hex64 "$r"
+  check "no plaintext (canary file) left on the raw disk" no_leak "$CANARY" "$W/disk.img"
   check "board key not on the disk image" no_leak "$KEY" "$W/disk.img"
   check "recovery key not on the disk image" no_leak "$r" "$W/disk.img"
   check "board key not in /run or /tmp" no_leak "$KEY" /run /tmp "$W/run" "$W/hook.log" "$W/out"
