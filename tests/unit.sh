@@ -5221,6 +5221,10 @@ test_unlock_card_recipe() {
   check "unlock: Justfile recipe" grep -q '^unlock-card device identity' "$ROOT/Justfile"
 }
 
+test_epel_countme_metalinks() {
+  check "epel: reporting-compatible metalinks" python3 "$ROOT/tests/test-epel-metalinks.py"
+}
+
 for t in $(declare -F | awk -v f="${UNIT_FILTER:-.}" '$3 ~ /^test_/ && $3 ~ f {print $3}'); do
   setup
   "$t"

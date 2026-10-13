@@ -22,7 +22,7 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ### Fixed
 
-- Mask the inherited `rpm-ostree-countme` timer and service: optional usage reporting fails on EPEL 10 metalink variable expansion and leaves a failed unit in the login banner (#104)
+- Resolve EPEL’s conditional metalink stream suffix for the image’s OS version so `rpm-ostree-countme` reporting succeeds instead of requesting a malformed URL; keep the timer enabled and package signature checks intact (#104)
 
 - `just flash` checks keys on the laptop before writing the card: `recovery_key` must pass the age (bech32) checksum, and each `ssh_keys` entry must be one line whose key data decodes and matches its type, with RSA keys at least 2048 bits. Before, a mistyped key passed and the card stayed plain although flash said "Encrypt: yes" (or the key just didn't work for login)
 - First-boot encryption changes no disk while a second disk with the same release's root is attached (say a fresh card in a USB reader): it used to be able to encrypt that card, or mark it permanently `not-encrypted`. The boot says why, `ujust pi-status` says to remove it, and the next boot without it carries on
