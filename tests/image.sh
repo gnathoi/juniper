@@ -53,6 +53,10 @@ fi
 need_enabled tailscaled.service firewalld.service avahi-daemon.service cloud-init.service \
   cloud-final.service podman-auto-update.timer
 [[ $(systemctl is-enabled bootc-fetch-apply-updates.timer) == masked ]]
+# Optional inherited usage reporting must not run on the bootc appliance (#104).
+for unit in rpm-ostree-countme.timer rpm-ostree-countme.service; do
+  [[ $(systemctl is-enabled "$unit") == masked ]] || fail "$unit is not masked"
+done
 grep -q 'resize_what = "/var"' /usr/lib/python3*/site-packages/cloudinit/config/cc_resizefs.py
 for k in rootflags=noatime panic=10 rd.shell=0 rd.emergency=reboot; do
   grep -q "$k" /usr/lib/bootc/kargs.d/10-juniper.toml

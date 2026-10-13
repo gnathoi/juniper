@@ -123,6 +123,9 @@ systemctl enable tailscaled.service firewalld.service avahi-daemon.service \
   juniper-firstboot-retry.service juniper-emergency-fallback.service juniper-containers-policy.service
 systemctl --global enable podman-auto-update.timer
 systemctl mask bootc-fetch-apply-updates.timer
+# bootc updates do not need rpm-ostree usage reporting. Its EPEL 10 variable
+# expansion fails with a 404 (#104); mask both units without changing DNF repos.
+systemctl mask rpm-ostree-countme.timer rpm-ostree-countme.service
 
 # --- layers: rpm-ostree's chunker gives each user.component its own layer, so a change to
 # Juniper's files does not re-send the initramfs and the other unpackaged content.
