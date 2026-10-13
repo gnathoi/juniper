@@ -53,6 +53,13 @@ fi
 need_enabled tailscaled.service firewalld.service avahi-daemon.service cloud-init.service \
   cloud-final.service podman-auto-update.timer
 [[ $(systemctl is-enabled bootc-fetch-apply-updates.timer) == masked ]]
+# Keep Count Me reporting functional, not masked (#104).
+need_enabled rpm-ostree-countme.timer
+[[ $(systemctl is-enabled rpm-ostree-countme.service) != masked ]]
+# shellcheck disable=SC2016 # this unresolved DNF expression breaks countme
+if grep -E '^[[:space:]]*metalink[[:space:]]*=' /etc/yum.repos.d/epel*.repo | grep -qF '${releasever_minor:+-z}'; then
+  fail 'EPEL metalink still contains the countme-incompatible conditional'
+fi
 grep -q 'resize_what = "/var"' /usr/lib/python3*/site-packages/cloudinit/config/cc_resizefs.py
 for k in rootflags=noatime panic=10 rd.shell=0 rd.emergency=reboot; do
   grep -q "$k" /usr/lib/bootc/kargs.d/10-juniper.toml

@@ -57,6 +57,16 @@ cp -a /fwcrypto/usr/. /usr/
 dnf -y install age # EPEL; only /usr/bin/age is used (initramfs recovery sealing)
 dnf clean all
 
+# rpm-ostree countme cannot expand EPEL's conditional stream suffix (#104).
+# Resolve only that expression for this image's OS version; keep reporting and
+# DNF's release/architecture variables and signature settings intact.
+# shellcheck source=/dev/null
+releasever=$(
+  source /usr/lib/os-release
+  printf '%s' "$VERSION_ID"
+)
+python3 /ctx/build_files/normalize-epel-metalinks.py "$releasever" /etc/yum.repos.d
+
 # Initramfs: regenerate with 90-juniper.conf (system_files), dropping what a Pi never boots
 # with (46 -> 29 MB, ~30% faster initrd stage on a Pi 5), and from this build's upgraded
 # systemd/ostree instead of the base's. /root links to /var/roothome, which a build's /var

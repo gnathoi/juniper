@@ -1,130 +1,589 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="720" height="408" viewBox="0 0 720 408" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="16">
-<title>Juniper login: logo, system summary and status</title>
-<rect width="720" height="408" rx="10" fill="#0d1117"/>
-<g transform="translate(0,0.0)"><g shape-rendering="crispEdges">
-<rect x="43.20" y="24.00" width="9.60" height="10.00" fill="#3fb950"/>
-<rect x="52.80" y="34.00" width="9.60" height="10.00" fill="#3fb950"/>
-<rect x="96.00" y="24.00" width="4.80" height="20.00" fill="#3fb950"/>
-<rect x="100.80" y="24.00" width="4.80" height="20.00" fill="#3fb950"/>
-<rect x="139.20" y="34.00" width="9.60" height="10.00" fill="#3fb950"/>
-<rect x="148.80" y="24.00" width="9.60" height="10.00" fill="#3fb950"/>
-<rect x="62.40" y="44.00" width="9.60" height="10.00" fill="#3fb950"/>
-<rect x="72.00" y="54.00" width="9.60" height="10.00" fill="#3fb950"/>
-<rect x="96.00" y="44.00" width="4.80" height="20.00" fill="#3fb950"/>
-<rect x="100.80" y="44.00" width="4.80" height="20.00" fill="#3fb950"/>
-<rect x="120.00" y="54.00" width="9.60" height="10.00" fill="#3fb950"/>
-<rect x="129.60" y="44.00" width="9.60" height="10.00" fill="#3fb950"/>
-<rect x="43.20" y="74.00" width="9.60" height="10.00" fill="#3fb950"/>
-<rect x="52.80" y="74.00" width="9.60" height="10.00" fill="#3fb950"/>
-<rect x="62.40" y="74.00" width="9.60" height="10.00" fill="#3fb950"/>
-<rect x="72.00" y="74.00" width="9.60" height="10.00" fill="#3fb950"/>
-<rect x="81.60" y="64.00" width="9.60" height="10.00" fill="#3fb950"/>
-<rect x="91.20" y="64.00" width="9.60" height="20.00" fill="#3fb950"/>
-<rect x="100.80" y="64.00" width="9.60" height="20.00" fill="#3fb950"/>
-<rect x="110.40" y="64.00" width="9.60" height="10.00" fill="#3fb950"/>
-<rect x="120.00" y="74.00" width="9.60" height="10.00" fill="#3fb950"/>
-<rect x="129.60" y="74.00" width="9.60" height="10.00" fill="#3fb950"/>
-<rect x="139.20" y="74.00" width="9.60" height="10.00" fill="#3fb950"/>
-<rect x="148.80" y="74.00" width="9.60" height="10.00" fill="#3fb950"/>
-<rect x="62.40" y="94.00" width="9.60" height="10.00" fill="#4a6bd8"/>
-<rect x="72.00" y="84.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="81.60" y="84.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="91.20" y="84.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="100.80" y="84.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="110.40" y="84.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="120.00" y="84.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="129.60" y="94.00" width="9.60" height="10.00" fill="#4a6bd8"/>
-<rect x="43.20" y="114.00" width="9.60" height="10.00" fill="#4a6bd8"/>
-<rect x="52.80" y="104.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="62.40" y="104.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="72.00" y="104.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="81.60" y="104.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="91.20" y="104.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="100.80" y="104.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="110.40" y="104.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="120.00" y="104.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="129.60" y="104.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="139.20" y="104.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="148.80" y="114.00" width="9.60" height="10.00" fill="#4a6bd8"/>
-<rect x="33.60" y="124.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="43.20" y="124.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="52.80" y="124.00" width="9.60" height="20.00" fill="#a9bdf5"/>
-<rect x="62.40" y="124.00" width="9.60" height="20.00" fill="#a9bdf5"/>
-<rect x="72.00" y="124.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="81.60" y="124.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="91.20" y="124.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="100.80" y="124.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="110.40" y="124.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="120.00" y="124.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="129.60" y="124.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="139.20" y="124.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="148.80" y="124.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="158.40" y="124.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="33.60" y="144.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="43.20" y="144.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="52.80" y="144.00" width="9.60" height="20.00" fill="#a9bdf5"/>
-<rect x="62.40" y="144.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="72.00" y="144.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="81.60" y="144.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="91.20" y="144.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="100.80" y="144.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="110.40" y="144.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="120.00" y="144.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="129.60" y="144.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="139.20" y="144.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="148.80" y="144.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="158.40" y="144.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="33.60" y="164.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="43.20" y="164.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="52.80" y="164.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="62.40" y="164.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="72.00" y="164.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="81.60" y="164.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="91.20" y="164.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="100.80" y="164.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="110.40" y="164.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="120.00" y="164.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="129.60" y="164.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="139.20" y="164.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="148.80" y="164.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="158.40" y="164.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="43.20" y="184.00" width="9.60" height="10.00" fill="#4a6bd8"/>
-<rect x="52.80" y="184.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="62.40" y="184.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="72.00" y="184.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="81.60" y="184.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="91.20" y="184.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="100.80" y="184.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="110.40" y="184.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="120.00" y="184.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="129.60" y="184.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="139.20" y="184.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="148.80" y="184.00" width="9.60" height="10.00" fill="#4a6bd8"/>
-<rect x="62.40" y="204.00" width="9.60" height="10.00" fill="#4a6bd8"/>
-<rect x="72.00" y="204.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="81.60" y="204.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="91.20" y="204.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="100.80" y="204.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="110.40" y="204.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="120.00" y="204.00" width="9.60" height="20.00" fill="#4a6bd8"/>
-<rect x="129.60" y="204.00" width="9.60" height="10.00" fill="#4a6bd8"/>
-</g>
-
-</g>
-<text x="196.8" y="39.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">juniper</tspan><tspan fill="#c9d1d9">@</tspan><tspan fill="#3fb950" font-weight="bold">juniper</tspan></text>
-<text x="196.8" y="59.0" xml:space="preserve"><tspan fill="#c9d1d9">---------------</tspan></text>
-<text x="196.8" y="79.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">OS</tspan><tspan fill="#c9d1d9">: Juniper 20261009 aarch64</tspan></text>
-<text x="196.8" y="99.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Host</tspan><tspan fill="#c9d1d9">: Raspberry Pi 5 Model B Rev 1.0</tspan></text>
-<text x="196.8" y="119.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Kernel</tspan><tspan fill="#c9d1d9">: Linux 6.12.47-v8.2.el10</tspan></text>
-<text x="196.8" y="139.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Uptime</tspan><tspan fill="#c9d1d9">: 3 days, 4 hours, 12 mins</tspan></text>
-<text x="196.8" y="159.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">CPU</tspan><tspan fill="#c9d1d9">: BCM2712 (4) @ 2.40 GHz - 51.6°C</tspan></text>
-<text x="196.8" y="179.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Memory</tspan><tspan fill="#c9d1d9">: 1.12 GiB / 3.95 GiB (28%)</tspan></text>
-<text x="196.8" y="199.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Swap</tspan><tspan fill="#c9d1d9">: 0 B / 1.97 GiB (0%)</tspan></text>
-<text x="196.8" y="219.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Disk (/var)</tspan><tspan fill="#c9d1d9">: 6.84 GiB / 57.3 GiB (12%) - xfs</tspan></text>
-<text x="196.8" y="239.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Local IP (wlan0)</tspan><tspan fill="#c9d1d9">: 192.168.1.42/24</tspan></text>
-<text x="43.2" y="279.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Image      </tspan><tspan fill="#c9d1d9">Juniper 20261009</tspan></text>
-<text x="43.2" y="299.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Tailscale  </tspan><tspan fill="#c9d1d9">100.101.7.42 (firewall: Tailscale only)</tspan></text>
-<text x="43.2" y="319.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Update     </tspan><tspan fill="#c9d1d9">staged, reboots Sat 2026-10-10 04:37:12 BST</tspan></text>
-<text x="43.2" y="339.0" xml:space="preserve"><tspan fill="#3fb950" font-weight="bold">Tip        </tspan><tspan fill="#c9d1d9">`ujust pi-status` shows temperature and throttling.</tspan></text>
-<text x="43.2" y="379.0" xml:space="preserve"><tspan fill="#8b949e">ujust for commands · ujust toggle-motd to hide this</tspan></text>
+<svg xmlns="http://www.w3.org/2000/svg" width="979" height="422" viewBox="0 0 979 422" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="16">
+<title>Live SSH login to Juniper on a Raspberry Pi 5</title>
+<desc>Captured from nat@juniper on 13 October 2026. Example network addresses substituted. Cropped to the Juniper login banner and system summary.</desc>
+<rect width="979" height="422" rx="10" fill="#0d1117"/>
+<rect x="43.20" y="24.00" width="9.60" height="11.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<rect x="52.80" y="35.00" width="9.60" height="11.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<rect x="96.00" y="24.00" width="4.80" height="22.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<rect x="100.80" y="24.00" width="4.80" height="22.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<rect x="139.20" y="35.00" width="9.60" height="11.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<rect x="148.80" y="24.00" width="9.60" height="11.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<text x="187.20" y="40.72" fill="#ff7b72" font-weight="bold">n</text>
+<text x="196.80" y="40.72" fill="#ff7b72" font-weight="bold">a</text>
+<text x="206.40" y="40.72" fill="#ff7b72" font-weight="bold">t</text>
+<text x="216.00" y="40.72" fill="#c9d1d9">@</text>
+<text x="225.60" y="40.72" fill="#ff7b72" font-weight="bold">j</text>
+<text x="235.20" y="40.72" fill="#ff7b72" font-weight="bold">u</text>
+<text x="244.80" y="40.72" fill="#ff7b72" font-weight="bold">n</text>
+<text x="254.40" y="40.72" fill="#ff7b72" font-weight="bold">i</text>
+<text x="264.00" y="40.72" fill="#ff7b72" font-weight="bold">p</text>
+<text x="273.60" y="40.72" fill="#ff7b72" font-weight="bold">e</text>
+<text x="283.20" y="40.72" fill="#ff7b72" font-weight="bold">r</text>
+<rect x="62.40" y="46.00" width="9.60" height="11.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<rect x="72.00" y="57.00" width="9.60" height="11.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<rect x="96.00" y="46.00" width="4.80" height="22.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<rect x="100.80" y="46.00" width="4.80" height="22.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<rect x="120.00" y="57.00" width="9.60" height="11.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<rect x="129.60" y="46.00" width="9.60" height="11.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<text x="187.20" y="62.72" fill="#c9d1d9">-</text>
+<text x="196.80" y="62.72" fill="#c9d1d9">-</text>
+<text x="206.40" y="62.72" fill="#c9d1d9">-</text>
+<text x="216.00" y="62.72" fill="#c9d1d9">-</text>
+<text x="225.60" y="62.72" fill="#c9d1d9">-</text>
+<text x="235.20" y="62.72" fill="#c9d1d9">-</text>
+<text x="244.80" y="62.72" fill="#c9d1d9">-</text>
+<text x="254.40" y="62.72" fill="#c9d1d9">-</text>
+<text x="264.00" y="62.72" fill="#c9d1d9">-</text>
+<text x="273.60" y="62.72" fill="#c9d1d9">-</text>
+<text x="283.20" y="62.72" fill="#c9d1d9">-</text>
+<rect x="43.20" y="79.00" width="9.60" height="11.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<rect x="52.80" y="79.00" width="9.60" height="11.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<rect x="62.40" y="79.00" width="9.60" height="11.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<rect x="72.00" y="79.00" width="9.60" height="11.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<rect x="81.60" y="68.00" width="9.60" height="11.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<rect x="91.20" y="68.00" width="9.60" height="22.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<rect x="100.80" y="68.00" width="9.60" height="22.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<rect x="110.40" y="68.00" width="9.60" height="11.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<rect x="120.00" y="79.00" width="9.60" height="11.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<rect x="129.60" y="79.00" width="9.60" height="11.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<rect x="139.20" y="79.00" width="9.60" height="11.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<rect x="148.80" y="79.00" width="9.60" height="11.00" fill="#3fb950" shape-rendering="crispEdges"/>
+<text x="187.20" y="84.72" fill="#d29922" font-weight="bold">O</text>
+<text x="196.80" y="84.72" fill="#d29922" font-weight="bold">S</text>
+<text x="206.40" y="84.72" fill="#c9d1d9">:</text>
+<text x="225.60" y="84.72" fill="#c9d1d9">J</text>
+<text x="235.20" y="84.72" fill="#c9d1d9">u</text>
+<text x="244.80" y="84.72" fill="#c9d1d9">n</text>
+<text x="254.40" y="84.72" fill="#c9d1d9">i</text>
+<text x="264.00" y="84.72" fill="#c9d1d9">p</text>
+<text x="273.60" y="84.72" fill="#c9d1d9">e</text>
+<text x="283.20" y="84.72" fill="#c9d1d9">r</text>
+<text x="302.40" y="84.72" fill="#c9d1d9">2</text>
+<text x="312.00" y="84.72" fill="#c9d1d9">0</text>
+<text x="321.60" y="84.72" fill="#c9d1d9">2</text>
+<text x="331.20" y="84.72" fill="#c9d1d9">6</text>
+<text x="340.80" y="84.72" fill="#c9d1d9">1</text>
+<text x="350.40" y="84.72" fill="#c9d1d9">0</text>
+<text x="360.00" y="84.72" fill="#c9d1d9">1</text>
+<text x="369.60" y="84.72" fill="#c9d1d9">2</text>
+<text x="388.80" y="84.72" fill="#c9d1d9">a</text>
+<text x="398.40" y="84.72" fill="#c9d1d9">a</text>
+<text x="408.00" y="84.72" fill="#c9d1d9">r</text>
+<text x="417.60" y="84.72" fill="#c9d1d9">c</text>
+<text x="427.20" y="84.72" fill="#c9d1d9">h</text>
+<text x="436.80" y="84.72" fill="#c9d1d9">6</text>
+<text x="446.40" y="84.72" fill="#c9d1d9">4</text>
+<rect x="62.40" y="101.00" width="9.60" height="11.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="72.00" y="90.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="81.60" y="90.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="91.20" y="90.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="100.80" y="90.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="110.40" y="90.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="120.00" y="90.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="129.60" y="101.00" width="9.60" height="11.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<text x="187.20" y="106.72" fill="#d29922" font-weight="bold">H</text>
+<text x="196.80" y="106.72" fill="#d29922" font-weight="bold">o</text>
+<text x="206.40" y="106.72" fill="#d29922" font-weight="bold">s</text>
+<text x="216.00" y="106.72" fill="#d29922" font-weight="bold">t</text>
+<text x="225.60" y="106.72" fill="#c9d1d9">:</text>
+<text x="244.80" y="106.72" fill="#c9d1d9">R</text>
+<text x="254.40" y="106.72" fill="#c9d1d9">a</text>
+<text x="264.00" y="106.72" fill="#c9d1d9">s</text>
+<text x="273.60" y="106.72" fill="#c9d1d9">p</text>
+<text x="283.20" y="106.72" fill="#c9d1d9">b</text>
+<text x="292.80" y="106.72" fill="#c9d1d9">e</text>
+<text x="302.40" y="106.72" fill="#c9d1d9">r</text>
+<text x="312.00" y="106.72" fill="#c9d1d9">r</text>
+<text x="321.60" y="106.72" fill="#c9d1d9">y</text>
+<text x="340.80" y="106.72" fill="#c9d1d9">P</text>
+<text x="350.40" y="106.72" fill="#c9d1d9">i</text>
+<text x="369.60" y="106.72" fill="#c9d1d9">5</text>
+<text x="388.80" y="106.72" fill="#c9d1d9">M</text>
+<text x="398.40" y="106.72" fill="#c9d1d9">o</text>
+<text x="408.00" y="106.72" fill="#c9d1d9">d</text>
+<text x="417.60" y="106.72" fill="#c9d1d9">e</text>
+<text x="427.20" y="106.72" fill="#c9d1d9">l</text>
+<text x="446.40" y="106.72" fill="#c9d1d9">B</text>
+<text x="465.60" y="106.72" fill="#c9d1d9">R</text>
+<text x="475.20" y="106.72" fill="#c9d1d9">e</text>
+<text x="484.80" y="106.72" fill="#c9d1d9">v</text>
+<text x="504.00" y="106.72" fill="#c9d1d9">1</text>
+<text x="513.60" y="106.72" fill="#c9d1d9">.</text>
+<text x="523.20" y="106.72" fill="#c9d1d9">1</text>
+<rect x="43.20" y="123.00" width="9.60" height="11.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="52.80" y="112.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="62.40" y="112.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="72.00" y="112.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="81.60" y="112.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="91.20" y="112.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="100.80" y="112.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="110.40" y="112.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="120.00" y="112.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="129.60" y="112.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="139.20" y="112.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="148.80" y="123.00" width="9.60" height="11.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<text x="187.20" y="128.72" fill="#d29922" font-weight="bold">K</text>
+<text x="196.80" y="128.72" fill="#d29922" font-weight="bold">e</text>
+<text x="206.40" y="128.72" fill="#d29922" font-weight="bold">r</text>
+<text x="216.00" y="128.72" fill="#d29922" font-weight="bold">n</text>
+<text x="225.60" y="128.72" fill="#d29922" font-weight="bold">e</text>
+<text x="235.20" y="128.72" fill="#d29922" font-weight="bold">l</text>
+<text x="244.80" y="128.72" fill="#c9d1d9">:</text>
+<text x="264.00" y="128.72" fill="#c9d1d9">L</text>
+<text x="273.60" y="128.72" fill="#c9d1d9">i</text>
+<text x="283.20" y="128.72" fill="#c9d1d9">n</text>
+<text x="292.80" y="128.72" fill="#c9d1d9">u</text>
+<text x="302.40" y="128.72" fill="#c9d1d9">x</text>
+<text x="321.60" y="128.72" fill="#c9d1d9">6</text>
+<text x="331.20" y="128.72" fill="#c9d1d9">.</text>
+<text x="340.80" y="128.72" fill="#c9d1d9">1</text>
+<text x="350.40" y="128.72" fill="#c9d1d9">2</text>
+<text x="360.00" y="128.72" fill="#c9d1d9">.</text>
+<text x="369.60" y="128.72" fill="#c9d1d9">9</text>
+<text x="379.20" y="128.72" fill="#c9d1d9">6</text>
+<text x="388.80" y="128.72" fill="#c9d1d9">-</text>
+<text x="398.40" y="128.72" fill="#c9d1d9">2</text>
+<text x="408.00" y="128.72" fill="#c9d1d9">0</text>
+<text x="417.60" y="128.72" fill="#c9d1d9">2</text>
+<text x="427.20" y="128.72" fill="#c9d1d9">6</text>
+<text x="436.80" y="128.72" fill="#c9d1d9">0</text>
+<text x="446.40" y="128.72" fill="#c9d1d9">7</text>
+<text x="456.00" y="128.72" fill="#c9d1d9">2</text>
+<text x="465.60" y="128.72" fill="#c9d1d9">4</text>
+<text x="475.20" y="128.72" fill="#c9d1d9">.</text>
+<text x="484.80" y="128.72" fill="#c9d1d9">v</text>
+<text x="494.40" y="128.72" fill="#c9d1d9">8</text>
+<text x="504.00" y="128.72" fill="#c9d1d9">.</text>
+<text x="513.60" y="128.72" fill="#c9d1d9">1</text>
+<text x="523.20" y="128.72" fill="#c9d1d9">.</text>
+<text x="532.80" y="128.72" fill="#c9d1d9">e</text>
+<text x="542.40" y="128.72" fill="#c9d1d9">l</text>
+<text x="552.00" y="128.72" fill="#c9d1d9">1</text>
+<text x="561.60" y="128.72" fill="#c9d1d9">0</text>
+<rect x="33.60" y="134.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="43.20" y="134.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="52.80" y="134.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="62.40" y="134.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="72.00" y="134.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="81.60" y="134.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="91.20" y="134.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="100.80" y="134.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="110.40" y="134.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="120.00" y="134.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="129.60" y="134.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="139.20" y="134.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="148.80" y="134.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="158.40" y="134.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<text x="187.20" y="150.72" fill="#d29922" font-weight="bold">U</text>
+<text x="196.80" y="150.72" fill="#d29922" font-weight="bold">p</text>
+<text x="206.40" y="150.72" fill="#d29922" font-weight="bold">t</text>
+<text x="216.00" y="150.72" fill="#d29922" font-weight="bold">i</text>
+<text x="225.60" y="150.72" fill="#d29922" font-weight="bold">m</text>
+<text x="235.20" y="150.72" fill="#d29922" font-weight="bold">e</text>
+<text x="244.80" y="150.72" fill="#c9d1d9">:</text>
+<text x="264.00" y="150.72" fill="#c9d1d9">1</text>
+<text x="273.60" y="150.72" fill="#c9d1d9">6</text>
+<text x="292.80" y="150.72" fill="#c9d1d9">h</text>
+<text x="302.40" y="150.72" fill="#c9d1d9">o</text>
+<text x="312.00" y="150.72" fill="#c9d1d9">u</text>
+<text x="321.60" y="150.72" fill="#c9d1d9">r</text>
+<text x="331.20" y="150.72" fill="#c9d1d9">s</text>
+<text x="340.80" y="150.72" fill="#c9d1d9">,</text>
+<text x="360.00" y="150.72" fill="#c9d1d9">2</text>
+<text x="369.60" y="150.72" fill="#c9d1d9">1</text>
+<text x="388.80" y="150.72" fill="#c9d1d9">m</text>
+<text x="398.40" y="150.72" fill="#c9d1d9">i</text>
+<text x="408.00" y="150.72" fill="#c9d1d9">n</text>
+<text x="417.60" y="150.72" fill="#c9d1d9">s</text>
+<rect x="33.60" y="156.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="43.20" y="156.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="52.80" y="156.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="62.40" y="156.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="72.00" y="156.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="81.60" y="156.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="91.20" y="156.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="100.80" y="156.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="110.40" y="156.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="120.00" y="156.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="129.60" y="156.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="139.20" y="156.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="148.80" y="156.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="158.40" y="156.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<text x="187.20" y="172.72" fill="#d29922" font-weight="bold">C</text>
+<text x="196.80" y="172.72" fill="#d29922" font-weight="bold">P</text>
+<text x="206.40" y="172.72" fill="#d29922" font-weight="bold">U</text>
+<text x="216.00" y="172.72" fill="#c9d1d9">:</text>
+<text x="235.20" y="172.72" fill="#c9d1d9">B</text>
+<text x="244.80" y="172.72" fill="#c9d1d9">C</text>
+<text x="254.40" y="172.72" fill="#c9d1d9">M</text>
+<text x="264.00" y="172.72" fill="#c9d1d9">2</text>
+<text x="273.60" y="172.72" fill="#c9d1d9">7</text>
+<text x="283.20" y="172.72" fill="#c9d1d9">1</text>
+<text x="292.80" y="172.72" fill="#c9d1d9">2</text>
+<text x="312.00" y="172.72" fill="#c9d1d9">(</text>
+<text x="321.60" y="172.72" fill="#c9d1d9">4</text>
+<text x="331.20" y="172.72" fill="#c9d1d9">)</text>
+<text x="350.40" y="172.72" fill="#c9d1d9">@</text>
+<text x="369.60" y="172.72" fill="#c9d1d9">2</text>
+<text x="379.20" y="172.72" fill="#c9d1d9">.</text>
+<text x="388.80" y="172.72" fill="#c9d1d9">4</text>
+<text x="398.40" y="172.72" fill="#c9d1d9">0</text>
+<text x="417.60" y="172.72" fill="#c9d1d9">G</text>
+<text x="427.20" y="172.72" fill="#c9d1d9">H</text>
+<text x="436.80" y="172.72" fill="#c9d1d9">z</text>
+<text x="456.00" y="172.72" fill="#c9d1d9">-</text>
+<text x="475.20" y="172.72" fill="#3fb950">4</text>
+<text x="484.80" y="172.72" fill="#3fb950">7</text>
+<text x="494.40" y="172.72" fill="#3fb950">.</text>
+<text x="504.00" y="172.72" fill="#3fb950">4</text>
+<text x="513.60" y="172.72" fill="#3fb950">°</text>
+<text x="523.20" y="172.72" fill="#3fb950">C</text>
+<rect x="33.60" y="178.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="43.20" y="178.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="52.80" y="178.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="62.40" y="178.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="72.00" y="178.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="81.60" y="178.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="91.20" y="178.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="100.80" y="178.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="110.40" y="178.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="120.00" y="178.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="129.60" y="178.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="139.20" y="178.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="148.80" y="178.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="158.40" y="178.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<text x="187.20" y="194.72" fill="#d29922" font-weight="bold">M</text>
+<text x="196.80" y="194.72" fill="#d29922" font-weight="bold">e</text>
+<text x="206.40" y="194.72" fill="#d29922" font-weight="bold">m</text>
+<text x="216.00" y="194.72" fill="#d29922" font-weight="bold">o</text>
+<text x="225.60" y="194.72" fill="#d29922" font-weight="bold">r</text>
+<text x="235.20" y="194.72" fill="#d29922" font-weight="bold">y</text>
+<text x="244.80" y="194.72" fill="#c9d1d9">:</text>
+<text x="264.00" y="194.72" fill="#c9d1d9">3</text>
+<text x="273.60" y="194.72" fill="#c9d1d9">3</text>
+<text x="283.20" y="194.72" fill="#c9d1d9">5</text>
+<text x="292.80" y="194.72" fill="#c9d1d9">.</text>
+<text x="302.40" y="194.72" fill="#c9d1d9">6</text>
+<text x="312.00" y="194.72" fill="#c9d1d9">7</text>
+<text x="331.20" y="194.72" fill="#c9d1d9">M</text>
+<text x="340.80" y="194.72" fill="#c9d1d9">i</text>
+<text x="350.40" y="194.72" fill="#c9d1d9">B</text>
+<text x="369.60" y="194.72" fill="#c9d1d9">/</text>
+<text x="388.80" y="194.72" fill="#c9d1d9">3</text>
+<text x="398.40" y="194.72" fill="#c9d1d9">.</text>
+<text x="408.00" y="194.72" fill="#c9d1d9">9</text>
+<text x="417.60" y="194.72" fill="#c9d1d9">0</text>
+<text x="436.80" y="194.72" fill="#c9d1d9">G</text>
+<text x="446.40" y="194.72" fill="#c9d1d9">i</text>
+<text x="456.00" y="194.72" fill="#c9d1d9">B</text>
+<text x="475.20" y="194.72" fill="#c9d1d9">(</text>
+<text x="484.80" y="194.72" fill="#3fb950">8</text>
+<text x="494.40" y="194.72" fill="#3fb950">%</text>
+<text x="504.00" y="194.72" fill="#c9d1d9">)</text>
+<rect x="43.20" y="200.00" width="9.60" height="11.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="52.80" y="200.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="62.40" y="200.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="72.00" y="200.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="81.60" y="200.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="91.20" y="200.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="100.80" y="200.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="110.40" y="200.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="120.00" y="200.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="129.60" y="200.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="139.20" y="200.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="148.80" y="200.00" width="9.60" height="11.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<text x="187.20" y="216.72" fill="#d29922" font-weight="bold">S</text>
+<text x="196.80" y="216.72" fill="#d29922" font-weight="bold">w</text>
+<text x="206.40" y="216.72" fill="#d29922" font-weight="bold">a</text>
+<text x="216.00" y="216.72" fill="#d29922" font-weight="bold">p</text>
+<text x="225.60" y="216.72" fill="#c9d1d9">:</text>
+<text x="244.80" y="216.72" fill="#c9d1d9">0</text>
+<text x="264.00" y="216.72" fill="#c9d1d9">B</text>
+<text x="283.20" y="216.72" fill="#c9d1d9">/</text>
+<text x="302.40" y="216.72" fill="#c9d1d9">1</text>
+<text x="312.00" y="216.72" fill="#c9d1d9">.</text>
+<text x="321.60" y="216.72" fill="#c9d1d9">9</text>
+<text x="331.20" y="216.72" fill="#c9d1d9">5</text>
+<text x="350.40" y="216.72" fill="#c9d1d9">G</text>
+<text x="360.00" y="216.72" fill="#c9d1d9">i</text>
+<text x="369.60" y="216.72" fill="#c9d1d9">B</text>
+<text x="388.80" y="216.72" fill="#c9d1d9">(</text>
+<text x="398.40" y="216.72" fill="#3fb950">0</text>
+<text x="408.00" y="216.72" fill="#3fb950">%</text>
+<text x="417.60" y="216.72" fill="#c9d1d9">)</text>
+<rect x="62.40" y="222.00" width="9.60" height="11.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="72.00" y="222.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="81.60" y="222.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="91.20" y="222.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="100.80" y="222.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="110.40" y="222.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="120.00" y="222.00" width="9.60" height="22.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<rect x="129.60" y="222.00" width="9.60" height="11.00" fill="#4a6bd8" shape-rendering="crispEdges"/>
+<text x="187.20" y="238.72" fill="#d29922" font-weight="bold">D</text>
+<text x="196.80" y="238.72" fill="#d29922" font-weight="bold">i</text>
+<text x="206.40" y="238.72" fill="#d29922" font-weight="bold">s</text>
+<text x="216.00" y="238.72" fill="#d29922" font-weight="bold">k</text>
+<text x="235.20" y="238.72" fill="#d29922" font-weight="bold">(</text>
+<text x="244.80" y="238.72" fill="#d29922" font-weight="bold">/</text>
+<text x="254.40" y="238.72" fill="#d29922" font-weight="bold">v</text>
+<text x="264.00" y="238.72" fill="#d29922" font-weight="bold">a</text>
+<text x="273.60" y="238.72" fill="#d29922" font-weight="bold">r</text>
+<text x="283.20" y="238.72" fill="#d29922" font-weight="bold">)</text>
+<text x="292.80" y="238.72" fill="#c9d1d9">:</text>
+<text x="312.00" y="238.72" fill="#c9d1d9">1</text>
+<text x="321.60" y="238.72" fill="#c9d1d9">4</text>
+<text x="331.20" y="238.72" fill="#c9d1d9">.</text>
+<text x="340.80" y="238.72" fill="#c9d1d9">0</text>
+<text x="350.40" y="238.72" fill="#c9d1d9">9</text>
+<text x="369.60" y="238.72" fill="#c9d1d9">G</text>
+<text x="379.20" y="238.72" fill="#c9d1d9">i</text>
+<text x="388.80" y="238.72" fill="#c9d1d9">B</text>
+<text x="408.00" y="238.72" fill="#c9d1d9">/</text>
+<text x="427.20" y="238.72" fill="#c9d1d9">1</text>
+<text x="436.80" y="238.72" fill="#c9d1d9">1</text>
+<text x="446.40" y="238.72" fill="#c9d1d9">7</text>
+<text x="456.00" y="238.72" fill="#c9d1d9">.</text>
+<text x="465.60" y="238.72" fill="#c9d1d9">1</text>
+<text x="475.20" y="238.72" fill="#c9d1d9">3</text>
+<text x="494.40" y="238.72" fill="#c9d1d9">G</text>
+<text x="504.00" y="238.72" fill="#c9d1d9">i</text>
+<text x="513.60" y="238.72" fill="#c9d1d9">B</text>
+<text x="532.80" y="238.72" fill="#c9d1d9">(</text>
+<text x="542.40" y="238.72" fill="#3fb950">1</text>
+<text x="552.00" y="238.72" fill="#3fb950">2</text>
+<text x="561.60" y="238.72" fill="#3fb950">%</text>
+<text x="571.20" y="238.72" fill="#c9d1d9">)</text>
+<text x="590.40" y="238.72" fill="#c9d1d9">-</text>
+<text x="609.60" y="238.72" fill="#c9d1d9">x</text>
+<text x="619.20" y="238.72" fill="#c9d1d9">f</text>
+<text x="628.80" y="238.72" fill="#c9d1d9">s</text>
+<text x="187.20" y="260.72" fill="#d29922" font-weight="bold">L</text>
+<text x="196.80" y="260.72" fill="#d29922" font-weight="bold">o</text>
+<text x="206.40" y="260.72" fill="#d29922" font-weight="bold">c</text>
+<text x="216.00" y="260.72" fill="#d29922" font-weight="bold">a</text>
+<text x="225.60" y="260.72" fill="#d29922" font-weight="bold">l</text>
+<text x="244.80" y="260.72" fill="#d29922" font-weight="bold">I</text>
+<text x="254.40" y="260.72" fill="#d29922" font-weight="bold">P</text>
+<text x="273.60" y="260.72" fill="#d29922" font-weight="bold">(</text>
+<text x="283.20" y="260.72" fill="#d29922" font-weight="bold">e</text>
+<text x="292.80" y="260.72" fill="#d29922" font-weight="bold">n</text>
+<text x="302.40" y="260.72" fill="#d29922" font-weight="bold">d</text>
+<text x="312.00" y="260.72" fill="#d29922" font-weight="bold">0</text>
+<text x="321.60" y="260.72" fill="#d29922" font-weight="bold">)</text>
+<text x="331.20" y="260.72" fill="#c9d1d9">:</text>
+<text x="350.40" y="260.72" fill="#c9d1d9">1</text>
+<text x="360.00" y="260.72" fill="#c9d1d9">9</text>
+<text x="369.60" y="260.72" fill="#c9d1d9">2</text>
+<text x="379.20" y="260.72" fill="#c9d1d9">.</text>
+<text x="388.80" y="260.72" fill="#c9d1d9">0</text>
+<text x="398.40" y="260.72" fill="#c9d1d9">.</text>
+<text x="408.00" y="260.72" fill="#c9d1d9">2</text>
+<text x="417.60" y="260.72" fill="#c9d1d9">.</text>
+<text x="427.20" y="260.72" fill="#c9d1d9">1</text>
+<text x="436.80" y="260.72" fill="#c9d1d9">0</text>
+<text x="446.40" y="260.72" fill="#c9d1d9">/</text>
+<text x="456.00" y="260.72" fill="#c9d1d9">2</text>
+<text x="465.60" y="260.72" fill="#c9d1d9">4</text>
+<text x="43.20" y="282.72" fill="#3fb950" font-weight="bold">I</text>
+<text x="52.80" y="282.72" fill="#3fb950" font-weight="bold">m</text>
+<text x="62.40" y="282.72" fill="#3fb950" font-weight="bold">a</text>
+<text x="72.00" y="282.72" fill="#3fb950" font-weight="bold">g</text>
+<text x="81.60" y="282.72" fill="#3fb950" font-weight="bold">e</text>
+<text x="148.80" y="282.72" fill="#c9d1d9">J</text>
+<text x="158.40" y="282.72" fill="#c9d1d9">u</text>
+<text x="168.00" y="282.72" fill="#c9d1d9">n</text>
+<text x="177.60" y="282.72" fill="#c9d1d9">i</text>
+<text x="187.20" y="282.72" fill="#c9d1d9">p</text>
+<text x="196.80" y="282.72" fill="#c9d1d9">e</text>
+<text x="206.40" y="282.72" fill="#c9d1d9">r</text>
+<text x="225.60" y="282.72" fill="#c9d1d9">2</text>
+<text x="235.20" y="282.72" fill="#c9d1d9">0</text>
+<text x="244.80" y="282.72" fill="#c9d1d9">2</text>
+<text x="254.40" y="282.72" fill="#c9d1d9">6</text>
+<text x="264.00" y="282.72" fill="#c9d1d9">1</text>
+<text x="273.60" y="282.72" fill="#c9d1d9">0</text>
+<text x="283.20" y="282.72" fill="#c9d1d9">1</text>
+<text x="292.80" y="282.72" fill="#c9d1d9">2</text>
+<text x="43.20" y="304.72" fill="#3fb950" font-weight="bold">T</text>
+<text x="52.80" y="304.72" fill="#3fb950" font-weight="bold">a</text>
+<text x="62.40" y="304.72" fill="#3fb950" font-weight="bold">i</text>
+<text x="72.00" y="304.72" fill="#3fb950" font-weight="bold">l</text>
+<text x="81.60" y="304.72" fill="#3fb950" font-weight="bold">s</text>
+<text x="91.20" y="304.72" fill="#3fb950" font-weight="bold">c</text>
+<text x="100.80" y="304.72" fill="#3fb950" font-weight="bold">a</text>
+<text x="110.40" y="304.72" fill="#3fb950" font-weight="bold">l</text>
+<text x="120.00" y="304.72" fill="#3fb950" font-weight="bold">e</text>
+<text x="148.80" y="304.72" fill="#c9d1d9">1</text>
+<text x="158.40" y="304.72" fill="#c9d1d9">0</text>
+<text x="168.00" y="304.72" fill="#c9d1d9">0</text>
+<text x="177.60" y="304.72" fill="#c9d1d9">.</text>
+<text x="187.20" y="304.72" fill="#c9d1d9">6</text>
+<text x="196.80" y="304.72" fill="#c9d1d9">4</text>
+<text x="206.40" y="304.72" fill="#c9d1d9">.</text>
+<text x="216.00" y="304.72" fill="#c9d1d9">0</text>
+<text x="225.60" y="304.72" fill="#c9d1d9">.</text>
+<text x="235.20" y="304.72" fill="#c9d1d9">1</text>
+<text x="244.80" y="304.72" fill="#c9d1d9">0</text>
+<text x="264.00" y="304.72" fill="#c9d1d9">(</text>
+<text x="273.60" y="304.72" fill="#c9d1d9">f</text>
+<text x="283.20" y="304.72" fill="#c9d1d9">i</text>
+<text x="292.80" y="304.72" fill="#c9d1d9">r</text>
+<text x="302.40" y="304.72" fill="#c9d1d9">e</text>
+<text x="312.00" y="304.72" fill="#c9d1d9">w</text>
+<text x="321.60" y="304.72" fill="#c9d1d9">a</text>
+<text x="331.20" y="304.72" fill="#c9d1d9">l</text>
+<text x="340.80" y="304.72" fill="#c9d1d9">l</text>
+<text x="350.40" y="304.72" fill="#c9d1d9">:</text>
+<text x="369.60" y="304.72" fill="#c9d1d9">T</text>
+<text x="379.20" y="304.72" fill="#c9d1d9">a</text>
+<text x="388.80" y="304.72" fill="#c9d1d9">i</text>
+<text x="398.40" y="304.72" fill="#c9d1d9">l</text>
+<text x="408.00" y="304.72" fill="#c9d1d9">s</text>
+<text x="417.60" y="304.72" fill="#c9d1d9">c</text>
+<text x="427.20" y="304.72" fill="#c9d1d9">a</text>
+<text x="436.80" y="304.72" fill="#c9d1d9">l</text>
+<text x="446.40" y="304.72" fill="#c9d1d9">e</text>
+<text x="465.60" y="304.72" fill="#c9d1d9">o</text>
+<text x="475.20" y="304.72" fill="#c9d1d9">n</text>
+<text x="484.80" y="304.72" fill="#c9d1d9">l</text>
+<text x="494.40" y="304.72" fill="#c9d1d9">y</text>
+<text x="504.00" y="304.72" fill="#c9d1d9">)</text>
+<text x="43.20" y="326.72" fill="#3fb950" font-weight="bold">U</text>
+<text x="52.80" y="326.72" fill="#3fb950" font-weight="bold">p</text>
+<text x="62.40" y="326.72" fill="#3fb950" font-weight="bold">d</text>
+<text x="72.00" y="326.72" fill="#3fb950" font-weight="bold">a</text>
+<text x="81.60" y="326.72" fill="#3fb950" font-weight="bold">t</text>
+<text x="91.20" y="326.72" fill="#3fb950" font-weight="bold">e</text>
+<text x="148.80" y="326.72" fill="#c9d1d9">u</text>
+<text x="158.40" y="326.72" fill="#c9d1d9">p</text>
+<text x="177.60" y="326.72" fill="#c9d1d9">t</text>
+<text x="187.20" y="326.72" fill="#c9d1d9">o</text>
+<text x="206.40" y="326.72" fill="#c9d1d9">d</text>
+<text x="216.00" y="326.72" fill="#c9d1d9">a</text>
+<text x="225.60" y="326.72" fill="#c9d1d9">t</text>
+<text x="235.20" y="326.72" fill="#c9d1d9">e</text>
+<text x="43.20" y="348.72" fill="#3fb950" font-weight="bold">T</text>
+<text x="52.80" y="348.72" fill="#3fb950" font-weight="bold">i</text>
+<text x="62.40" y="348.72" fill="#3fb950" font-weight="bold">p</text>
+<text x="148.80" y="348.72" fill="#c9d1d9">L</text>
+<text x="158.40" y="348.72" fill="#c9d1d9">o</text>
+<text x="168.00" y="348.72" fill="#c9d1d9">n</text>
+<text x="177.60" y="348.72" fill="#c9d1d9">g</text>
+<text x="187.20" y="348.72" fill="#c9d1d9">-</text>
+<text x="196.80" y="348.72" fill="#c9d1d9">r</text>
+<text x="206.40" y="348.72" fill="#c9d1d9">u</text>
+<text x="216.00" y="348.72" fill="#c9d1d9">n</text>
+<text x="225.60" y="348.72" fill="#c9d1d9">n</text>
+<text x="235.20" y="348.72" fill="#c9d1d9">i</text>
+<text x="244.80" y="348.72" fill="#c9d1d9">n</text>
+<text x="254.40" y="348.72" fill="#c9d1d9">g</text>
+<text x="273.60" y="348.72" fill="#c9d1d9">s</text>
+<text x="283.20" y="348.72" fill="#c9d1d9">e</text>
+<text x="292.80" y="348.72" fill="#c9d1d9">r</text>
+<text x="302.40" y="348.72" fill="#c9d1d9">v</text>
+<text x="312.00" y="348.72" fill="#c9d1d9">i</text>
+<text x="321.60" y="348.72" fill="#c9d1d9">c</text>
+<text x="331.20" y="348.72" fill="#c9d1d9">e</text>
+<text x="340.80" y="348.72" fill="#c9d1d9">s</text>
+<text x="360.00" y="348.72" fill="#c9d1d9">b</text>
+<text x="369.60" y="348.72" fill="#c9d1d9">e</text>
+<text x="379.20" y="348.72" fill="#c9d1d9">l</text>
+<text x="388.80" y="348.72" fill="#c9d1d9">o</text>
+<text x="398.40" y="348.72" fill="#c9d1d9">n</text>
+<text x="408.00" y="348.72" fill="#c9d1d9">g</text>
+<text x="427.20" y="348.72" fill="#c9d1d9">i</text>
+<text x="436.80" y="348.72" fill="#c9d1d9">n</text>
+<text x="456.00" y="348.72" fill="#c9d1d9">P</text>
+<text x="465.60" y="348.72" fill="#c9d1d9">o</text>
+<text x="475.20" y="348.72" fill="#c9d1d9">d</text>
+<text x="484.80" y="348.72" fill="#c9d1d9">m</text>
+<text x="494.40" y="348.72" fill="#c9d1d9">a</text>
+<text x="504.00" y="348.72" fill="#c9d1d9">n</text>
+<text x="523.20" y="348.72" fill="#c9d1d9">q</text>
+<text x="532.80" y="348.72" fill="#c9d1d9">u</text>
+<text x="542.40" y="348.72" fill="#c9d1d9">a</text>
+<text x="552.00" y="348.72" fill="#c9d1d9">d</text>
+<text x="561.60" y="348.72" fill="#c9d1d9">l</text>
+<text x="571.20" y="348.72" fill="#c9d1d9">e</text>
+<text x="580.80" y="348.72" fill="#c9d1d9">t</text>
+<text x="590.40" y="348.72" fill="#c9d1d9">s</text>
+<text x="600.00" y="348.72" fill="#c9d1d9">:</text>
+<text x="619.20" y="348.72" fill="#c9d1d9">/</text>
+<text x="628.80" y="348.72" fill="#c9d1d9">e</text>
+<text x="638.40" y="348.72" fill="#c9d1d9">t</text>
+<text x="648.00" y="348.72" fill="#c9d1d9">c</text>
+<text x="657.60" y="348.72" fill="#c9d1d9">/</text>
+<text x="667.20" y="348.72" fill="#c9d1d9">c</text>
+<text x="676.80" y="348.72" fill="#c9d1d9">o</text>
+<text x="686.40" y="348.72" fill="#c9d1d9">n</text>
+<text x="696.00" y="348.72" fill="#c9d1d9">t</text>
+<text x="705.60" y="348.72" fill="#c9d1d9">a</text>
+<text x="715.20" y="348.72" fill="#c9d1d9">i</text>
+<text x="724.80" y="348.72" fill="#c9d1d9">n</text>
+<text x="734.40" y="348.72" fill="#c9d1d9">e</text>
+<text x="744.00" y="348.72" fill="#c9d1d9">r</text>
+<text x="753.60" y="348.72" fill="#c9d1d9">s</text>
+<text x="763.20" y="348.72" fill="#c9d1d9">/</text>
+<text x="772.80" y="348.72" fill="#c9d1d9">s</text>
+<text x="782.40" y="348.72" fill="#c9d1d9">y</text>
+<text x="792.00" y="348.72" fill="#c9d1d9">s</text>
+<text x="801.60" y="348.72" fill="#c9d1d9">t</text>
+<text x="811.20" y="348.72" fill="#c9d1d9">e</text>
+<text x="820.80" y="348.72" fill="#c9d1d9">m</text>
+<text x="830.40" y="348.72" fill="#c9d1d9">d</text>
+<text x="840.00" y="348.72" fill="#c9d1d9">/</text>
+<text x="849.60" y="348.72" fill="#c9d1d9">*</text>
+<text x="859.20" y="348.72" fill="#c9d1d9">.</text>
+<text x="868.80" y="348.72" fill="#c9d1d9">c</text>
+<text x="878.40" y="348.72" fill="#c9d1d9">o</text>
+<text x="888.00" y="348.72" fill="#c9d1d9">n</text>
+<text x="897.60" y="348.72" fill="#c9d1d9">t</text>
+<text x="907.20" y="348.72" fill="#c9d1d9">a</text>
+<text x="916.80" y="348.72" fill="#c9d1d9">i</text>
+<text x="926.40" y="348.72" fill="#c9d1d9">n</text>
+<text x="936.00" y="348.72" fill="#c9d1d9">e</text>
+<text x="945.60" y="348.72" fill="#c9d1d9">r</text>
+<text x="43.20" y="392.72" fill="#c9d1d9">u</text>
+<text x="52.80" y="392.72" fill="#c9d1d9">j</text>
+<text x="62.40" y="392.72" fill="#c9d1d9">u</text>
+<text x="72.00" y="392.72" fill="#c9d1d9">s</text>
+<text x="81.60" y="392.72" fill="#c9d1d9">t</text>
+<text x="100.80" y="392.72" fill="#c9d1d9">f</text>
+<text x="110.40" y="392.72" fill="#c9d1d9">o</text>
+<text x="120.00" y="392.72" fill="#c9d1d9">r</text>
+<text x="139.20" y="392.72" fill="#c9d1d9">c</text>
+<text x="148.80" y="392.72" fill="#c9d1d9">o</text>
+<text x="158.40" y="392.72" fill="#c9d1d9">m</text>
+<text x="168.00" y="392.72" fill="#c9d1d9">m</text>
+<text x="177.60" y="392.72" fill="#c9d1d9">a</text>
+<text x="187.20" y="392.72" fill="#c9d1d9">n</text>
+<text x="196.80" y="392.72" fill="#c9d1d9">d</text>
+<text x="206.40" y="392.72" fill="#c9d1d9">s</text>
+<text x="225.60" y="392.72" fill="#c9d1d9">·</text>
+<text x="244.80" y="392.72" fill="#c9d1d9">u</text>
+<text x="254.40" y="392.72" fill="#c9d1d9">j</text>
+<text x="264.00" y="392.72" fill="#c9d1d9">u</text>
+<text x="273.60" y="392.72" fill="#c9d1d9">s</text>
+<text x="283.20" y="392.72" fill="#c9d1d9">t</text>
+<text x="302.40" y="392.72" fill="#c9d1d9">t</text>
+<text x="312.00" y="392.72" fill="#c9d1d9">o</text>
+<text x="321.60" y="392.72" fill="#c9d1d9">g</text>
+<text x="331.20" y="392.72" fill="#c9d1d9">g</text>
+<text x="340.80" y="392.72" fill="#c9d1d9">l</text>
+<text x="350.40" y="392.72" fill="#c9d1d9">e</text>
+<text x="360.00" y="392.72" fill="#c9d1d9">-</text>
+<text x="369.60" y="392.72" fill="#c9d1d9">m</text>
+<text x="379.20" y="392.72" fill="#c9d1d9">o</text>
+<text x="388.80" y="392.72" fill="#c9d1d9">t</text>
+<text x="398.40" y="392.72" fill="#c9d1d9">d</text>
+<text x="417.60" y="392.72" fill="#c9d1d9">t</text>
+<text x="427.20" y="392.72" fill="#c9d1d9">o</text>
+<text x="446.40" y="392.72" fill="#c9d1d9">h</text>
+<text x="456.00" y="392.72" fill="#c9d1d9">i</text>
+<text x="465.60" y="392.72" fill="#c9d1d9">d</text>
+<text x="475.20" y="392.72" fill="#c9d1d9">e</text>
+<text x="494.40" y="392.72" fill="#c9d1d9">t</text>
+<text x="504.00" y="392.72" fill="#c9d1d9">h</text>
+<text x="513.60" y="392.72" fill="#c9d1d9">i</text>
+<text x="523.20" y="392.72" fill="#c9d1d9">s</text>
 </svg>
