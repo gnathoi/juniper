@@ -16,6 +16,8 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ### Added
 
+- `juniper`, `juniper-desktop`: a friendlier interactive bash. The Brewfile adds atuin (Ctrl-R history search; local only: no update check, no AI binding, no sync until `atuin login`), starship (a plain-text prompt that works on the serial console), zoxide (`z`), carapace completions, plus eza, bat, fd, git-delta, tealdeer, lazygit, yq, dysk and ncdu. `/etc/profile.d/juniper-shell.sh` hooks the shell ones in once they're installed, never for root or for a user whose PATH reaches someone else's Homebrew; `ujust toggle-shell` turns them off for your user
+- An image update that changes the Brewfile's list installs the new tools at your next login (and reinstalls any of its tools you removed); before, `brew-tools` ran only once per user
 - `ujust recovery-reseal FILE` re-seals an encrypted root's recovery key to new SSH (ed25519, RSA) or age public keys on the next boot, so a lost laptop key can be retired without reflashing; `--status` and `--cancel` until then
 - On an encrypted root, `ujust switch IMAGE` refuses an image without the new `org.juniper.cryptroot=v1` label (set on every Juniper image and inherited by images built `FROM` one), which couldn't unlock the root; `--force` skips the check
 - `just rebind-card DEVICE [IDENTITY]` moves an encrypted card to another Pi, or a cloned card to its new card, without reflashing: it adds a one-time key with your recovery key, and the card's next confirmed boot rebinds keyslot 0 to that Pi and card and removes it (power-cut safe)

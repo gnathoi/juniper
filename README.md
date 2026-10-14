@@ -27,7 +27,8 @@ A Pi 5 running `juniper`. `juniper-minimal` shows just the status block.
 | `ujust` core: update, update-schedule, lan-ssh, tailscale-*, pi-status, enable-metrics | yes | yes | yes |
 | Login status (Tailscale, update state) | yes | yes | yes |
 | Juniper logo + system summary at login | no | yes | yes |
-| Homebrew, distrobox, git; zellij, neovim, btop, ripgrep, fzf via a Brewfile | no | yes | yes |
+| Homebrew, distrobox, git; zellij, neovim, btop, ripgrep, fzf, lazygit and more via a Brewfile | no | yes | yes |
+| Shell extras: starship prompt, atuin Ctrl-R history, zoxide, carapace completions (`ujust toggle-shell`) | no | yes | yes |
 | `ujust devbox`, `ujust install-podlet` | no | yes | yes |
 | Firefox and the Bazaar app store (Flathub) | no | no | yes |
 

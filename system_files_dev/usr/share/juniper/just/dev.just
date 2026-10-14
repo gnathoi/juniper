@@ -20,3 +20,10 @@ install-podlet:
 # Install (or re-install) Juniper's default CLI tools from /usr/share/juniper/Brewfile
 brew-tools:
     /usr/libexec/juniper/brew-tools
+
+# Turn Juniper's shell extras (starship prompt, atuin Ctrl-R, zoxide, carapace, fzf keys) off or on
+toggle-shell:
+    #!/usr/bin/bash
+    set -euo pipefail
+    f="$HOME/.config/juniper/no-shell"
+    if [[ -e $f ]]; then rm "$f"; echo "Shell extras on in new shells."; else mkdir -p "${f%/*}"; touch "$f"; echo "Shell extras off in new shells."; fi

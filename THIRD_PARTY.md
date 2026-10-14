@@ -18,6 +18,7 @@ components, unmodified, under their own licenses. License texts are in the image
 | podman, firewalld, cloud-init, avahi, NetworkManager, … | per package | AlmaLinux AppStream/BaseOS |
 | ublue-os/brew: Homebrew tarball, profile scripts and units (`juniper` image) | Apache-2.0 | github.com/ublue-os/brew |
 | Homebrew | BSD-2-Clause | github.com/Homebrew/brew |
+| starship's `plain-text-symbols` preset, as `/usr/share/juniper/starship.toml` (`juniper` image) | ISC | github.com/starship/starship |
 | node_exporter (only if you run `ujust enable-metrics`; pulled on the device) | Apache-2.0 | quay.io/prometheus/node-exporter |
 
 Juniper builds `FROM` the AlmaLinux image; no files from AlmaLinux/bootc-images-rpi

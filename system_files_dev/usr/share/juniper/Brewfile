@@ -1,8 +1,25 @@
 # Juniper's default CLI tools, installed with Homebrew at first login (juniper-brew-tools.service)
 # and kept current by brew-upgrade.timer. Add your own with `brew install`; re-run this file
-# with `ujust brew-tools`.
+# with `ujust brew-tools`. When an image update changes the list, the next login runs it again
+# (which also reinstalls any of these you removed). /etc/profile.d/juniper-shell.sh hooks the
+# shell ones in (`ujust toggle-shell`).
 brew "zellij"
 brew "neovim"
 brew "btop"
 brew "ripgrep"
 brew "fzf"
+# Shell: history search (Ctrl-R), prompt, directory jumping (z), completions
+brew "atuin"
+brew "starship"
+brew "zoxide"
+brew "carapace"
+# Nicer ls, cat, find, git diffs, tldr pages and git TUI; YAML/TOML queries; disk usage
+brew "eza"
+brew "bat"
+brew "fd"
+brew "git-delta"
+brew "tealdeer"
+brew "lazygit"
+brew "yq"
+brew "dysk"
+brew "ncdu"

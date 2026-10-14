@@ -1087,6 +1087,111 @@ test_brew_tools_installs_brewfile_once() {
   check "brew-tools: explicit run (ujust brew-tools) always runs" called "brew bundle"
 }
 
+test_brew_tools_reruns_when_brewfile_changes() {
+  brew_env
+  "$ROOT/system_files_dev/usr/libexec/juniper/brew-tools" --first-login >/dev/null
+  : >"$CALLS"
+  echo 'brew "atuin"' >>"$JUNIPER_BREWFILE"
+  "$ROOT/system_files_dev/usr/libexec/juniper/brew-tools" --first-login >/dev/null
+  check "brew-tools: a changed Brewfile (image update) re-runs at login" called "brew bundle"
+  : >"$CALLS"
+  "$ROOT/system_files_dev/usr/libexec/juniper/brew-tools" --first-login >/dev/null
+  check "brew-tools: ...and only once" not_called "brew bundle"
+  printf '# a new comment\n' >>"$JUNIPER_BREWFILE"
+  "$ROOT/system_files_dev/usr/libexec/juniper/brew-tools" --first-login >/dev/null
+  check "brew-tools: comment-only change -> no re-run" not_called "brew bundle"
+}
+
+test_brew_tools_failed_bundle_retried() {
+  brew_env
+  # shellcheck disable=SC2016 # literal
+  printf '#!/usr/bin/env bash\necho "brew $*" >>"$CALLS"\nexit 1\n' >"$JUNIPER_BREW_PREFIX/bin/brew"
+  check "brew-tools: failed bundle fails" fails "$ROOT/system_files_dev/usr/libexec/juniper/brew-tools" --first-login
+  check "brew-tools: failed bundle not marked done" test ! -e "$JUNIPER_BREW_STATE/brew-tools.done"
+}
+
+# shell_env: interactive bash on a pty (script) sourcing juniper-shell.sh, with every tool stubbed
+# to log its argv; the prefix is ours, as brew-setup makes it for the first user.
+SHELL_SH=$ROOT/system_files_dev/etc/profile.d/juniper-shell.sh
+SCRIPT=$(command -v script || echo script) # util-linux; gives the shell a pty
+shell_env() {
+  export HOME=$T/home HOMEBREW_PREFIX=$T/brew
+  unset STARSHIP_CONFIG ATUIN_UPDATE_CHECK
+  mkdir -p "$HOME" "$HOMEBREW_PREFIX"
+  for cmd in carapace fzf atuin zoxide starship; do stub "$cmd" ''; done
+}
+# run_shell [TERM] [PREFIX]: the snippet's stderr, then "cfg=" and "upd=" lines.
+run_shell() {
+  TERM=${1:-xterm} "$SCRIPT" -qec "bash --norc --noprofile -i -c \". '$SHELL_SH'; \
+    echo \\\"cfg=\\\${STARSHIP_CONFIG-}\\\"; echo \\\"upd=\\\${ATUIN_UPDATE_CHECK-}\\\"\"" /dev/null |
+    tr -d '\r' | grep -v -e 'job control' -e 'process group'
+}
+first_of() { grep -o -E "^($1)" "$CALLS" | head -1; }
+
+test_shell_hooks_installed_tools() {
+  shell_env
+  local out
+  out=$(run_shell)
+  check "shell: carapace completions" called "carapace _carapace bash"
+  check "shell: fzf key bindings" called "fzf --bash"
+  check "shell: atuin on Ctrl-R only, no AI binding" called "atuin init bash --disable-up-arrow --disable-ai"
+  check "shell: zoxide" called "zoxide init bash"
+  check "shell: starship prompt" called "starship init bash"
+  check "shell: carapace before fzf (fzf wraps its completions)" test "$(first_of 'carapace|fzf')" = carapace
+  check "shell: fzf before atuin (atuin keeps Ctrl-R)" test "$(first_of 'fzf|atuin')" = fzf
+  check "shell: shipped starship config when the user has none" grep -qx "cfg=/usr/share/juniper/starship.toml" <<<"$out"
+  check "shell: atuin update check off" grep -qx "upd=false" <<<"$out"
+  check "shell: hooks are quiet" test -z "$(grep -v -e '^cfg=' -e '^upd=' <<<"$out")"
+  : >"$CALLS"
+  export ATUIN_UPDATE_CHECK=true
+  check "shell: user's atuin update choice kept" grep -qx "upd=true" <<<"$(run_shell)"
+}
+
+test_shell_user_starship_config_wins() {
+  shell_env
+  mkdir -p "$HOME/.config" && : >"$HOME/.config/starship.toml"
+  check "shell: user's starship.toml wins" grep -qx "cfg=" <<<"$(run_shell)"
+  # A child shell (zellij pane, exec bash) inheriting our default sees the user's new file too
+  export STARSHIP_CONFIG=/usr/share/juniper/starship.toml
+  check "shell: inherited default yields to a new starship.toml" grep -qx "cfg=" <<<"$(run_shell)"
+  export STARSHIP_CONFIG=$T/mine.toml
+  check "shell: user's own STARSHIP_CONFIG kept" grep -qx "cfg=$T/mine.toml" <<<"$(run_shell)"
+}
+
+test_shell_skips_where_it_should() {
+  shell_env
+  run_shell dumb >/dev/null
+  check "shell: TERM=dumb -> no hooks" not_called "init bash"
+  mkdir -p "$HOME/.config/juniper" && : >"$HOME/.config/juniper/no-shell"
+  run_shell >/dev/null
+  check "shell: no-shell opt-out -> no hooks" not_called "init bash"
+  rm "$HOME/.config/juniper/no-shell"
+  bash --norc --noprofile -c ". '$SHELL_SH'"
+  check "shell: non-interactive -> no hooks" not_called "init bash"
+  bash --norc --noprofile -i -c ". '$SHELL_SH'" </dev/null >/dev/null 2>&1
+  check "shell: interactive without a tty (ssh -T) -> no hooks" not_called "init bash"
+  sh -c ". '$SHELL_SH'"
+  check "shell: plain sh -> no hooks, no errors" not_called "init bash"
+  HOMEBREW_PREFIX=/ run_shell >/dev/null
+  check "shell: someone else's Homebrew prefix -> no hooks" not_called "init bash"
+  # Root never runs the first user's (user-writable) brew binaries at its prompt
+  if unshare -r true 2>/dev/null; then
+    TERM=xterm unshare -r "$SCRIPT" -qec "bash --norc --noprofile -i -c \". '$SHELL_SH'\"" /dev/null >/dev/null 2>&1
+    check "shell: root -> no hooks" not_called "init bash"
+  else
+    # shellcheck disable=SC2016 # literal
+    check "shell: root -> no hooks (static; no user namespaces here)" grep -qF '$EUID -ne 0' "$SHELL_SH"
+  fi
+}
+
+test_shell_missing_tools_quiet() {
+  shell_env
+  rm -f "$T"/bin/{carapace,fzf,atuin,zoxide,starship}
+  local out
+  out=$(PATH=$T/bin:/usr/bin:/bin run_shell)
+  check "shell: no tools yet (before brew bundle) -> silent" test -z "$(grep -v -e '^cfg=' -e '^upd=' <<<"$out")"
+}
+
 test_brew_tools_skips_without_writable_brew() {
   brew_env
   rm -rf "$JUNIPER_BREW_PREFIX"
