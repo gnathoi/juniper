@@ -2,14 +2,15 @@
 # Installs Juniper's default CLI tools with Homebrew (brew bundle on /usr/share/juniper/Brewfile),
 # so brew-upgrade.timer keeps them current instead of the weekly image. Runs once per user at
 # first login (juniper-brew-tools.service, --first-login) and on demand (ujust brew-tools). The
-# marker holds the Brewfile's hash, so an image update that adds a tool installs it at next login.
+# marker holds a hash of the Brewfile's entries (not its comments), so an image update that adds
+# a tool installs it at the next login.
 set -euo pipefail
 
 prefix=${JUNIPER_BREW_PREFIX:-/home/linuxbrew/.linuxbrew}
 brewfile=${JUNIPER_BREWFILE:-/usr/share/juniper/Brewfile}
 state=${JUNIPER_BREW_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/juniper}
 
-sum=$(sha256sum "$brewfile" | cut -d' ' -f1)
+sum=$(grep -E '^[[:space:]]*[a-z]+ "' "$brewfile" | sed 's/[[:space:]]*#.*//' | sort | sha256sum | cut -d' ' -f1)
 if [[ ${1:-} == --first-login && -e $state/brew-tools.done ]] &&
   [[ $(cat "$state/brew-tools.done") == "$sum" ]]; then
   exit 0
