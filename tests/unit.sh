@@ -1087,6 +1087,89 @@ test_brew_tools_installs_brewfile_once() {
   check "brew-tools: explicit run (ujust brew-tools) always runs" called "brew bundle"
 }
 
+test_brew_tools_reruns_when_brewfile_changes() {
+  brew_env
+  "$ROOT/system_files_dev/usr/libexec/juniper/brew-tools" --first-login >/dev/null
+  : >"$CALLS"
+  echo 'brew "atuin"' >>"$JUNIPER_BREWFILE"
+  "$ROOT/system_files_dev/usr/libexec/juniper/brew-tools" --first-login >/dev/null
+  check "brew-tools: a changed Brewfile (image update) re-runs at login" called "brew bundle"
+  : >"$CALLS"
+  "$ROOT/system_files_dev/usr/libexec/juniper/brew-tools" --first-login >/dev/null
+  check "brew-tools: ...and only once" not_called "brew bundle"
+}
+
+test_brew_tools_failed_bundle_retried() {
+  brew_env
+  # shellcheck disable=SC2016 # literal
+  printf '#!/usr/bin/env bash\necho "brew $*" >>"$CALLS"\nexit 1\n' >"$JUNIPER_BREW_PREFIX/bin/brew"
+  check "brew-tools: failed bundle fails" fails "$ROOT/system_files_dev/usr/libexec/juniper/brew-tools" --first-login
+  check "brew-tools: failed bundle not marked done" test ! -e "$JUNIPER_BREW_STATE/brew-tools.done"
+}
+
+# shell_env: interactive bash sourcing juniper-shell.sh, with every tool stubbed to log its argv.
+shell_env() {
+  export HOME=$T/home HOMEBREW_PREFIX=$T/brew
+  mkdir -p "$HOME" "$HOMEBREW_PREFIX/etc/profile.d"
+  # shellcheck disable=SC2016 # literal
+  echo 'echo "bash-preexec sourced" >>"$CALLS"' >"$HOMEBREW_PREFIX/etc/profile.d/bash-preexec.sh"
+  for cmd in fzf atuin zoxide carapace starship; do stub "$cmd" ''; done
+}
+run_shell() {
+  TERM=${1:-xterm} bash --norc --noprofile -i -c \
+    ". '$ROOT/system_files_dev/etc/profile.d/juniper-shell.sh'; echo \"cfg=\${STARSHIP_CONFIG-}\"" 2>/dev/null
+}
+
+test_shell_hooks_installed_tools() {
+  shell_env
+  local out
+  out=$(run_shell)
+  check "shell: fzf key bindings" called "fzf --bash"
+  check "shell: bash-preexec before atuin" grep -qx -e 'bash-preexec sourced' "$CALLS"
+  check "shell: preexec loaded first" test "$(grep -n -e 'bash-preexec sourced' -e '^atuin' "$CALLS" | head -1 | cut -d: -f2)" = 'bash-preexec sourced'
+  check "shell: atuin on Ctrl-R only, no AI binding" called "atuin init bash --disable-up-arrow --disable-ai"
+  check "shell: zoxide" called "zoxide init bash"
+  check "shell: carapace completions" called "carapace _carapace bash"
+  check "shell: starship prompt" called "starship init bash"
+  check "shell: shipped starship config when the user has none" grep -qx "cfg=/usr/share/juniper/starship.toml" <<<"$out"
+  check "shell: fzf before atuin (atuin keeps Ctrl-R)" test "$(grep -n -e '^fzf' -e '^atuin' "$CALLS" | head -1 | cut -d: -f2)" = 'fzf --bash'
+}
+
+test_shell_atuin_stays_local() {
+  # shellcheck disable=SC2016 # literal
+  check "shell: atuin update check off" grep -q 'ATUIN_UPDATE_CHECK=${ATUIN_UPDATE_CHECK:-false}' \
+    "$ROOT/system_files_dev/etc/profile.d/juniper-shell.sh"
+}
+
+test_shell_user_starship_config_wins() {
+  shell_env
+  mkdir -p "$HOME/.config" && : >"$HOME/.config/starship.toml"
+  check "shell: user's starship.toml wins" grep -qx "cfg=" <<<"$(run_shell)"
+}
+
+test_shell_opt_out_and_dumb_terminals() {
+  shell_env
+  run_shell dumb >/dev/null
+  check "shell: TERM=dumb -> no hooks" not_called "init bash"
+  mkdir -p "$HOME/.config/juniper" && : >"$HOME/.config/juniper/no-shell"
+  run_shell >/dev/null
+  check "shell: no-shell opt-out -> no hooks" not_called "init bash"
+  rm "$HOME/.config/juniper/no-shell"
+  bash --norc --noprofile -c ". '$ROOT/system_files_dev/etc/profile.d/juniper-shell.sh'"
+  check "shell: non-interactive -> no hooks" not_called "init bash"
+  sh -c ". '$ROOT/system_files_dev/etc/profile.d/juniper-shell.sh'"
+  check "shell: plain sh -> no hooks, no errors" not_called "init bash"
+}
+
+test_shell_missing_tools_quiet() {
+  shell_env
+  rm -f "$T"/bin/{fzf,atuin,zoxide,carapace,starship} "$HOMEBREW_PREFIX/etc/profile.d/bash-preexec.sh"
+  local err
+  err=$(TERM=xterm PATH=$T/bin:/usr/bin:/bin bash --norc --noprofile -i -c \
+    ". '$ROOT/system_files_dev/etc/profile.d/juniper-shell.sh'" 2>&1 >/dev/null | grep -v -e 'job control' -e 'cannot set terminal process group' || true)
+  check "shell: no tools yet (before brew bundle) -> silent" test -z "$err"
+}
+
 test_brew_tools_skips_without_writable_brew() {
   brew_env
   rm -rf "$JUNIPER_BREW_PREFIX"

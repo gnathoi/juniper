@@ -1,2 +1,8 @@
 `distrobox create` gives you a mutable dev box; the host stays immutable.
 Homebrew installs CLI tools into your home: `brew install <tool>`.
+Ctrl-R searches your shell history with atuin; it stays on this Pi unless you run `atuin login`.
+`z <part of a path>` jumps to a directory you've visited before (zoxide).
+`eza -l --git`, `bat file`, `fd name` and `tldr cmd` are friendlier ls, cat, find and man.
+`lazygit` is a git TUI; `git -c core.pager=delta diff` shows syntax-highlighted diffs.
+`dysk` shows filesystems at a glance; `ncdu /var` finds what's filling the card.
+Don't want the fancy prompt? `ujust toggle-shell` turns the shell extras off.

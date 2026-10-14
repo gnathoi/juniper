@@ -346,13 +346,23 @@ if [[ $IMAGE_ID == juniper || $IMAGE_ID == juniper-desktop ]]; then
   need_cmds distrobox fastfetch git zstd
   need_enabled brew-setup.service brew-update.timer brew-upgrade.timer
   # CLI tools come from Homebrew at first login, not the image.
-  grep -qx 'brew "zellij"' /usr/share/juniper/Brewfile
+  for f in zellij fzf atuin bash-preexec starship zoxide carapace; do
+    grep -qx "brew \"$f\"" /usr/share/juniper/Brewfile
+  done
+  # The shell hooks parse, and stay inert with none of the tools installed yet
+  bash -n /etc/profile.d/juniper-shell.sh
+  test -s /usr/share/juniper/starship.toml
+  if HOME=$(mktemp -d) TERM=xterm bash --norc --noprofile -i -c '. /etc/profile.d/juniper-shell.sh' 2>&1 |
+    grep -v -e 'job control' -e 'process group' | grep -q .; then
+    echo "juniper-shell.sh is noisy without its tools"
+    exit 1
+  fi
   [[ $(systemctl --global is-enabled juniper-brew-tools.service) == enabled ]]
   test -s /usr/share/homebrew.tar.zst
   test -f /etc/profile.d/brew.sh
   grep -q 'Apache License' /usr/share/licenses/ublue-os-brew/LICENSE
   just --justfile /usr/share/juniper/just/dev.just --summary | tr ' ' '\n' | grep -qx devbox
-  for r in devbox install-podlet brew-tools; do
+  for r in devbox install-podlet brew-tools toggle-shell; do
     grep -qx "$r" <<<"$recipes" || {
       echo "missing recipe: $r"
       exit 1
@@ -369,6 +379,7 @@ else
   done
   test ! -e /usr/share/homebrew.tar.zst
   test ! -e /usr/share/juniper/just/dev.just
+  test ! -e /etc/profile.d/juniper-shell.sh
   if grep -qx devbox <<<"$recipes"; then
     echo "dev recipe in minimal: devbox"
     exit 1
