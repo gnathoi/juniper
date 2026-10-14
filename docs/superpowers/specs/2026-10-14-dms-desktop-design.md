@@ -83,8 +83,8 @@ fallback is the earlier spec's option 3 (rebuild in our own COPR).
 
 - `niri-session` starts niri as a systemd user service. DMS starts from its packaged
   `dms.service` (user unit, `PartOf=graphical-session.target`), enabled by a user preset,
-  not `spawn-at-startup`. A `dms.service.d` drop-in turns off nothing security-relevant; it
-  only sets `DMS_PRIVESC=sudo`.
+  not `spawn-at-startup`. A `dms.service.d` drop-in sets `DMS_PRIVESC=sudo` (the image has
+  sudo; zirconium uses run0).
 - `/usr/share/juniper/niri/juniper.kdl` (read-only, image-owned) keeps: xwayland-satellite,
   `prefer-no-csd`, the idle-hint helper, and Juniper's binds; it adds zirconium's DMS
   integration (`layer-rule` for the `quickshell` namespace, lid close →
@@ -112,9 +112,10 @@ fallback is the earlier spec's option 3 (rebuild in our own COPR).
     widget hidden.
   - `dot_config/foot/foot.ini`, GTK 3/4 and qt6ct configs that include the matugen-generated
     colour files.
-- `juniper-dots-init.service` (user, `ConditionPathExists=!%h/.local/share/chezmoi-juniper`
-  style marker): `chezmoi init --apply --source /usr/share/juniper/dots` with a Juniper-owned
-  chezmoi config/state path, so a user's own chezmoi setup is untouched.
+- `juniper-dots-init.service` (user, `ConditionPathExists=!%h/.local/state/juniper/dots.done`):
+  `chezmoi apply --source /usr/share/juniper/dots --config ~/.config/juniper/chezmoi.toml
+  --persistent-state ~/.local/state/juniper/chezmoistate.boltdb`, then writes the marker. The
+  Juniper-owned config and state paths leave a user's own chezmoi setup untouched.
 - `juniper-dots-update.timer` (daily): re-applies, skipping files changed since last apply
   (`--keep-going`, chezmoi's `skip` on conflicts), so image updates reach unchanged files.
 - `ujust dots-update`, `ujust dots-reset [niri|all]` (back up then re-apply), `ujust
