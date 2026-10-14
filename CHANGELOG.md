@@ -10,6 +10,8 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+## build-20261014 (2026-10-14)
+
 ### Changed
 
 - First-boot encryption no longer gives up for good when the Pi's firmware key interface stops answering (a wedged mailbox, maybe a one-off): the card boots plain this time and the next boot tries again, up to three boots in a row; `ujust pi-status` says so
