@@ -451,7 +451,8 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
   t=$(mktemp -d)
   mkdir -p "$t/home/.config/foot"
   echo '# mine' >"$t/home/.config/foot/foot.ini"
-  HOME=$t/home /usr/libexec/juniper/dots init
+  (umask 022 && HOME=$t/home /usr/libexec/juniper/dots init)
+  [[ $(stat -c %a "$t/home/.config") == 700 && $(stat -c %a "$t/home/.local") == 700 ]]
   niri validate -c "$t/home/.config/niri/config.kdl"
   grep -qx '# mine' "$t/home/.config/foot/foot.ini"
   s=$t/home/.config/DankMaterialShell/settings.json

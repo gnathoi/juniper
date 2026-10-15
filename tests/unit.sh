@@ -5400,10 +5400,12 @@ test_dots_keeps_files_that_existed_before_init() {
   check "dots: update applies the others" called "$HOME/.config/niri/config.kdl"
   mkdir -p "$HOME/.config/niri"
   echo mine >"$HOME/.config/niri/config.kdl"
+  echo local >"$HOME/.config/niri/local.kdl"
   echo "$HOME/.config/niri/config.kdl" >>"$k"
   : >"$CALLS"
   "$DOTS" reset niri >/dev/null
   check "dots reset niri: no longer kept" not_grep_dir "niri" "$k"
+  check "dots reset niri: your local.kdl untouched" test "$(cat "$HOME/.config/niri/local.kdl")" = local
   check "dots reset niri: other kept files stay kept" grep -qx "$HOME/.config/foot/foot.ini" "$k"
   check "dots reset niri: applied with --force" called "--force $HOME/.config/niri"
   echo "$HOME/.config/niri/dms.kdl" >"$k"
@@ -5415,9 +5417,53 @@ test_dots_keeps_files_that_existed_before_init() {
 
 test_dots_init_failure_retried() {
   dots_env
-  stub chezmoi 'exit 1'
+  mkdir -p "$HOME/.config/foot"
+  echo mine >"$HOME/.config/foot/foot.ini"
+  local good
+  good=$(cat "$T/bin/chezmoi")
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub chezmoi 'if [[ $1 == managed ]]; then printf "%s\n" "$HOME/.config/niri/config.kdl" "$HOME/.config/foot/foot.ini"; exit 0; fi
+exit 1'
   check "dots: failed apply fails" fails "$DOTS" init
   check "dots: failed apply not marked done" test ! -e "$XDG_STATE_HOME/juniper/dots.done"
+  printf '%s\n' "$good" >"$T/bin/chezmoi"
+  : >"$CALLS"
+  "$DOTS" init
+  check "dots: retry still keeps the pre-existing file" grep -qx "$HOME/.config/foot/foot.ini" "$XDG_STATE_HOME/juniper/dots-kept"
+  check "dots: retry doesn't apply it" not_called "foot.ini"
+  check "dots: retry marked done" test -e "$XDG_STATE_HOME/juniper/dots.done"
+}
+
+test_dots_failing_managed_stops() {
+  dots_env
+  mkdir -p "$HOME/.config/foot"
+  echo mine >"$HOME/.config/foot/foot.ini"
+  stub chezmoi 'exit 1'
+  check "dots: init fails when chezmoi managed fails" fails "$DOTS" init
+  check "dots: ...and isn't marked done" test ! -e "$XDG_STATE_HOME/juniper/dots.done"
+  check "dots: ...and kept list isn't half-written" test ! -e "$XDG_STATE_HOME/juniper/dots-kept"
+  check "dots: update fails when chezmoi managed fails" fails "$DOTS" update
+  check "dots: reset all fails when chezmoi managed fails" fails "$DOTS" reset all
+  check "dots: ...with no forced apply" not_called "--force"
+  check "dots: ...and the user's file stays" test "$(cat "$HOME/.config/foot/foot.ini")" = mine
+  stub chezmoi 'exit 0'
+  check "dots: nothing managed is an error too" fails "$DOTS" reset all
+}
+
+test_dots_new_dirs_are_private() {
+  dots_env
+  local old_umask
+  old_umask=$(umask)
+  umask 022
+  # the stub applies nothing, so only the dirs dots itself creates exist
+  "$DOTS" init
+  check "dots: ~/.config private" test "$(stat -c %a "$HOME/.config")" = 700
+  check "dots: ~/.local private" test "$(stat -c %a "$HOME/.local")" = 700
+  check "dots: ~/.local/state private" test "$(stat -c %a "$HOME/.local/state")" = 700
+  mkdir -m 755 "$T/open"
+  HOME=$T/open XDG_CONFIG_HOME=$T/open/.config XDG_STATE_HOME=$T/open/.local/state "$DOTS" update
+  check "dots: nothing loosened, existing dir kept" test "$(stat -c %a "$T/open")" = 755
+  umask "$old_umask"
 }
 
 test_dots_update_respects_opt_out() {
