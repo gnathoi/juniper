@@ -449,7 +449,7 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
   [[ $(systemctl --global is-enabled juniper-dots-init.service) == enabled ]]
   [[ $(systemctl --global is-enabled juniper-dots-update.timer) == enabled ]]
   t=$(mktemp -d)
-  mkdir -p "$t/home/.config/foot"
+  (umask 077 && mkdir -p "$t/home/.config/foot")
   echo '# mine' >"$t/home/.config/foot/foot.ini"
   (umask 022 && HOME=$t/home /usr/libexec/juniper/dots init)
   [[ $(stat -c %a "$t/home/.config") == 700 && $(stat -c %a "$t/home/.local") == 700 ]]
