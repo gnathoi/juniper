@@ -438,9 +438,13 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
   # ...and only while automatic reboots are on (`ujust update-schedule off` disables the timer).
   grep -qx 'ExecCondition=/usr/bin/systemctl is-enabled --quiet juniper-reboot.timer' \
     /usr/lib/systemd/system/juniper-reboot-retry.service
-  # niri accepts Juniper's defaults, the /etc config, and the stub desktop-config writes.
   niri validate -c /usr/share/juniper/niri/juniper.kdl
   niri validate -c /etc/niri/config.kdl
+  [[ $(systemctl --global is-enabled dms.service) == enabled ]]
+  test -x /usr/libexec/juniper/desktop-idle-hint
+  test ! -e /usr/libexec/juniper/desktop-idle-lock
+  grep -qx foot.desktop /usr/share/xdg-terminal-exec/xdg-terminals.list
+  # the stub desktop-config still writes its include (Task 5 removes this block)
   t=$(mktemp -d)
   HOME=$t just --justfile /usr/share/juniper/just/desktop.just desktop-config
   head -2 "$t/.config/niri/config.kdl" | grep -q '^include "/usr/share/juniper/niri/juniper.kdl"'

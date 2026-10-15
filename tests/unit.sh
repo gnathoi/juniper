@@ -1734,16 +1734,16 @@ test_greetd_graphical_login() {
   check "tmpfiles: session.json linked into the greeter cache" grep -qx 'L+ /var/cache/dms-greeter/session.json - - - - /usr/share/juniper/dms-greeter/session.json' "$d/usr/lib/tmpfiles.d/juniper-greetd.conf"
 }
 
-test_desktop_idle_lock() {
-  export HOME=$T/home XDG_CONFIG_HOME=$T/home/.config
+test_desktop_idle_hint() {
   stub swayidle ''
-  "$LIBEXEC_DESKTOP/desktop-idle-lock"
-  check "idle-lock: locks after 10 min" called "swayidle -w timeout 600 swaylock -f"
-  mkdir -p "$XDG_CONFIG_HOME/juniper" && touch "$XDG_CONFIG_HOME/juniper/no-idle-lock"
-  : >"$CALLS"
-  "$LIBEXEC_DESKTOP/desktop-idle-lock"
-  check "idle-lock: off -> idle hint only" called "swayidle -w idlehint 1800"
-  check "idle-lock: off -> no lock" not_called "swaylock"
+  "$LIBEXEC_DESKTOP/desktop-idle-hint"
+  check "idle-hint: logind idle hint after 30 min" called "swayidle -w idlehint 1800"
+  check "idle-hint: never locks (DMS does)" not_called "timeout"
+  local k=$ROOT/system_files_desktop/usr/share/juniper/niri/juniper.kdl
+  check "niri: starts the idle hint" grep -qx 'spawn-at-startup "/usr/libexec/juniper/desktop-idle-hint"' "$k"
+  check "niri: no old bar/notifier/locker" fails grep -qE 'waybar|swaync|swaylock|fuzzel|desktop-idle-lock' "$k"
+  check "niri: lid close locks via DMS" grep -q 'lid-close { spawn "dms" "ipc" "call" "lock" "lock"; }' "$k"
+  check "niri: DMS layer rule" grep -q 'match namespace="quickshell"' "$k"
 }
 
 test_wallpaper_is_current() {

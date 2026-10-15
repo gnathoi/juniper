@@ -42,6 +42,8 @@ done
 
 # --- units ---
 systemctl enable greetd.service
+# DankMaterialShell starts with every graphical session (dms.service, WantedBy=graphical-session.target)
+systemctl --global enable dms.service
 systemctl enable juniper-flatpak-setup.timer juniper-flatpak-update.timer juniper-reboot-retry.timer
 systemctl set-default graphical.target
 
