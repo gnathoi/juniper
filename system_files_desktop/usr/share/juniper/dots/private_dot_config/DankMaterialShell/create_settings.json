@@ -1,0 +1,18 @@
+{
+  "currentThemeName": "dynamic",
+  "currentThemeCategory": "dynamic",
+  "matugenScheme": "scheme-tonal-spot",
+  "runUserMatugenTemplates": true,
+  "clockFormat": "24h",
+  "weatherEnabled": false,
+  "showWeather": false,
+  "useAutoLocation": false,
+  "acLockTimeout": 600,
+  "batteryLockTimeout": 600,
+  "lockBeforeSuspend": true,
+  "updaterHideWidget": true,
+  "updaterCheckOnStart": false,
+  "updaterUseCustomCommand": true,
+  "updaterCustomCommand": "ujust update",
+  "updaterIncludeFlatpak": false
+}

@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Juniper desktop dotfiles refresh
+ConditionPathExists=%h/.local/state/juniper/dots.done
+
+[Timer]
+OnStartupSec=5min
+OnUnitInactiveSec=1d
+
+[Install]
+WantedBy=timers.target

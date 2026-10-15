@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Juniper's desktop dotfiles: chezmoi applies /usr/share/juniper/dots into your home with its own
+# config and state (~/.config/juniper/chezmoi), so a chezmoi setup of yours is untouched.
+#   init           first login (juniper-dots-init.service), once
+#   update [--auto] daily (juniper-dots-update.timer, --auto: skipped after `ujust toggle-auto-dots`)
+#   reset niri|all  move Juniper's files out of the way (backup in ~/.local/state/juniper) and
+#                   apply them fresh (ujust dots-reset)
+# Files you changed are skipped (chezmoi asks; we answer "s"). Files DMS owns (settings, colours)
+# are only created when missing.
+set -euo pipefail
+
+src=${JUNIPER_DOTS_SRC:-/usr/share/juniper/dots}
+cfg=${XDG_CONFIG_HOME:-$HOME/.config}
+cfgdir=$cfg/juniper/chezmoi
+state=${XDG_STATE_HOME:-$HOME/.local/state}/juniper
+args=(--source "$src" --config "$cfgdir/chezmoi.toml" --persistent-state "$cfgdir/chezmoistate.boltdb"
+  --no-tty --keep-going)
+
+usage() {
+  echo "usage: dots init | update [--auto] | reset niri|all" >&2
+  exit 2
+}
+apply() {
+  mkdir -p "$cfgdir"
+  [[ -e $cfgdir/chezmoi.toml ]] || : >"$cfgdir/chezmoi.toml"
+  chezmoi apply "${args[@]}" "$@" < <(yes s)
+}
+
+case ${1:-} in
+  init)
+    [[ ! -e $state/dots.done ]] || exit 0
+    apply
+    mkdir -p "$state"
+    : >"$state/dots.done"
+    ;;
+  update)
+    if [[ ${2:-} == --auto && -e $cfg/juniper/no-auto-dots ]]; then
+      exit 0
+    fi
+    apply
+    ;;
+  reset)
+    case ${2:-} in
+      niri) targets=("$cfg/niri") ;;
+      all) mapfile -t targets < <(chezmoi managed "${args[@]:0:6}" --path-style absolute --include files) ;;
+      *) usage ;;
+    esac
+    backup=$state/dots-backup-${JUNIPER_NOW:-$(date +%Y%m%d-%H%M%S)}
+    for t in "${targets[@]}"; do
+      [[ -e $t ]] || continue
+      rel=${t#"$HOME"/}
+      mkdir -p "$backup/$(dirname "$rel")"
+      mv "$t" "$backup/$rel"
+    done
+    apply --force "${targets[@]}"
+    echo "Reset ${2}; your previous files are in $backup"
+    ;;
+  *) usage ;;
+esac

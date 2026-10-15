@@ -10,17 +10,27 @@ LIBEXEC=$ROOT/system_files/usr/libexec/juniper
 LIBEXEC_DESKTOP=$ROOT/system_files_desktop/usr/libexec/juniper
 ORIG_PATH=$PATH
 ORIG_TMPDIR=${TMPDIR-}
+ORIG_HOME=${HOME-}
+ORIG_XDG_CONFIG_HOME=${XDG_CONFIG_HOME-}
+ORIG_XDG_CONFIG_SET=${XDG_CONFIG_HOME+y}
+ORIG_XDG_STATE_HOME=${XDG_STATE_HOME-}
+ORIG_XDG_STATE_SET=${XDG_STATE_HOME+y}
 fails=0
 
 setup() {
   # a test may export TMPDIR into its own (now deleted) $T
   if [[ -n $ORIG_TMPDIR ]]; then export TMPDIR=$ORIG_TMPDIR; else unset TMPDIR; fi
+  # the dots tests export HOME and the XDG dirs into their $T
+  export HOME=$ORIG_HOME
+  if [[ -n $ORIG_XDG_CONFIG_SET ]]; then export XDG_CONFIG_HOME=$ORIG_XDG_CONFIG_HOME; else unset XDG_CONFIG_HOME; fi
+  if [[ -n $ORIG_XDG_STATE_SET ]]; then export XDG_STATE_HOME=$ORIG_XDG_STATE_HOME; else unset XDG_STATE_HOME; fi
   # ...and the overrides fwkey/cryptroot tests export; a later test must never inherit them
   unset JUNIPER_SYSFS JUNIPER_VCIO JUNIPER_CMDLINE JUNIPER_BLOCK_SYSFS JUNIPER_CIDATA_MNT \
     JUNIPER_RUN_DIR JUNIPER_CPUINFO JUNIPER_TRYBOOT_FLAG JUNIPER_ROOT_WAIT \
     JUNIPER_UNLOCK_FAIL_DELAY JUNIPER_FWKEY JUNIPER_CONSOLE JUNIPER_CRYPTSETUP_LOCKDIR FAKE_PASS \
     JUNIPER_DT JUNIPER_FWKEY_WEDGED JUNIPER_FWKEY_DEADLINE RP JUNIPER_UPTIME_FILE \
-    JUNIPER_HEALTH_TRIES JUNIPER_HEALTH_INTERVAL JUNIPER_HEALTH_DEADLINE
+    JUNIPER_HEALTH_TRIES JUNIPER_HEALTH_INTERVAL JUNIPER_HEALTH_DEADLINE \
+    JUNIPER_DOTS_SRC JUNIPER_NOW
   T=$(mktemp -d)
   export CALLS=$T/calls JUNIPER_STATE_DIR=$T/state
   mkdir -p "$T/bin" "$JUNIPER_STATE_DIR"
@@ -5348,6 +5358,84 @@ test_unlock_card_recipe() {
 
 test_epel_countme_metalinks() {
   check "epel: reporting-compatible metalinks" python3 "$ROOT/tests/test-epel-metalinks.py"
+}
+
+DOTS=$ROOT/system_files_desktop/usr/libexec/juniper/dots
+dots_env() {
+  export HOME=$T/home XDG_CONFIG_HOME=$T/home/.config XDG_STATE_HOME=$T/home/.local/state
+  export JUNIPER_DOTS_SRC=$T/src JUNIPER_NOW=20261014-120000
+  export T # the chezmoi stub writes into it
+  mkdir -p "$HOME" "$JUNIPER_DOTS_SRC"
+  # chezmoi stub: log argv and what it read on stdin (the skip answers)
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub chezmoi 'if [[ $1 == managed ]]; then printf "%s\n" "$HOME/.config/niri/config.kdl" "$HOME/.config/niri/dms.kdl" "$HOME/.config/foot/foot.ini"; exit 0; fi
+head -c 2 >"$T/chezmoi-stdin" || true'
+}
+
+test_dots_init_once() {
+  dots_env
+  "$DOTS" init
+  check "dots: init applies Juniper's source" called "chezmoi apply --source $T/src --config $XDG_CONFIG_HOME/juniper/chezmoi/chezmoi.toml --persistent-state $XDG_CONFIG_HOME/juniper/chezmoi/chezmoistate.boltdb --no-tty --keep-going"
+  check "dots: files you changed are skipped (s answers)" cmp -s "$T/chezmoi-stdin" <(printf 's\n')
+  check "dots: own chezmoi config, not yours" test -e "$XDG_CONFIG_HOME/juniper/chezmoi/chezmoi.toml"
+  check "dots: marked done" test -e "$XDG_STATE_HOME/juniper/dots.done"
+  : >"$CALLS"
+  "$DOTS" init
+  check "dots: init only once" not_called "chezmoi apply"
+}
+
+test_dots_init_failure_retried() {
+  dots_env
+  stub chezmoi 'exit 1'
+  check "dots: failed apply fails" fails "$DOTS" init
+  check "dots: failed apply not marked done" test ! -e "$XDG_STATE_HOME/juniper/dots.done"
+}
+
+test_dots_update_respects_opt_out() {
+  dots_env
+  "$DOTS" update --auto
+  check "dots: daily update applies" called "chezmoi apply"
+  mkdir -p "$XDG_CONFIG_HOME/juniper" && : >"$XDG_CONFIG_HOME/juniper/no-auto-dots"
+  : >"$CALLS"
+  "$DOTS" update --auto
+  check "dots: automatic update off -> skipped" not_called "chezmoi apply"
+  "$DOTS" update
+  check "dots: ujust dots-update still applies" called "chezmoi apply"
+}
+
+test_dots_reset_backs_up_then_forces() {
+  dots_env
+  mkdir -p "$HOME/.config/niri" "$HOME/.config/foot"
+  echo mine >"$HOME/.config/niri/config.kdl"
+  echo myfoot >"$HOME/.config/foot/foot.ini"
+  "$DOTS" reset niri >/dev/null
+  local b=$XDG_STATE_HOME/juniper/dots-backup-20261014-120000
+  check "dots reset niri: old file kept in the backup" test "$(cat "$b/.config/niri/config.kdl")" = mine
+  check "dots reset niri: moved out of the way" test ! -e "$HOME/.config/niri/config.kdl"
+  check "dots reset niri: foot untouched" test -e "$HOME/.config/foot/foot.ini"
+  check "dots reset niri: forced apply of niri only" called "chezmoi apply --source $T/src"
+  check "dots reset niri: --force" called "--force $HOME/.config/niri"
+  "$DOTS" reset all >/dev/null
+  check "dots reset all: foot backed up too" test -e "$b/.config/foot/foot.ini"
+  check "dots: bad scope refused" fails "$DOTS" reset everything
+  check "dots: bad command refused" fails "$DOTS" frobnicate
+}
+
+LOCKIDLE=$ROOT/system_files_desktop/usr/libexec/juniper/desktop-lock-idle
+test_desktop_lock_idle_edits_dms_settings() {
+  export XDG_CONFIG_HOME=$T/cfg
+  local s=$T/cfg/DankMaterialShell/settings.json
+  "$LOCKIDLE" off >/dev/null
+  check "lock-idle off: creates settings with 0" test "$(jq -c '[.acLockTimeout,.batteryLockTimeout]' "$s")" = '[0,0]'
+  echo '{"currentThemeName":"dynamic","acLockTimeout":0}' >"$s"
+  "$LOCKIDLE" on >/dev/null
+  check "lock-idle on: 600 s" test "$(jq -c '[.acLockTimeout,.batteryLockTimeout]' "$s")" = '[600,600]'
+  check "lock-idle: other settings kept" test "$(jq -r .currentThemeName "$s")" = dynamic
+  check "lock-idle: status" stdout_has "on" "$LOCKIDLE"
+  echo 'not json' >"$s"
+  check "lock-idle: broken settings refused" fails "$LOCKIDLE" off
+  check "lock-idle: broken settings left as they were" test "$(cat "$s")" = "not json"
+  check "lock-idle: bad arg refused" fails "$LOCKIDLE" maybe
 }
 
 for t in $(declare -F | awk -v f="${UNIT_FILTER:-.}" '$3 ~ /^test_/ && $3 ~ f {print $3}'); do

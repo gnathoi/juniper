@@ -1,0 +1,7 @@
+// Juniper Desktop: your niri config. Juniper's defaults first, then DankMaterialShell's own
+// settings (dms.kdl), then yours: put your changes in ~/.config/niri/local.kdl.
+// Juniper's daily dotfiles update refreshes this file unless you edit it; `ujust dots-reset niri`
+// brings it back.
+include "/usr/share/juniper/niri/juniper.kdl"
+include "dms.kdl"
+include optional=true "local.kdl"

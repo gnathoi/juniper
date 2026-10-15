@@ -444,13 +444,32 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
   test -x /usr/libexec/juniper/desktop-idle-hint
   test ! -e /usr/libexec/juniper/desktop-idle-lock
   grep -qx foot.desktop /usr/share/xdg-terminal-exec/xdg-terminals.list
-  # the stub desktop-config still writes its include (Task 5 removes this block)
+  # Juniper's dotfiles: a fresh home gets a valid niri config and DMS settings that keep the
+  # update path and the network quiet; a file the user already has is kept.
+  [[ $(systemctl --global is-enabled juniper-dots-init.service) == enabled ]]
+  [[ $(systemctl --global is-enabled juniper-dots-update.timer) == enabled ]]
   t=$(mktemp -d)
-  HOME=$t just --justfile /usr/share/juniper/just/desktop.just desktop-config
-  head -2 "$t/.config/niri/config.kdl" | grep -q '^include "/usr/share/juniper/niri/juniper.kdl"'
+  mkdir -p "$t/home/.config/foot"
+  echo '# mine' >"$t/home/.config/foot/foot.ini"
+  HOME=$t/home /usr/libexec/juniper/dots init
+  niri validate -c "$t/home/.config/niri/config.kdl"
+  grep -qx '# mine' "$t/home/.config/foot/foot.ini"
+  s=$t/home/.config/DankMaterialShell/settings.json
+  [[ $(jq -c '[.weatherEnabled, .useAutoLocation, .updaterHideWidget, .updaterCustomCommand, .acLockTimeout]' "$s") == '[false,false,true,"ujust update",600]' ]]
+  [[ $(jq -r .wallpaperPath "$t/home/.local/state/DankMaterialShell/session.json") == /usr/share/juniper/wallpapers/juniper-berry.png ]]
+  HOME=$t/home /usr/libexec/juniper/desktop-lock-idle off >/dev/null
+  [[ $(jq .acLockTimeout "$s") == 0 ]]
   rm -rf "$t"
-  grep -qx 'desktop-config' <<<"$recipes"
-  grep -qx 'flatpak-setup' <<<"$recipes"
+  for r in desktop-lock-idle dots-update dots-reset toggle-auto-dots flatpak-setup; do
+    grep -qx "$r" <<<"$recipes" || {
+      echo "missing recipe: $r"
+      exit 1
+    }
+  done
+  if grep -qx desktop-config <<<"$recipes"; then
+    echo "desktop-config is gone (chezmoi writes the niri config)"
+    exit 1
+  fi
   ls /usr/lib64/dri/v3d_dri.so /usr/lib64/dri/vc4_dri.so >/dev/null
   ls /usr/lib/modules/*/kernel/drivers/gpu/drm/v3d/v3d.ko* >/dev/null
   # The COPRs are build-time only: devices never pull from them.

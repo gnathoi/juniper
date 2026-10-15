@@ -1,0 +1,6 @@
+[Unit]
+Description=Juniper desktop dotfiles (daily refresh of files you haven't changed)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/juniper/dots update --auto
