@@ -389,8 +389,16 @@ fi
 
 if [[ $IMAGE_ID == juniper-desktop ]]; then
   # --- desktop only ---
-  need_cmds niri niri-session xwayland-satellite Xwayland greetd agreety foot waybar fuzzel \
-    swaylock swayidle swaync pipewire wireplumber flatpak notify-send
+  need_cmds niri niri-session xwayland-satellite Xwayland greetd dms-greeter dms qs matugen dgop \
+    cliphist chezmoi xdg-terminal-exec foot swayidle pipewire wireplumber flatpak notify-send jq
+  # (agreety ships inside the greetd package; it's just unused)
+  for cmd in waybar fuzzel swaylock swaync swaybg; do
+    if command -v "$cmd" >/dev/null; then
+      echo "replaced by DMS but still installed: $cmd"
+      exit 1
+    fi
+  done
+  rpm -q accountsservice qt6-qtmultimedia qt6-qtwayland material-symbols-fonts >/dev/null
   need_enabled greetd.service
   systemd-analyze verify greetd.service
   # Login prompt first: agreety, then niri only after PAM authentication; never auto-login.
@@ -438,11 +446,13 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
     echo "COPR repo left in the image"
     exit 1
   fi
-  # Every COPR package is exactly the version in the lock file.
+  # Every COPR package is exactly the locked version (epoch-aware: dms-greeter-1:1.6.2-3.el10)
   test -s /usr/share/juniper/desktop.lock
-  while read -r nvr; do
-    rpm -q "$nvr" >/dev/null || {
-      echo "not the locked version: $nvr"
+  while read -r nevr; do
+    name=${nevr%-*-*}
+    have=$(rpm -q --qf '%{NAME}-%{EPOCH}:%{VERSION}-%{RELEASE}\n' "$name" | sed 's/-(none):/-/; s/-0:/-/')
+    [[ $have == "$nevr" ]] || {
+      echo "not the locked version: $nevr (have $have)"
       exit 1
     }
   done </usr/share/juniper/desktop.lock

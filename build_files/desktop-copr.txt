@@ -1,4 +1,6 @@
 # OWNER/PROJECT PACKAGE... (includepkgs fence: the packages we use plus the COPR's own deps)
 yalter/niri niri
-yselkowitz/wlroots-epel xwayland-satellite foot foot-terminfo waybar fuzzel swaylock swayidle swaybg SwayNotificationCenter brightnessctl playerctl playerctl-libs nanosvg fcft gtk-layer-shell gtk4-layer-shell libmpdclient granite jsoncpp libsfdo
+yselkowitz/wlroots-epel xwayland-satellite foot foot-terminfo swayidle brightnessctl playerctl playerctl-libs fcft libsfdo
 yselkowitz/cosmic-epel greetd greetd-selinux
+avengemedia/dms dms dms-cli
+avengemedia/danklinux dms-greeter quickshell matugen dgop cliphist material-symbols-fonts

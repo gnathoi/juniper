@@ -27,6 +27,7 @@ dnf -y install --exclude=fzf "${locked[@]}" \
   xdg-desktop-portal-gnome xdg-desktop-portal-gtk gnome-keyring \
   pipewire wireplumber pipewire-pulseaudio \
   mesa-dri-drivers mesa-vulkan-drivers \
+  accountsservice qt6-qtmultimedia qt6-qtwayland chezmoi xdg-terminal-exec \
   google-noto-sans-fonts google-noto-sans-mono-fonts google-noto-emoji-fonts
 dnf clean all
 rm -f /etc/yum.repos.d/juniper-copr-*.repo
