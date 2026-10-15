@@ -94,6 +94,16 @@ bump-desktop:
     mv "$tmp" build_files/desktop.lock
     git diff --stat build_files/desktop.lock
 
+# Regenerate the desktop wallpaper (SVG from build_files/wallpaper.py, then its 3840x2160 PNG)
+wallpaper:
+    #!/usr/bin/bash
+    set -euo pipefail
+    d=system_files_desktop/usr/share/juniper/wallpapers
+    mkdir -p "$d"
+    python3 build_files/wallpaper.py >"$d/juniper-berry.svg"
+    rsvg-convert -w 3840 -h 2160 "$d/juniper-berry.svg" -o "$d/juniper-berry.png"
+    ls -l "$d"
+
 # Pin rpi-fw-crypto to the newest raspberrypi/utils master commit touching rpifwcrypto/ (build_files/fwcrypto.lock)
 bump-fwcrypto:
     #!/usr/bin/bash

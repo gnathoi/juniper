@@ -399,6 +399,7 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
     fi
   done
   rpm -q accountsservice qt6-qtmultimedia qt6-qtwayland material-symbols-fonts >/dev/null
+  test -s /usr/share/juniper/wallpapers/juniper-berry.png
   need_enabled greetd.service
   systemd-analyze verify greetd.service
   # Login prompt first: agreety, then niri only after PAM authentication; never auto-login.

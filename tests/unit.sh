@@ -1735,6 +1735,15 @@ test_desktop_idle_lock() {
   check "idle-lock: off -> no lock" not_called "swaylock"
 }
 
+test_wallpaper_is_current() {
+  local w=$ROOT/system_files_desktop/usr/share/juniper/wallpapers
+  check "wallpaper: svg matches its generator" cmp -s <(python3 "$ROOT/build_files/wallpaper.py") "$w/juniper-berry.svg"
+  check "wallpaper: png is 3840x2160" test "$(python3 -c '
+import struct, sys
+d = open(sys.argv[1], "rb").read(24)
+print("%dx%d" % struct.unpack(">II", d[16:24]))' "$w/juniper-berry.png" 2>/dev/null)" = 3840x2160
+}
+
 test_flatpak_setup_installs_apps_once() {
   stub flatpak ''
   stub runuser ''
