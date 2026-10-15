@@ -391,7 +391,6 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
   # --- desktop only ---
   need_cmds niri niri-session xwayland-satellite Xwayland greetd dms-greeter dms qs matugen dgop \
     cliphist chezmoi xdg-terminal-exec foot swayidle pipewire wireplumber flatpak notify-send jq
-  # (agreety ships inside the greetd package; it's just unused)
   for cmd in waybar fuzzel swaylock swaync swaybg; do
     if command -v "$cmd" >/dev/null; then
       echo "replaced by DMS but still installed: $cmd"
@@ -402,14 +401,22 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
   test -s /usr/share/juniper/wallpapers/juniper-berry.png
   need_enabled greetd.service
   systemd-analyze verify greetd.service
-  # Login prompt first: agreety, then niri only after PAM authentication; never auto-login.
-  grep -qx 'command = "agreety --cmd niri-session"' /etc/greetd/config.toml
+  # Login: dms-greeter as the unprivileged greeter user; a session only after PAM, typed wayland.
+  grep -qx 'command = "dms-greeter --command niri --cache-dir /var/cache/dms-greeter"' /etc/greetd/config.toml
+  grep -qx 'service = "greetd-spawn"' /etc/greetd/config.toml
+  getent passwd greeter >/dev/null
+  [[ $(id -u greeter) -lt 1000 ]]
+  test -s /etc/pam.d/greetd-spawn
   if grep -q initial_session /etc/greetd/config.toml ||
     compgen -G '/usr/lib/systemd/system/greetd.service.d/*' >/dev/null ||
     compgen -G '/etc/systemd/system/greetd.service.d/*' >/dev/null; then
     echo "greetd auto-login, or a drop-in overriding /etc/greetd/config.toml"
     exit 1
   fi
+  # dms-greeter's install labelled its paths with semanage in the build; the image must keep them
+  [[ $(matchpathcon -n /var/lib/greeter) == *:user_home_dir_t:* ]]
+  [[ $(matchpathcon -n /var/cache/dms-greeter) == *:cache_home_t:* ]]
+  [[ $(matchpathcon -n /usr/bin/dms-greeter) == *:bin_t:* ]]
   # An update that doesn't bring greetd up is rolled back under tryboot (healthcheck hook).
   test -x /usr/lib/juniper/health.d/10-greetd
   grep -q '^GPGKey=' /etc/flatpak/remotes.d/flathub.flatpakrepo

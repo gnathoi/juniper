@@ -1,0 +1,8 @@
+#%PAM-1.0
+# greetd's stack for logged-in sessions, plus XDG_SESSION_TYPE=wayland so logind types the
+# session correctly (desktop-idle's reboot deferral looks for wayland sessions).
+auth       include      greetd
+auth       required     pam_env.so conffile=/usr/share/juniper/greetd-spawn.pam_env.conf
+account    include      greetd
+password   include      greetd
+session    include      greetd

@@ -1713,14 +1713,25 @@ test_check_target_refuses_system_disks() {
   check "target: partition refused" fails "$ROOT/disk/check-target" /dev/mmcblk0p1
 }
 
-# greetd shows its text login (agreety) first; niri starts only after PAM authentication.
-test_greetd_login_prompt_first() {
-  local c=$ROOT/system_files_desktop/etc/greetd/config.toml
+# greetd shows dms-greeter (as the unprivileged greeter user); a session starts only after PAM
+# accepts a password, and is typed wayland in logind (the reboot window's idle check needs it).
+test_greetd_graphical_login() {
+  local d=$ROOT/system_files_desktop c=$ROOT/system_files_desktop/etc/greetd/config.toml
   check "greetd: no auto-login (no initial_session)" fails grep -q initial_session "$c"
-  check "greetd: agreety starts niri-session" grep -qx 'command = "agreety --cmd niri-session"' "$c"
-  check "greetd: greeter runs as greetd" grep -qx 'user = "greetd"' "$c"
-  check "greetd: no lock-first spawn in niri defaults" fails grep -q lock-first \
-    "$ROOT/system_files_desktop/usr/share/juniper/niri/juniper.kdl"
+  check "greetd: dms-greeter in niri" grep -qx 'command = "dms-greeter --command niri --cache-dir /var/cache/dms-greeter"' "$c"
+  check "greetd: greeter runs as greeter" grep -qx 'user = "greeter"' "$c"
+  check "greetd: sessions through greetd-spawn" grep -qx 'service = "greetd-spawn"' "$c"
+  check "pam: greetd-spawn includes greetd" grep -qE '^auth +include +greetd$' "$d/etc/pam.d/greetd-spawn"
+  check "pam: greetd-spawn types the session wayland" grep -q 'conffile=/usr/share/juniper/greetd-spawn.pam_env.conf' "$d/etc/pam.d/greetd-spawn"
+  check "pam: env file" grep -qx 'XDG_SESSION_TYPE DEFAULT=wayland OVERRIDE=wayland' "$d/usr/share/juniper/greetd-spawn.pam_env.conf"
+  check "greeter: static purple theme" test "$(jq -r .currentThemeName "$d/usr/share/juniper/dms-greeter/settings.json")" = purple
+  check "greeter: Juniper wallpaper" test "$(jq -r .wallpaperPath "$d/usr/share/juniper/dms-greeter/session.json")" = /usr/share/juniper/wallpapers/juniper-berry.png
+  check "greeter: weather off" test "$(jq -r .weatherEnabled "$d/usr/share/juniper/dms-greeter/settings.json")" = false
+  check "dms: image-changing CLI commands blocked" test "$(jq -r '.blocked_commands | sort | join(",")' "$d/usr/share/dms/cli-policy.json")" = "greeter enable,greeter install,greeter uninstall,setup"
+  # the dms-greeter RPM ships its own tmpfiles d entries for /var/cache/dms-greeter and /var/lib/greeter
+  # (owner greeter), so ours only link the look into the cache
+  check "tmpfiles: settings.json linked into the greeter cache" grep -qx 'L+ /var/cache/dms-greeter/settings.json - - - - /usr/share/juniper/dms-greeter/settings.json' "$d/usr/lib/tmpfiles.d/juniper-greetd.conf"
+  check "tmpfiles: session.json linked into the greeter cache" grep -qx 'L+ /var/cache/dms-greeter/session.json - - - - /usr/share/juniper/dms-greeter/session.json' "$d/usr/lib/tmpfiles.d/juniper-greetd.conf"
 }
 
 test_desktop_idle_lock() {
