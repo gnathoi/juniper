@@ -5,8 +5,9 @@
 #   update [--auto] daily (juniper-dots-update.timer, --auto: skipped after `ujust toggle-auto-dots`)
 #   reset niri|all  move Juniper's files out of the way (backup in ~/.local/state/juniper) and
 #                   apply them fresh (ujust dots-reset)
-# Files you changed are skipped (chezmoi asks; we answer "s"). Files DMS owns (settings, colours)
-# are only created when missing.
+# Files that already existed before Juniper's first apply are left alone (listed in
+# ~/.local/state/juniper/dots-kept) until `ujust dots-reset`; files you change later are skipped
+# (chezmoi asks; we answer "s"). Files DMS owns (settings, colours) are only created when missing.
 set -euo pipefail
 
 src=${JUNIPER_DOTS_SRC:-/usr/share/juniper/dots}
@@ -20,29 +21,57 @@ usage() {
   echo "usage: dots init | update [--auto] | reset niri|all" >&2
   exit 2
 }
-apply() {
+prepare() {
   mkdir -p "$cfgdir"
   [[ -e $cfgdir/chezmoi.toml ]] || : >"$cfgdir/chezmoi.toml"
+}
+managed() { chezmoi managed "${args[@]:0:6}" --path-style absolute --include files; }
+# apply [--force] [targets...]: straight to chezmoi
+apply() {
+  prepare
   chezmoi apply "${args[@]}" "$@" < <(yes s)
 }
+# apply every managed file except the ones that were already there before our first apply
+apply_unkept() {
+  local -a want
+  prepare
+  mapfile -t want < <(managed | grep -vxFf "${kept:-/dev/null}" || true)
+  ((${#want[@]})) || return 0
+  # chezmoi can't create a file target whose parent directory is missing; make them private
+  # (a directory we create is never more open than ~/.config and ~/.local are meant to be)
+  (
+    umask 077
+    for f in "${want[@]}"; do mkdir -p "${f%/*}"; done
+  )
+  apply "${want[@]}"
+}
+
+kept=$state/dots-kept
+[[ -e $kept ]] || kept=/dev/null
 
 case ${1:-} in
   init)
     [[ ! -e $state/dots.done ]] || exit 0
-    apply
+    prepare
     mkdir -p "$state"
+    # files already in your home: Juniper's first apply must not replace them (decided once, so a
+    # retry after a failed apply doesn't count what Juniper itself wrote)
+    [[ -e $state/dots-kept ]] ||
+      managed | while IFS= read -r f; do [[ ! -e $f ]] || echo "$f"; done >"$state/dots-kept"
+    kept=$state/dots-kept
+    apply_unkept
     : >"$state/dots.done"
     ;;
   update)
     if [[ ${2:-} == --auto && -e $cfg/juniper/no-auto-dots ]]; then
       exit 0
     fi
-    apply
+    apply_unkept
     ;;
   reset)
     case ${2:-} in
       niri) targets=("$cfg/niri") ;;
-      all) mapfile -t targets < <(chezmoi managed "${args[@]:0:6}" --path-style absolute --include files) ;;
+      all) mapfile -t targets < <(managed) ;;
       *) usage ;;
     esac
     backup=$state/dots-backup-${JUNIPER_NOW:-$(date +%Y%m%d-%H%M%S)}
@@ -52,6 +81,13 @@ case ${1:-} in
       mkdir -p "$backup/$(dirname "$rel")"
       mv "$t" "$backup/$rel"
     done
+    # the reset targets are Juniper's again: no longer "kept"
+    if [[ -e $state/dots-kept ]]; then
+      for t in "${targets[@]}"; do
+        awk -v t="${t%/}" '$0 != t && index($0, t "/") != 1' "$state/dots-kept" >"$state/dots-kept.new"
+        mv "$state/dots-kept.new" "$state/dots-kept"
+      done
+    fi
     apply --force "${targets[@]}"
     echo "Reset ${2}; your previous files are in $backup"
     ;;

@@ -5375,13 +5375,42 @@ head -c 2 >"$T/chezmoi-stdin" || true'
 test_dots_init_once() {
   dots_env
   "$DOTS" init
-  check "dots: init applies Juniper's source" called "chezmoi apply --source $T/src --config $XDG_CONFIG_HOME/juniper/chezmoi/chezmoi.toml --persistent-state $XDG_CONFIG_HOME/juniper/chezmoi/chezmoistate.boltdb --no-tty --keep-going"
+  check "dots: init applies Juniper's source" called "chezmoi apply --source $T/src --config $XDG_CONFIG_HOME/juniper/chezmoi/chezmoi.toml --persistent-state $XDG_CONFIG_HOME/juniper/chezmoi/chezmoistate.boltdb --no-tty --keep-going $HOME/.config/niri/config.kdl $HOME/.config/niri/dms.kdl $HOME/.config/foot/foot.ini"
   check "dots: files you changed are skipped (s answers)" cmp -s "$T/chezmoi-stdin" <(printf 's\n')
   check "dots: own chezmoi config, not yours" test -e "$XDG_CONFIG_HOME/juniper/chezmoi/chezmoi.toml"
   check "dots: marked done" test -e "$XDG_STATE_HOME/juniper/dots.done"
+  check "dots: nothing kept in a fresh home" test ! -s "$XDG_STATE_HOME/juniper/dots-kept"
   : >"$CALLS"
   "$DOTS" init
   check "dots: init only once" not_called "chezmoi apply"
+}
+
+test_dots_keeps_files_that_existed_before_init() {
+  dots_env
+  mkdir -p "$HOME/.config/foot"
+  echo mine >"$HOME/.config/foot/foot.ini"
+  "$DOTS" init
+  local k=$XDG_STATE_HOME/juniper/dots-kept
+  check "dots: pre-existing file listed as kept" test "$(cat "$k")" = "$HOME/.config/foot/foot.ini"
+  check "dots: init doesn't apply the kept file" not_called "foot.ini"
+  check "dots: init applies the missing ones" called "$HOME/.config/niri/config.kdl $HOME/.config/niri/dms.kdl"
+  : >"$CALLS"
+  "$DOTS" update
+  check "dots: update doesn't apply the kept file either" not_called "foot.ini"
+  check "dots: update applies the others" called "$HOME/.config/niri/config.kdl"
+  mkdir -p "$HOME/.config/niri"
+  echo mine >"$HOME/.config/niri/config.kdl"
+  echo "$HOME/.config/niri/config.kdl" >>"$k"
+  : >"$CALLS"
+  "$DOTS" reset niri >/dev/null
+  check "dots reset niri: no longer kept" not_grep_dir "niri" "$k"
+  check "dots reset niri: other kept files stay kept" grep -qx "$HOME/.config/foot/foot.ini" "$k"
+  check "dots reset niri: applied with --force" called "--force $HOME/.config/niri"
+  echo "$HOME/.config/niri/dms.kdl" >"$k"
+  mkdir -p "$HOME/.config/niri"
+  : >"$HOME/.config/niri/dms.kdl"
+  "$DOTS" reset all >/dev/null
+  check "dots reset all: nothing kept" test ! -s "$k"
 }
 
 test_dots_init_failure_retried() {
