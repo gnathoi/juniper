@@ -131,8 +131,11 @@ fallback is the earlier spec's option 3 (rebuild in our own COPR).
 
 ## Look
 
-- `/usr/share/juniper/wallpapers/juniper-berry.svg`: juniper berry cluster with needle
-  sprigs, flat shapes, blue-violet berries with a dusty bloom, deep indigo background.
+- `/usr/share/juniper/wallpapers/juniper-berry.svg`: Juniper's terminal logo (fastfetch's
+  `logo.txt`: a berry under three spokes) abstracted to an open ring and three strokes, in one
+  cyan-to-magenta neon line, leaning back from the viewer in perspective, right of centre with
+  its base pointing at the bottom centre of the screen, on a plain navy-to-violet gradient
+  (changed after the first hardware run; it was a flat blue-violet berry cluster, centred).
   Original artwork: recognisably a juniper, not a copy of the Raspberry Pi logo (a
   trademark). A PNG render at 3840x2160 for matugen and the greeter (matugen reads raster).
 - matugen derives the Material You palette from it at first login (DMS does this; seconds on
