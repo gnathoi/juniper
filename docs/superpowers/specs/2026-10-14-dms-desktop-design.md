@@ -89,10 +89,13 @@ fallback is the earlier spec's option 3 (rebuild in our own COPR).
 - `/usr/share/juniper/niri/juniper.kdl` (read-only, image-owned) keeps: xwayland-satellite,
   `prefer-no-csd`, the idle-hint helper, and Juniper's binds; it adds zirconium's DMS
   integration (`layer-rule` for the `quickshell` namespace, lid close →
-  `dms ipc call lock lock`, `config-notification { disable-failed }`) and DMS binds:
-  Mod+Space / Mod+D launcher, Mod+N notifications, Super+Alt+L lock, Mod+V clipboard,
-  Ctrl+Shift+Esc process list, screenshots via `dms ipc call niri screenshot*`, media and
-  brightness keys (`allow-when-locked`). Mod+Return opens `xdg-terminal-exec` (foot).
+  `dms ipc call lock lock`, `config-notification { disable-failed }`) and zirconium's binds
+  (zdots `binds.kdl` + `dms/binds.kdl`) without the apps Juniper doesn't ship (nautilus, zocr,
+  orca): Mod+Space launcher, Mod+N notifications, Mod+Alt+L lock, Mod+M / Ctrl+Shift+Esc
+  process list, screenshots via `dms ipc call niri screenshot*`, media and brightness keys
+  (`allow-when-locked`), Mod+T opens `xdg-terminal-exec` (foot). Juniper adds Mod+Return
+  (terminal) and Mod+Alt+V (clipboard; zirconium's Mod+V toggles floating). The hotkey
+  overlay shows at startup, as on zirconium.
 - `desktop-idle-lock` becomes `desktop-idle-hint`: `swayidle -w idlehint 1800` only. Lock on
   idle moves to DMS (`acLockTimeout` 600 in the shipped settings); `ujust desktop-lock-idle
   on|off` edits that setting with `jq` instead of a flag file. Locking is a convenience:
