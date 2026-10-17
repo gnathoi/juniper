@@ -42,15 +42,16 @@ after install, `just bump-desktop` and the weekly `bump-desktop.yml` to move the
 | Source | Packages |
 |---|---|
 | COPR `avengemedia/dms` (new) | dms (with its dms-cli subpackage, if split) |
-| COPR `avengemedia/danklinux` (new) | dms-greeter, quickshell, matugen, dgop, danksearch, cliphist, material-symbols-fonts, plus quickshell's runtime deps from that COPR (breakpad, cpptrace, cli11 if needed at runtime) |
+| COPR `avengemedia/danklinux` (new) | dms-greeter, quickshell, matugen, dgop, cliphist, material-symbols-fonts, plus quickshell's runtime deps from that COPR (breakpad, cpptrace, cli11 if needed at runtime) |
 | COPR `yalter/niri` | niri (unchanged) |
 | COPR `yselkowitz/wlroots-epel` | xwayland-satellite, foot, foot-terminfo, swayidle, brightnessctl, playerctl (+ their deps); waybar, fuzzel, swaylock, swaybg, SwayNotificationCenter dropped |
 | COPR `yselkowitz/cosmic-epel` | greetd, greetd-selinux (unchanged) |
-| AppStream / EPEL | accountsservice, qt6-qtmultimedia, qt6-qtwayland, kf6-kirigami (EPEL), chezmoi (EPEL), xdg-terminal-exec (EPEL), policycoreutils-python-utils (dms-greeter requires it) |
+| AppStream / EPEL | accountsservice, qt6-qtmultimedia, qt6-qtwayland, chezmoi (EPEL), xdg-terminal-exec (EPEL), policycoreutils-python-utils (dms-greeter requires it) |
 
 Not shipped: `cava` and `udiskie` (not in EL10; `cava` is only a Recommends), `ghostty` and
-`qt6ct-kde` (no epel-10 build). `install_weak_deps=False` for the COPR packages, so their
-Recommends are explicit choices in the list above.
+`qt6ct-kde` (no epel-10 build), and `danksearch` (fenced out of the COPR; it
+would index the home dir on a Pi, and DMS works without it). Weak dependencies stay on (dnf's
+default); the includepkgs fences limit what each COPR can supply to the packages above.
 
 The two avengemedia projects are a new trust root: anyone with access can push builds, and the
 lock file is what keeps a malicious or broken build out of an image until a reviewed bump.
@@ -84,8 +85,7 @@ fallback is the earlier spec's option 3 (rebuild in our own COPR).
 
 - `niri-session` starts niri as a systemd user service. DMS starts from its packaged
   `dms.service` (user unit, `PartOf=graphical-session.target`), enabled by a user preset,
-  not `spawn-at-startup`. No `DMS_PRIVESC` drop-in, no qt6ct config, and danksearch's
-  `dsearch.service` is not enabled (it would index the home dir on a Pi; DMS works without it).
+  not `spawn-at-startup`. No `DMS_PRIVESC` drop-in, no qt6ct config, and no danksearch.
 - `/usr/share/juniper/niri/juniper.kdl` (read-only, image-owned) keeps: xwayland-satellite,
   `prefer-no-csd`, the idle-hint helper, and Juniper's binds; it adds zirconium's DMS
   integration (`layer-rule` for the `quickshell` namespace, lid close →
@@ -117,15 +117,16 @@ fallback is the earlier spec's option 3 (rebuild in our own COPR).
     Image-owned entry files (niri `config.kdl`, `dms.kdl`, `foot.ini`, GTK settings) are normal
     files that the daily update refreshes unless the user changed them.
 - `juniper-dots-init.service` (user, `ConditionPathExists=!%h/.local/state/juniper/dots.done`):
-  `chezmoi apply --source /usr/share/juniper/dots --config ~/.config/juniper/chezmoi.toml
-  --persistent-state ~/.local/state/juniper/chezmoistate.boltdb`, then writes the marker. The
+  `chezmoi apply --source /usr/share/juniper/dots --config ~/.config/juniper/chezmoi/chezmoi.toml
+  --persistent-state ~/.config/juniper/chezmoi/chezmoistate.boltdb`, then writes the marker. The
   Juniper-owned config and state paths leave a user's own chezmoi setup untouched.
 - `juniper-dots-update.timer` (daily): re-applies, skipping files changed since last apply
   (`--keep-going`, chezmoi's `skip` on conflicts), so image updates reach unchanged files.
 - `ujust dots-update`, `ujust dots-reset [niri|all]` (back up then re-apply; `niri` resets only `config.kdl` and
   `dms.kdl`, never `local.kdl` or DMS's own niri files), `ujust toggle-auto-dots`. Managed files
-  that existed before the first apply are kept, never overwritten, and listed in
-  `~/.local/state/juniper/dots-kept`; they get no updates until `ujust dots-reset`. `ujust desktop-config` goes away (chezmoi writes `config.kdl`).
+  that already existed when Juniper first saw them (on the first run of any `dots` command, or
+  when a newer image adds a file; `~/.local/state/juniper/dots-known` lists the ones seen) are
+  kept, never overwritten, and listed in `~/.local/state/juniper/dots-kept`; they get no updates until `ujust dots-reset`. `ujust desktop-config` goes away (chezmoi writes `config.kdl`).
 - Only on `juniper-desktop`; the headless images don't ship chezmoi.
 
 ## Look
@@ -135,7 +136,7 @@ fallback is the earlier spec's option 3 (rebuild in our own COPR).
   Original artwork: recognisably a juniper, not a copy of the Raspberry Pi logo (a
   trademark). A PNG render at 3840x2160 for matugen and the greeter (matugen reads raster).
 - matugen derives the Material You palette from it at first login (DMS does this; seconds on
-  a Pi 5). foot, GTK, Qt follow. Greeter shows the same wallpaper and theme.
+  a Pi 5). foot and GTK follow. Greeter shows the same wallpaper.
 
 ## Things removed
 

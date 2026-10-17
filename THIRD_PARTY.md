@@ -20,7 +20,7 @@ components, unmodified, under their own licenses. License texts are in the image
 | Homebrew | BSD-2-Clause | github.com/Homebrew/brew |
 | starship's `plain-text-symbols` preset, as `/usr/share/juniper/starship.toml` (`juniper` image) | ISC | github.com/starship/starship |
 | node_exporter (only if you run `ujust enable-metrics`; pulled on the device) | Apache-2.0 | quay.io/prometheus/node-exporter |
-| DankMaterialShell (dms, dms-cli), dms-greeter, dgop, danksearch (`juniper-desktop`) | MIT | COPRs avengemedia/dms, avengemedia/danklinux |
+| DankMaterialShell (dms, dms-cli), dms-greeter, dgop (`juniper-desktop`) | MIT | COPRs avengemedia/dms, avengemedia/danklinux |
 | quickshell (`juniper-desktop`) | LGPL-3.0-only AND GPL-3.0-only | COPR avengemedia/danklinux |
 | matugen (`juniper-desktop`) | GPL-2.0-or-later | COPR avengemedia/danklinux |
 | cliphist (`juniper-desktop`) | GPL-3.0-or-later | COPR avengemedia/danklinux |
