@@ -61,17 +61,18 @@ fallback is the earlier spec's option 3 (rebuild in our own COPR).
 ## Login (greetd + dms-greeter)
 
 - `/etc/greetd/config.toml`: `vt = 1`, `default_session.command = "dms-greeter --command
-  niri-session --cache-dir /var/cache/dms-greeter"`, `user = "greeter"`,
-  `service = "greetd-spawn"`. No `initial_session`: no session before PAM accepts a password.
+  niri --cache-dir /var/cache/dms-greeter"`, `user = "greeter"`,
+  `service = "greetd-spawn"` (`--command` is the greeter's own compositor, so `niri`, not `niri-session`). No `initial_session`: no session before PAM accepts a password.
 - The `greeter` user from a sysusers.d file (system user; uid assigned by sysusers, not a
   fixed 767).
-- `/usr/lib/pam.d/greetd-spawn`: includes `greetd` and adds `pam_env` with
-  `XDG_SESSION_TYPE=wayland`, so logind types the greeter session correctly (zirconium's
+- `/etc/pam.d/greetd-spawn` (AlmaLinux reads `/etc/pam.d`): includes `greetd` and adds `pam_env`
+  (env file `/usr/share/juniper/greetd-spawn.pam_env.conf`) with `XDG_SESSION_TYPE=wayland`, so logind types the greeter session correctly (zirconium's
   wrapper). gnome-keyring PAM lines stay as greetd's package ships them; confirm unlock on
   hardware.
 - tmpfiles: `/var/cache/dms-greeter` owned by `greeter`; the greeter's appearance
-  (wallpaper, theme) symlinked from `/usr/share/juniper/dms-greeter/` so it matches the
-  session. `/var/lib/greetd` as today.
+  (wallpaper, theme) symlinked from `/usr/share/juniper/dms-greeter/`. The greeter uses DMS's built-in static
+  `purple` theme with the Juniper wallpaper (no matugen output exists before anyone logs in);
+  the session uses `dynamic`. `/var/lib/greetd` as today.
 - Health hook `10-greetd` unchanged (greetd active under tryboot).
 - `dms greeter install|enable|uninstall` and `dms setup` are blocked with a
   `/usr/share/dms/cli-policy.json` like zirconium's: they write to `/usr` or `/etc/greetd` and
@@ -83,8 +84,8 @@ fallback is the earlier spec's option 3 (rebuild in our own COPR).
 
 - `niri-session` starts niri as a systemd user service. DMS starts from its packaged
   `dms.service` (user unit, `PartOf=graphical-session.target`), enabled by a user preset,
-  not `spawn-at-startup`. A `dms.service.d` drop-in sets `DMS_PRIVESC=sudo` (the image has
-  sudo; zirconium uses run0).
+  not `spawn-at-startup`. No `DMS_PRIVESC` drop-in, no qt6ct config, and danksearch's
+  `dsearch.service` is not enabled (it would index the home dir on a Pi; DMS works without it).
 - `/usr/share/juniper/niri/juniper.kdl` (read-only, image-owned) keeps: xwayland-satellite,
   `prefer-no-csd`, the idle-hint helper, and Juniper's binds; it adds zirconium's DMS
   integration (`layer-rule` for the `quickshell` namespace, lid close →
@@ -110,16 +111,21 @@ fallback is the earlier spec's option 3 (rebuild in our own COPR).
     `matugenScheme: "scheme-tonal-spot"`, dark mode, `weatherEnabled: false`,
     `useAutoLocation: false`, `acLockTimeout: 600`, `lockBeforeSuspend: true`, system-update
     widget hidden.
-  - `dot_config/foot/foot.ini`, GTK 3/4 and qt6ct configs that include the matugen-generated
-    colour files.
+  - `dot_config/foot/foot.ini`, GTK 3/4 settings that include the matugen-generated colour files.
+  - DMS-owned files (`settings.json`, `session.json`, foot's `dank-colors.ini`) are chezmoi
+    `create_` files: written only when missing, never overwritten by the daily update.
+    Image-owned entry files (niri `config.kdl`, `dms.kdl`, `foot.ini`, GTK settings) are normal
+    files that the daily update refreshes unless the user changed them.
 - `juniper-dots-init.service` (user, `ConditionPathExists=!%h/.local/state/juniper/dots.done`):
   `chezmoi apply --source /usr/share/juniper/dots --config ~/.config/juniper/chezmoi.toml
   --persistent-state ~/.local/state/juniper/chezmoistate.boltdb`, then writes the marker. The
   Juniper-owned config and state paths leave a user's own chezmoi setup untouched.
 - `juniper-dots-update.timer` (daily): re-applies, skipping files changed since last apply
   (`--keep-going`, chezmoi's `skip` on conflicts), so image updates reach unchanged files.
-- `ujust dots-update`, `ujust dots-reset [niri|all]` (back up then re-apply), `ujust
-  toggle-auto-dots`. `ujust desktop-config` goes away (chezmoi writes `config.kdl`).
+- `ujust dots-update`, `ujust dots-reset [niri|all]` (back up then re-apply; `niri` resets only `config.kdl` and
+  `dms.kdl`, never `local.kdl` or DMS's own niri files), `ujust toggle-auto-dots`. Managed files
+  that existed before the first apply are kept, never overwritten, and listed in
+  `~/.local/state/juniper/dots-kept`; they get no updates until `ujust dots-reset`. `ujust desktop-config` goes away (chezmoi writes `config.kdl`).
 - Only on `juniper-desktop`; the headless images don't ship chezmoi.
 
 ## Look

@@ -12,6 +12,7 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ### Changed
 
+- `juniper-desktop` (experimental): the session is niri with DankMaterialShell (bar, launcher, notifications, lock, clipboard history, settings), themed from a new Juniper wallpaper, behind DankMaterialShell's graphical login instead of a text prompt. waybar, fuzzel, SwayNotificationCenter and swaylock are gone. DMS's weather and location lookups are off and its update button runs `ujust update`. Your niri changes go in `~/.config/niri/local.kdl`; Juniper's dotfiles are applied with chezmoi at first login and refreshed daily unless you changed them (`ujust dots-reset`, `ujust toggle-auto-dots`); dotfiles you already had are kept (listed in `~/.local/state/juniper/dots-kept`) until `ujust dots-reset`; `ujust desktop-config` is gone
 - First-boot encryption no longer gives up for good when the Pi's firmware key interface stops answering (a wedged mailbox, maybe a one-off): the card boots plain this time and the next boot tries again, up to three boots in a row; `ujust pi-status` says so
 
 ### Added

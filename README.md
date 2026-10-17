@@ -18,7 +18,7 @@ A Pi 5 running `juniper`. `juniper-minimal` shows just the status block.
 | | `juniper-minimal` | `juniper` | `juniper-desktop` |
 |---|---|---|---|
 | Purpose | appliance base | dev box | dev box with a screen (experimental) |
-| Interface | headless | headless | niri desktop |
+| Interface | headless | headless | niri + DankMaterialShell desktop |
 | Tailscale, flash-time join, firewall lockdown, `ujust lan-ssh` | yes | yes | yes |
 | Podman + quadlets, nightly `podman auto-update`, firewalld | yes | yes | yes |
 | cloud-init first boot, secrets scrubbed from the boot partition | yes | yes | yes |
@@ -309,12 +309,22 @@ clock is not synced, since a Pi has no battery-backed clock.
 disk image), but nobody has run it on hardware yet, and it isn't in Raspberry Pi Imager's
 list.
 
-It boots to a text login prompt (greetd's agreety); niri starts after you log in with your
-password. Graphical greeter later. `just flash` and `ujust switch` both require a password
-for the first user (uid 1000), and on a flashed desktop `sudo` asks for it too.
+It boots to DankMaterialShell's graphical login (dms-greeter); your niri session starts after you
+log in with your password. The desktop is niri with DankMaterialShell: bar, launcher (Mod+Space),
+notifications (Mod+N), clipboard history (Mod+V), lock screen (Super+Alt+L) and a settings
+window, coloured from Juniper's juniper-berry wallpaper. Mod+Return opens a terminal (foot);
+Mod+/ shows every key. `just flash` and `ujust switch` both require a password for the first
+user (uid 1000), and on a flashed desktop `sudo` asks for it too.
 
-- `ujust desktop-config` writes a personal niri config that includes Juniper's defaults (bar,
-  notifications, idle lock, key bindings).
+DankMaterialShell's weather and location lookups are off, and its update button runs
+`ujust update`, so updates still go through Juniper's health-checked path.
+
+- Your niri changes go in `~/.config/niri/local.kdl`; DMS's settings window writes its own.
+  Juniper refreshes the rest of its dotfiles daily unless you changed them
+  (`ujust toggle-auto-dots` turns that off); `ujust dots-reset niri|all` puts Juniper's back
+  (yours go to a backup in `~/.local/state/juniper`). A dotfile that already existed before
+  Juniper's first apply is kept and listed in `~/.local/state/juniper/dots-kept`; it gets no
+  updates until you reset it. `niri` resets only `config.kdl` and `dms.kdl`, `all` everything.
 - `ujust desktop-lock-idle on|off` turns the lock after 10 minutes idle on or off.
 - `ujust flatpak-setup` retries the first-boot install of Firefox and Bazaar.
 
