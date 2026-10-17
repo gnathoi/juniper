@@ -1787,7 +1787,7 @@ idle_env() {
   # shellcheck disable=SC2016 # expands inside the stub
   stub loginctl 'case "$1" in
     list-sessions) echo "3 1000 nat seat0 tty1" ;;
-    show-session) case "$4" in Type) echo wayland ;; Active) echo yes ;; IdleHint) echo "${IDLE:-no}" ;; esac ;;
+    show-session) case "$4" in Class) echo user ;; Type) echo wayland ;; Active) echo yes ;; IdleHint) echo "${IDLE:-no}" ;; esac ;;
   esac'
 }
 
@@ -1910,7 +1910,7 @@ test_desktop_idle_any_active_nonidle_session_defers() {
   # shellcheck disable=SC2016 # expands inside the stub
   stub loginctl 'case "$1" in
     list-sessions) printf "3 1000 nat seat0 tty1\n4 1000 nat seat0 tty2\n" ;;
-    show-session) case "$4" in Type) echo wayland ;; Active) echo yes ;; IdleHint) [[ $2 == 3 ]] && echo yes || echo no ;; esac ;;
+    show-session) case "$4" in Class) echo user ;; Type) echo wayland ;; Active) echo yes ;; IdleHint) [[ $2 == 3 ]] && echo yes || echo no ;; esac ;;
   esac'
   check "idle: one idle + one busy session -> skip" fails "$LIBEXEC_DESKTOP/desktop-idle"
 }
@@ -1920,9 +1920,19 @@ test_desktop_idle_ignores_non_graphical_sessions() {
   # shellcheck disable=SC2016 # expands inside the stub
   stub loginctl 'case "$1" in
     list-sessions) echo "5 1000 nat seat0 pts/0" ;;
-    show-session) case "$4" in Type) echo tty ;; Active) echo yes ;; IdleHint) echo no ;; esac ;;
+    show-session) case "$4" in Class) echo user ;; Type) echo tty ;; Active) echo yes ;; IdleHint) echo no ;; esac ;;
   esac'
   check "idle: ssh/tty-only session -> reboot" "$LIBEXEC_DESKTOP/desktop-idle"
+}
+
+test_desktop_idle_ignores_greeter_sessions() {
+  idle_env
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub loginctl 'case "$1" in
+    list-sessions) echo "c1 973 greeter seat0 tty1" ;;
+    show-session) case "$4" in Class) echo greeter ;; Type) echo wayland ;; Active) echo yes ;; IdleHint) echo no ;; esac ;;
+  esac'
+  check "idle: busy-looking greeter session -> reboot" "$LIBEXEC_DESKTOP/desktop-idle"
 }
 
 test_desktop_idle_future_marker() {
