@@ -5556,6 +5556,14 @@ test_dots_update_respects_opt_out() {
   check "dots: ujust dots-update still applies" called "chezmoi apply"
 }
 
+test_toggle_auto_dots_is_where_dots_looks() {
+  dots_env
+  XDG_CONFIG_HOME=$T/xdg just --justfile "$ROOT/system_files_desktop/usr/share/juniper/just/desktop.just" \
+    toggle-auto-dots >/dev/null
+  XDG_CONFIG_HOME=$T/xdg "$DOTS" update --auto
+  check "toggle-auto-dots: dots sees it under XDG_CONFIG_HOME" not_called "chezmoi apply"
+}
+
 test_dots_reset_backs_up_then_forces() {
   dots_env
   mkdir -p "$HOME/.config/niri" "$HOME/.config/foot"

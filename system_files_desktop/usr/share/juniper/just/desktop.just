@@ -14,8 +14,8 @@ dots-reset scope="niri":
 toggle-auto-dots:
     #!/usr/bin/bash
     set -euo pipefail
-    f="$HOME/.config/juniper/no-auto-dots"
-    if [[ -e $f ]]; then rm "$f"; echo "Daily dotfiles refresh on."; else mkdir -p "${f%/*}"; touch "$f"; echo "Daily dotfiles refresh off."; fi
+    f="${XDG_CONFIG_HOME:-$HOME/.config}/juniper/no-auto-dots"
+    if [[ -e $f ]]; then rm "$f"; echo "Daily dotfiles refresh on."; else (umask 077 && mkdir -p "${f%/*}"); touch "$f"; echo "Daily dotfiles refresh off."; fi
 
 # Install (or finish installing) Firefox and the Bazaar app store from Flathub
 flatpak-setup:
