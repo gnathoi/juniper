@@ -18,6 +18,7 @@ Unreleased as its release notes, then moves those entries under the release's ta
 ### Fixed
 
 - `juniper-desktop`: nothing looks up the device's location online any more. DankMaterialShell starts a geoclue client at every login, and geoclue's IP and Wi-Fi sources asked an online location service; both are off (`/etc/geoclue/conf.d/90-juniper.conf`)
+- Updates and `ujust switch` can pull an image that adds a SELinux policy module (as `juniper-desktop` does, for flatpak and greetd). bootc now always runs those pulls as a transient systemd unit, in SELinux's install_t: run from the update service's script or over tailscale SSH it stayed out of it and failed with `fsetxattr(security.selinux): Invalid argument`
 
 ## build-20261014 (2026-10-14)
 
