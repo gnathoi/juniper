@@ -306,16 +306,19 @@ clock is not synced, since a Pi has no battery-backed clock.
 ### The experimental desktop
 
 `juniper-desktop` is experimental: it is built, tested in CI and published (signed image and
-disk image), but nobody has run it on hardware yet, and it isn't in Raspberry Pi Imager's
-list.
+disk image), and has had its first run on a Raspberry Pi 5 (4 GB), but its hardware checklist
+(#58) isn't finished, and it isn't in Raspberry Pi Imager's list.
+
+![juniper-desktop on a Raspberry Pi 5: niri with DankMaterialShell's bar, fastfetch and btop in see-through foot terminals, about 1 GB of RAM in use](docs/images/desktop.png)
 
 It boots to DankMaterialShell's graphical login (dms-greeter); your niri session starts after you
 log in with your password. The desktop is niri with DankMaterialShell: bar, launcher (Mod+Space),
 notifications (Mod+N), clipboard history (Mod+Alt+V), lock screen (Mod+Alt+L) and a settings
 window, coloured from Juniper's juniper-berry wallpaper. The keys are zirconium's: Mod+T (or
 Mod+Return) opens a terminal (foot), Mod+Ctrl+arrows move windows, Mod+1–9 switch workspaces.
-Mod+/ shows every key, and the list also comes up at each login. `just flash` and `ujust switch` both require a password for the first
-user (uid 1000), and on a flashed desktop `sudo` asks for it too.
+Mod+/ shows every key, and the list also comes up at each login. `just flash` and
+`ujust switch` both require a password for the first user (uid 1000), and on a flashed desktop
+`sudo` asks for it too.
 
 DankMaterialShell's weather and location lookups are off, geoclue never asks an online
 service where the device is (its IP and Wi-Fi sources are off in
