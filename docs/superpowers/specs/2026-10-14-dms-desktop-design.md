@@ -131,10 +131,11 @@ fallback is the earlier spec's option 3 (rebuild in our own COPR).
 
 ## Look
 
-- `/usr/share/juniper/wallpapers/juniper-berry.svg`: juniper berry cluster with needle
-  sprigs, flat shapes, blue-violet berries with a dusty bloom, deep indigo background.
-  Original artwork: recognisably a juniper, not a copy of the Raspberry Pi logo (a
-  trademark). A PNG render at 3840x2160 for matugen and the greeter (matugen reads raster).
+- `/usr/share/juniper/wallpapers/juniper-berry.svg`: a stratified gradient: gently waving
+  bands from deep navy at the top through violet into pink, each edged with a faint light
+  line, no logo (changed after the first hardware run; it was a flat blue-violet berry
+  cluster, centred, on indigo). The file keeps its name so nothing that points at it changes.
+  Original artwork. A PNG render at 3840x2160 for matugen and the greeter (matugen reads raster).
 - matugen derives the Material You palette from it at first login (DMS does this; seconds on
   a Pi 5). foot and GTK follow. Greeter shows the same wallpaper.
 

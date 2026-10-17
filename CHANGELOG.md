@@ -10,6 +10,10 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+### Changed
+
+- `juniper-desktop`: a new default wallpaper: a stratified gradient, gently waving bands from deep navy through violet into pink; the desktop's colours follow it
+
 ## build-20261014 (2026-10-14)
 
 ### Changed
