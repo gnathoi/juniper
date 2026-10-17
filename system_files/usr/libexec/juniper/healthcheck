@@ -119,7 +119,7 @@ fall_back() {
 # fallback can both get here). Best effort: it must never stand in the way of the reboot.
 quarantine() {
   local digest boot count last list=$state_dir/bad-digests
-  digest=$(probe bootc status --json 2>/dev/null | jq -r '.status.booted.image.imageDigest // empty' 2>/dev/null) || true
+  digest=$(probe "${JUNIPER_BOOTC_STATUS:-/usr/libexec/juniper/bootc-status}" 2>/dev/null | jq -r '.status.booted.image.imageDigest // empty' 2>/dev/null) || true
   if [[ ! $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
     echo "No image digest for this deployment; no strike recorded." >&2
     return 1

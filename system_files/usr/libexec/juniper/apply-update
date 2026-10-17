@@ -30,7 +30,7 @@ not_held() {
   [[ -z $mode ]] || exit 0
 }
 
-status=$(bootc status --json)
+status=$("${JUNIPER_BOOTC_STATUS:-/usr/libexec/juniper/bootc-status}")
 if [[ $(jq '.status.staged != null' <<<"$status") != true ]]; then
   [[ -n $mode ]] || echo "No staged update; not rebooting."
   not_held

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# bootc-status: print `bootc status --json`, taken in SELinux's install_t when we can. Run from a
+# script (unconfined_service_t), bootc probes for install_t with chcon on every call and SELinux
+# logs two mac_admin denials; juniper-bootc-status.service has systemd run bootc itself instead.
+# As root, refresh that snapshot and print it; otherwise (or if it fails) ask bootc directly.
+set -uo pipefail
+
+snapshot=${JUNIPER_RUN_DIR:-/run/juniper}/bootc-status.json
+if ((EUID == 0)) && systemctl start juniper-bootc-status.service 2>/dev/null && [[ -s $snapshot ]]; then
+  exec cat "$snapshot"
+fi
+exec bootc status --json
