@@ -407,6 +407,11 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
   getent passwd greeter >/dev/null
   [[ $(id -u greeter) -lt 1000 ]]
   test -s /etc/pam.d/greetd-spawn
+  test -s /usr/share/juniper/greetd-spawn.pam_env.conf
+  if compgen -G '/etc/greetd/config.toml.backup-*' >/dev/null; then
+    echo "dms-greeter's stale greetd config backup shipped"
+    exit 1
+  fi
   if grep -q initial_session /etc/greetd/config.toml ||
     compgen -G '/usr/lib/systemd/system/greetd.service.d/*' >/dev/null ||
     compgen -G '/etc/systemd/system/greetd.service.d/*' >/dev/null; then

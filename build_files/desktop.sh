@@ -34,6 +34,8 @@ rm -f /etc/yum.repos.d/juniper-copr-*.repo
 install -D -m 0644 /ctx/build_files/desktop.lock /usr/share/juniper/desktop.lock
 
 cp -a /ctx/system_files_desktop/. /
+# dms-greeter's %post backs up the greetd config it replaced; ours (just copied) is the one in use
+rm -f /etc/greetd/config.toml.backup-*
 
 # KMS graphics, per kernel (replaces the headless rpi-config.txt build.sh installed).
 for kdir in /usr/lib/modules/*/; do
