@@ -10,6 +10,10 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+### Changed
+
+- `juniper-desktop`: a new default wallpaper: Juniper's terminal logo as an abstract neon line (an open ring under three spokes), leaning back in perspective and off-centre, on a plain navy-to-violet gradient; the desktop's colours follow it
+
 ## build-20261014 (2026-10-14)
 
 ### Changed
