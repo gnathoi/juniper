@@ -1,0 +1,5 @@
+Mod+/ shows every niri key; the list also comes up when you log in.
+Mod+T (or Mod+Return) opens a terminal, Mod+Space the launcher.
+Mod+Ctrl+arrows move windows, Mod+1 to Mod+9 switch workspaces, Mod+O shows them all.
+Mod+Alt+V opens clipboard history; Mod+Alt+L locks the screen.
+Your own niri settings go in ~/.config/niri/local.kdl; `ujust dots-reset niri` restores Juniper's.
