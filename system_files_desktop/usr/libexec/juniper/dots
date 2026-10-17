@@ -6,9 +6,11 @@
 #   reset niri|all  move Juniper's files out of the way (backup in ~/.local/state/juniper) and
 #                   apply them fresh (ujust dots-reset); niri = config.kdl and dms.kdl only,
 #                   never your local.kdl or DMS's dms/*.kdl
-# Files that already existed before Juniper's first apply are left alone (listed in
-# ~/.local/state/juniper/dots-kept) until `ujust dots-reset`; files you change later are skipped
-# (chezmoi asks; we answer "s"). Files DMS owns (settings, colours) are only created when missing.
+# A managed file that is new to us (every file on the first run of any command, or one a newer
+# image added; dots-known lists the ones already seen) but already in your home is yours: it is
+# left alone (listed in ~/.local/state/juniper/dots-kept) until `ujust dots-reset`. Files you
+# change after Juniper wrote them are skipped (chezmoi asks; we answer "s"). Files DMS owns
+# (settings, colours) are only created when missing.
 set -euo pipefail
 
 src=${JUNIPER_DOTS_SRC:-/usr/share/juniper/dots}
@@ -52,13 +54,41 @@ apply() {
   prepare
   chezmoi apply "${args[@]}" "$@" < <(yes s)
 }
-# apply every managed file except the ones that were already there before our first apply
+# put_list FILE [LINE...]: replace FILE whole (.new, then mv), so a failure never leaves half a list
+put_list() {
+  local f=$1
+  shift
+  if (($#)); then printf '%s\n' "$@"; fi >"$f.new"
+  mv "$f.new" "$f"
+}
+# note_new: fill $managed, then sort the files we haven't seen before: one that's already in your
+# home goes on dots-kept, and all of them go on dots-known. Recorded before any apply, so each
+# file is decided once: an apply that fails half-way can't turn Juniper's own files into "yours"
+# on the retry.
+note_new() {
+  local f
+  local -a add=()
+  list_managed
+  for f in "${managed[@]}"; do
+    grep -qxF -- "$f" "$known" 2>/dev/null && continue
+    [[ -e $f ]] || continue
+    grep -qxF -- "$f" "$kept" 2>/dev/null || add+=("$f")
+  done
+  mkpriv "$state"
+  if ((${#add[@]})) || [[ ! -e $kept ]]; then
+    local -a old=()
+    [[ ! -e $kept ]] || mapfile -t old <"$kept"
+    put_list "$kept" "${old[@]}" "${add[@]}"
+  fi
+  put_list "$known" "${managed[@]}"
+}
+# apply every managed file except the kept ones
 apply_unkept() {
   local f
   local -a want=()
-  list_managed
+  note_new
   for f in "${managed[@]}"; do
-    grep -qxF -- "$f" "$kept" 2>/dev/null || want+=("$f")
+    grep -qxF -- "$f" "$kept" || want+=("$f")
   done
   ((${#want[@]})) || return 0
   # chezmoi can't create a file target whose parent directory is missing
@@ -67,18 +97,11 @@ apply_unkept() {
 }
 
 kept=$state/dots-kept
+known=$state/dots-known
 
 case ${1:-} in
   init)
     [[ ! -e $state/dots.done ]] || exit 0
-    # files already in your home: Juniper's first apply must not replace them (decided once, and
-    # only written when complete, so a retry after a failed attempt can't lose or add to them)
-    if [[ ! -e $kept ]]; then
-      list_managed
-      mkpriv "$state"
-      for f in "${managed[@]}"; do [[ ! -e $f ]] || echo "$f"; done >"$kept.new"
-      mv "$kept.new" "$kept"
-    fi
     apply_unkept
     mkpriv "$state"
     : >"$state/dots.done"
@@ -91,13 +114,17 @@ case ${1:-} in
     ;;
   reset)
     case ${2:-} in
-      niri) targets=("$cfg/niri/config.kdl" "$cfg/niri/dms.kdl") ;;
-      all)
-        list_managed
-        targets=("${managed[@]}")
-        ;;
+      niri | all) ;;
       *) usage ;;
     esac
+    # new files are sorted first, as before any apply: one of yours this reset doesn't touch
+    # stays yours on later updates
+    note_new
+    if [[ $2 == niri ]]; then
+      targets=("$cfg/niri/config.kdl" "$cfg/niri/dms.kdl")
+    else
+      targets=("${managed[@]}")
+    fi
     backup=$state/dots-backup-${JUNIPER_NOW:-$(date +%Y%m%d-%H%M%S)}
     for t in "${targets[@]}"; do
       [[ -e $t ]] || continue
@@ -106,12 +133,10 @@ case ${1:-} in
       mv "$t" "$backup/$rel"
     done
     # the reset targets are Juniper's again: no longer "kept"
-    if [[ -e $kept ]]; then
-      for t in "${targets[@]}"; do
-        grep -vxF -- "$t" "$kept" >"$kept.new" || true
-        mv "$kept.new" "$kept"
-      done
-    fi
+    for t in "${targets[@]}"; do
+      grep -vxF -- "$t" "$kept" >"$kept.new" || true
+      mv "$kept.new" "$kept"
+    done
     for t in "${targets[@]}"; do mkpriv "${t%/*}"; done
     apply --force "${targets[@]}"
     echo "Reset ${2}; your previous files are in $backup"

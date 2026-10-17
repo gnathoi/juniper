@@ -5444,6 +5444,74 @@ exit 1'
   check "dots: retry marked done" test -e "$XDG_STATE_HOME/juniper/dots.done"
 }
 
+# managed_stub FILE...: chezmoi manages exactly the files listed in $T/managed (edit it to model
+# a newer image); apply "writes" each target it's given
+managed_stub() {
+  printf '%s\n' "$@" >"$T/managed"
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub chezmoi 'if [[ $1 == managed ]]; then cat "$T/managed"; exit 0; fi
+for a; do [[ $a != "$HOME"/* ]] || echo juniper >"$a"; done'
+}
+
+test_dots_update_before_init_keeps_existing() {
+  dots_env
+  managed_stub "$HOME/.config/niri/config.kdl" "$HOME/.config/foot/foot.ini"
+  mkdir -p "$HOME/.config/foot"
+  echo mine >"$HOME/.config/foot/foot.ini"
+  "$DOTS" update
+  local k=$XDG_STATE_HOME/juniper/dots-kept
+  check "dots: update before init keeps your file" test "$(cat "$HOME/.config/foot/foot.ini")" = mine
+  check "dots: ...lists it as kept" test "$(cat "$k")" = "$HOME/.config/foot/foot.ini"
+  check "dots: ...and applies the missing one" called "--keep-going $HOME/.config/niri/config.kdl"
+  : >"$CALLS"
+  "$DOTS" init
+  check "dots: the later init still keeps it" test "$(cat "$HOME/.config/foot/foot.ini")" = mine
+  check "dots: ...and doesn't make Juniper's copy kept" test "$(cat "$k")" = "$HOME/.config/foot/foot.ini"
+}
+
+test_dots_file_added_by_a_newer_image() {
+  dots_env
+  managed_stub "$HOME/.config/niri/config.kdl"
+  "$DOTS" init
+  local k=$XDG_STATE_HOME/juniper/dots-kept
+  check "dots: known files recorded" test "$(cat "$XDG_STATE_HOME/juniper/dots-known")" = "$HOME/.config/niri/config.kdl"
+  mkdir -p "$HOME/.config/gtk-3.0"
+  echo mine >"$HOME/.config/gtk-3.0/settings.ini"
+  printf '%s\n' "$HOME/.config/niri/config.kdl" "$HOME/.config/gtk-3.0/settings.ini" \
+    "$HOME/.config/gtk-4.0/settings.ini" >"$T/managed"
+  : >"$CALLS"
+  "$DOTS" update
+  check "dots: new managed file you already have is left alone" test "$(cat "$HOME/.config/gtk-3.0/settings.ini")" = mine
+  check "dots: ...and listed as kept" test "$(cat "$k")" = "$HOME/.config/gtk-3.0/settings.ini"
+  check "dots: ...not applied" not_called "gtk-3.0"
+  check "dots: new managed file you don't have is applied" test "$(cat "$HOME/.config/gtk-4.0/settings.ini")" = juniper
+  check "dots: a file Juniper wrote isn't kept" fails grep -q niri "$k"
+  check "dots: known list follows the image" grep -qx "$HOME/.config/gtk-4.0/settings.ini" "$XDG_STATE_HOME/juniper/dots-known"
+  : >"$CALLS"
+  "$DOTS" update
+  check "dots: next update still leaves it alone" not_called "gtk-3.0"
+  "$DOTS" reset all >/dev/null
+  check "dots reset all: the kept file is Juniper's again" test "$(cat "$HOME/.config/gtk-3.0/settings.ini")" = juniper
+  check "dots reset all: ...and stays known" grep -qx "$HOME/.config/gtk-3.0/settings.ini" "$XDG_STATE_HOME/juniper/dots-known"
+  check "dots reset all: nothing kept" test ! -s "$k"
+}
+
+# chezmoi --keep-going writes what it can, then fails: the retry must not mistake the files it
+# did write for yours.
+test_dots_half_applied_init_retry() {
+  dots_env
+  managed_stub "$HOME/.config/niri/config.kdl" "$HOME/.config/foot/foot.ini"
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub chezmoi 'if [[ $1 == managed ]]; then cat "$T/managed"; exit 0; fi
+for a; do [[ $a != */niri/* ]] || echo juniper >"$a"; done; exit 1'
+  check "dots: half-applied init fails" fails "$DOTS" init
+  managed_stub "$HOME/.config/niri/config.kdl" "$HOME/.config/foot/foot.ini"
+  : >"$CALLS"
+  "$DOTS" init
+  check "dots: retry doesn't keep what Juniper wrote" test ! -s "$XDG_STATE_HOME/juniper/dots-kept"
+  check "dots: retry applies both" called "$HOME/.config/niri/config.kdl $HOME/.config/foot/foot.ini"
+}
+
 test_dots_failing_managed_stops() {
   dots_env
   mkdir -p "$HOME/.config/foot"
@@ -5498,6 +5566,7 @@ test_dots_reset_backs_up_then_forces() {
   check "dots reset niri: old file kept in the backup" test "$(cat "$b/.config/niri/config.kdl")" = mine
   check "dots reset niri: moved out of the way" test ! -e "$HOME/.config/niri/config.kdl"
   check "dots reset niri: foot untouched" test -e "$HOME/.config/foot/foot.ini"
+  check "dots reset niri: foot, never applied before, stays yours" grep -qx "$HOME/.config/foot/foot.ini" "$XDG_STATE_HOME/juniper/dots-kept"
   check "dots reset niri: forced apply of niri only" called "chezmoi apply --source $T/src"
   check "dots reset niri: --force" called "--force $HOME/.config/niri"
   "$DOTS" reset all >/dev/null
