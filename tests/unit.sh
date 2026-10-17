@@ -3185,6 +3185,28 @@ test_update_stage_conf_tolerates_spaces_and_cr() {
   check "update-stage: quoted value with CR parsed" called "bootc upgrade --quiet"
 }
 
+# The Image row names the image updates pull from, read from the booted deployment's origin
+# file (the kernel's ostree= path), without the transport prefix.
+test_motd_shows_the_booted_image() {
+  motd_env
+  local sr=$T/sysroot dep=ostree/deploy/default/deploy/abc.0
+  mkdir -p "$sr/$dep" "$sr/ostree/boot.0/default/f00"
+  ln -s ../../../deploy/default/deploy/abc.0 "$sr/ostree/boot.0/default/f00/0"
+  printf '[origin]\ncontainer-image-reference=ostree-unverified-registry:ghcr.io/gnathoi/juniper-desktop:latest\n' >"$sr/$dep.origin"
+  echo 'BOOT_IMAGE=/vmlinuz root=UUID=x ostree=/ostree/boot.0/default/f00/0 rw' >"$T/cmdline"
+  export JUNIPER_OSTREE_PATH=$sr JUNIPER_CMDLINE=$T/cmdline
+  check "motd: image reference shown" stdout_has "ghcr.io/gnathoi/juniper-desktop:latest" "$LIBEXEC/motd"
+  check "motd: no transport prefix" not_stdout_has "ostree-unverified-registry" "$LIBEXEC/motd"
+  printf '[origin]\ncontainer-image-reference=ostree-remote-image:fedora:docker://quay.io/you/img:v1\n' >"$sr/$dep.origin"
+  check "motd: remote-image transport dropped" stdout_has " quay.io/you/img:v1" "$LIBEXEC/motd"
+  check "motd: remote-image, no remote name" not_stdout_has "fedora:" "$LIBEXEC/motd"
+  export JUNIPER_CMDLINE=$T/nowhere
+  # shellcheck source=/dev/null
+  check "motd: unreadable -> OS name" stdout_has "$(. /usr/lib/os-release && echo "$PRETTY_NAME")" "$LIBEXEC/motd"
+  check "motd: unreadable -> no reference" not_stdout_has "quay.io" "$LIBEXEC/motd"
+  unset JUNIPER_OSTREE_PATH
+}
+
 test_motd_low_space_checks_sysroot() {
   motd_env
   df_queue "30000 20000"
