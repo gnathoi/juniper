@@ -1,6 +1,6 @@
 # Download the latest Juniper image and reboot into it now
 update:
-    sudo bootc upgrade
+    sudo /usr/libexec/juniper/bootc-run upgrade
     sudo /usr/libexec/juniper/apply-update
 
 # Show the schedule, or set the reboot window: `tue 04:00`, `daily 03:30`, `05:00` (keep day), `off`
