@@ -10,6 +10,10 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+### Fixed
+
+- The audit log no longer gets two SELinux `mac_admin` denials every 5 minutes: `juniper-metrics` reads a `bootc status` snapshot that a new `juniper-bootc-status.service` takes in bootc's own SELinux domain, instead of running bootc from its script (where bootc probes for that domain with `chcon` on every call)
+
 ## build-20261014 (2026-10-14)
 
 ### Changed
