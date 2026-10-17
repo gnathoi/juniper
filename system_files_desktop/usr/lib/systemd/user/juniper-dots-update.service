@@ -1,5 +1,9 @@
 [Unit]
 Description=Juniper desktop dotfiles (daily refresh of files you haven't changed)
+# Checked here, not on the timer: a timer condition is evaluated once when the timer starts, which
+# at the first login is before juniper-dots-init has run, and the timer would stay off until the
+# next login.
+ConditionPathExists=%h/.local/state/juniper/dots.done
 
 [Service]
 Type=oneshot

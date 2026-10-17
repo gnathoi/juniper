@@ -1754,6 +1754,9 @@ test_desktop_idle_hint() {
   check "niri: no old bar/notifier/locker" fails grep -qE 'waybar|swaync|swaylock|fuzzel|desktop-idle-lock' "$k"
   check "niri: lid close locks via DMS" grep -q 'lid-close { spawn "dms" "ipc" "call" "lock" "lock"; }' "$k"
   check "niri: DMS layer rule" grep -q 'match namespace="quickshell"' "$k"
+  check "niri: key list shows at login" fails grep -q 'skip-at-startup' "$k"
+  check "niri: Mod+T opens a terminal" grep -q 'Mod+T hotkey-overlay-title="Open a Terminal" { spawn "xdg-terminal-exec"; }' "$k"
+  check "niri: Mod+Space opens the launcher" grep -q 'Mod+Space .*"spotlight" "toggle"' "$k"
 }
 
 test_wallpaper_is_current() {
@@ -5380,6 +5383,16 @@ dots_env() {
   # shellcheck disable=SC2016 # expands inside the stub
   stub chezmoi 'if [[ $1 == managed ]]; then printf "%s\n" "$HOME/.config/niri/config.kdl" "$HOME/.config/niri/dms.kdl" "$HOME/.config/foot/foot.ini"; exit 0; fi
 head -c 2 >"$T/chezmoi-stdin" || true'
+}
+
+# The timer's own conditions are checked once, when it starts at login — before the first
+# dots init — so "only after init" lives on the service, and the timer always arms.
+test_dots_update_timer_arms_at_first_login() {
+  local u=$ROOT/system_files_desktop/usr/lib/systemd/user
+  check "dots timer: no condition on the timer" fails grep -q '^Condition' "$u/juniper-dots-update.timer"
+  check "dots timer: daily, catching up after downtime" grep -qx 'Persistent=true' "$u/juniper-dots-update.timer"
+  check "dots update: runs only after init" \
+    grep -qx 'ConditionPathExists=%h/.local/state/juniper/dots.done' "$u/juniper-dots-update.service"
 }
 
 test_dots_init_once() {

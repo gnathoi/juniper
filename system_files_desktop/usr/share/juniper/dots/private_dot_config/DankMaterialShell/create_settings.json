@@ -14,5 +14,7 @@
   "updaterCheckOnStart": false,
   "updaterUseCustomCommand": true,
   "updaterCustomCommand": "ujust update",
-  "updaterIncludeFlatpak": false
+  "updaterIncludeFlatpak": false,
+  "niriLayoutGapsOverride": 16,
+  "niriLayoutRadiusOverride": 6
 }

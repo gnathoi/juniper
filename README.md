@@ -311,9 +311,10 @@ list.
 
 It boots to DankMaterialShell's graphical login (dms-greeter); your niri session starts after you
 log in with your password. The desktop is niri with DankMaterialShell: bar, launcher (Mod+Space),
-notifications (Mod+N), clipboard history (Mod+V), lock screen (Super+Alt+L) and a settings
-window, coloured from Juniper's juniper-berry wallpaper. Mod+Return opens a terminal (foot);
-Mod+/ shows every key. `just flash` and `ujust switch` both require a password for the first
+notifications (Mod+N), clipboard history (Mod+Alt+V), lock screen (Mod+Alt+L) and a settings
+window, coloured from Juniper's juniper-berry wallpaper. The keys are zirconium's: Mod+T (or
+Mod+Return) opens a terminal (foot), Mod+Ctrl+arrows move windows, Mod+1–9 switch workspaces.
+Mod+/ shows every key, and the list also comes up at each login. `just flash` and `ujust switch` both require a password for the first
 user (uid 1000), and on a flashed desktop `sudo` asks for it too.
 
 DankMaterialShell's weather and location lookups are off, and its update button runs
