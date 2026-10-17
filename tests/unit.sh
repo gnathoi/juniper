@@ -3280,6 +3280,18 @@ test_metrics_writes_image_and_staged() {
   check "metrics: no temp files left" test "$(find "$JUNIPER_METRICS_DIR" -name '.juniper.prom.*' | wc -l)" = 0
 }
 
+test_metrics_reads_the_bootc_snapshot() {
+  metrics_env
+  echo '{"status":{"booted":{"image":{"image":{"image":"snap"},"imageDigest":"sha256:ccc"}}}}' >"$JUNIPER_RUN_DIR/bootc-status.json"
+  "$LIBEXEC/metrics"
+  check "metrics: image from the snapshot" grep -q 'juniper_image_info{image="snap",digest="sha256:ccc"' "$prom"
+  check "metrics: bootc not run when there is a snapshot" not_called "bootc status"
+  local u=$ROOT/system_files/usr/lib/systemd/system
+  check "metrics unit: takes a snapshot first" grep -qx 'After=juniper-bootc-status.service' "$u/juniper-metrics.service"
+  check "snapshot unit: systemd runs bootc itself" grep -qx 'ExecStart=/usr/bin/bootc status --json' "$u/juniper-bootc-status.service"
+  check "snapshot unit: writes where metrics reads" grep -qx 'StandardOutput=truncate:/run/juniper/bootc-status.json' "$u/juniper-bootc-status.service"
+}
+
 test_metrics_no_staged_image() {
   metrics_env
   stub bootc 'echo "{\"status\":{\"booted\":{\"image\":{\"image\":{\"image\":\"i\"},\"imageDigest\":\"sha256:aaa\"}}}}"'
