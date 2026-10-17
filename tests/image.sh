@@ -465,6 +465,11 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
   (umask 022 && HOME=$t/home /usr/libexec/juniper/dots update)
   [[ $(tail -n 1 "$t/home/.config/gtk-3.0/settings.ini") == '# my edit' ]]
   s=$t/home/.config/DankMaterialShell/settings.json
+  # geoclue reads conf.d after geoclue.conf: no online location lookups
+  test -d /etc/geoclue/conf.d && test -s /etc/geoclue/conf.d/90-juniper.conf
+  for src in ip wifi; do
+    [[ $(sed -n "/^\\[$src\\]/,/^\\[/p" /etc/geoclue/conf.d/90-juniper.conf | grep -c '^enable=false$') == 1 ]]
+  done
   [[ $(jq -c '[.weatherEnabled, .useAutoLocation, .updaterHideWidget, .updaterCustomCommand, .acLockTimeout]' "$s") == '[false,false,true,"ujust update",600]' ]]
   [[ $(jq -r .wallpaperPath "$t/home/.local/state/DankMaterialShell/session.json") == /usr/share/juniper/wallpapers/juniper-berry.png ]]
   HOME=$t/home /usr/libexec/juniper/desktop-lock-idle off >/dev/null

@@ -317,8 +317,10 @@ Mod+Return) opens a terminal (foot), Mod+Ctrl+arrows move windows, Mod+1–9 swi
 Mod+/ shows every key, and the list also comes up at each login. `just flash` and `ujust switch` both require a password for the first
 user (uid 1000), and on a flashed desktop `sudo` asks for it too.
 
-DankMaterialShell's weather and location lookups are off, and its update button runs
-`ujust update`, so updates still go through Juniper's health-checked path.
+DankMaterialShell's weather and location lookups are off, geoclue never asks an online
+service where the device is (its IP and Wi-Fi sources are off in
+`/etc/geoclue/conf.d/90-juniper.conf`), and DMS's update button runs `ujust update`, so
+updates still go through Juniper's health-checked path.
 
 - Your niri changes go in `~/.config/niri/local.kdl`; DMS's settings window writes its own.
   Juniper refreshes the rest of its dotfiles daily unless you changed them
