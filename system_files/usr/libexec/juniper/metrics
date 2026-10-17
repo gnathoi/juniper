@@ -36,8 +36,14 @@ flag() {
 }
 is_num() { [[ ${1:-} =~ ^[0-9]+$ ]]; }
 
-# Image: from bootc status. Metrics for a missing field are left out.
-bs=$(timeout -k 5 "$probe_timeout" bootc status --json 2>/dev/null) || bs=
+# Image: from bootc status, as juniper-bootc-status.service saved it just before this run (it runs
+# bootc in install_t, so no SELinux denials in the audit log); run by hand, ask bootc directly.
+# Metrics for a missing field are left out.
+if [[ -s $run_dir/bootc-status.json ]]; then
+  bs=$(cat "$run_dir/bootc-status.json" 2>/dev/null) || bs=
+else
+  bs=$(timeout -k 5 "$probe_timeout" bootc status --json 2>/dev/null) || bs=
+fi
 if [[ -n $bs ]]; then
   # shellcheck source=/dev/null
   version=$(. "$os_release" 2>/dev/null && printf '%s' "${IMAGE_VERSION:-${VERSION_ID:-}}")
