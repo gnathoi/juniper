@@ -42,7 +42,10 @@ setup() {
   # shellcheck disable=SC2016 # expands inside the stub
   stub shred 'for a; do [[ $a == -* || $a == "$T"/* ]] || { echo "shred outside test dir: $a" >&2; exit 1; }; done
 if [[ $1 == -u ]]; then rm -f "$2"; fi'
-  export JUNIPER_BOOTLOADER=bootloader
+  # systemd-run runs its command here (bootc-run starts bootc as a transient unit)
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub systemd-run 'while [[ $# -gt 0 && $1 != -- ]]; do shift; done; shift; exec "$@"'
+  export JUNIPER_BOOTLOADER=bootloader JUNIPER_BOOTC_RUN=$LIBEXEC/bootc-run
   export PATH=$T/bin:$ORIG_PATH
 }
 
@@ -783,6 +786,25 @@ test_healthcheck_rejects_unknown_argument() {
   printf '\x00\x00\x00\x01' >"$JUNIPER_TRYBOOT_FLAG"
   check "health: unknown argument fails" fails "$LIBEXEC/healthcheck" --bogus
   check "health: unknown argument -> no reboot" not_called "systemctl reboot"
+}
+
+# bootc pulls images in install_t, the only domain that may set a SELinux label the running
+# policy doesn't know (an image that adds a policy module). systemd starts it there; a service's
+# script or a tailscale SSH session would not, so bootc-run always goes through systemd-run.
+test_bootc_run_pulls_through_systemd() {
+  stub bootc 'exit 7'
+  local rc=0
+  "$LIBEXEC/bootc-run" switch ghcr.io/gnathoi/juniper-desktop:latest >/dev/null 2>"$T/err" || rc=$?
+  check "bootc-run: exits with bootc's status" test "$rc" = 7
+  check "bootc-run: failure points at the unit's log" grep -q 'journalctl -u juniper-bootc-' "$T/err"
+  check "bootc-run: transient unit that waits" called "systemd-run --unit=juniper-bootc-"
+  check "bootc-run: --wait --collect" grep -q -- "--wait --collect --quiet -- bootc switch ghcr.io/gnathoi/juniper-desktop:latest" "$CALLS"
+  check "bootc-run: bootc got the args" called "bootc switch ghcr.io/gnathoi/juniper-desktop:latest"
+  # shellcheck disable=SC2016 # literal script text
+  check "update-stage: upgrades through bootc-run" grep -q 'bootc_run=${JUNIPER_BOOTC_RUN:-/usr/libexec/juniper/bootc-run}' "$LIBEXEC/update-stage"
+  # shellcheck disable=SC2016 # literal script text
+  check "switch-image: switches through bootc-run" grep -q 'sudo "$bootc_run" switch "$image"' "$LIBEXEC/switch-image"
+  check "ujust update: upgrades through bootc-run" grep -qx '    sudo /usr/libexec/juniper/bootc-run upgrade' "$ROOT/system_files/usr/share/juniper/just/update.just"
 }
 
 test_healthcheck_unit_has_fallback_on_failure() {

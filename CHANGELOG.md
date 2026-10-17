@@ -10,6 +10,10 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+### Fixed
+
+- Updates and `ujust switch` can pull an image that adds a SELinux policy module (as `juniper-desktop` does, for flatpak and greetd). bootc now always runs those pulls as a transient systemd unit, in SELinux's install_t: run from the update service's script or over tailscale SSH it stayed out of it and failed with `fsetxattr(security.selinux): Invalid argument`
+
 ## build-20261014 (2026-10-14)
 
 ### Changed

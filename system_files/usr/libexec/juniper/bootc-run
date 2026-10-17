@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# bootc-run ARGS: run `bootc ARGS` (an upgrade or switch that pulls an image) in SELinux's
+# install_t. Pulling labels every file of the new image with the new image's policy, and only
+# install_t may set a label the running policy doesn't know yet (mac_admin): an image that adds a
+# policy module (juniper-desktop adds flatpak's and greetd's) fails to pull anywhere else, with
+# "fsetxattr(security.selinux): Invalid argument". bootc enters install_t when systemd or a root
+# login (unconfined_t) runs it, but not from a service's script or a tailscale SSH session
+# (unconfined_service_t). So it always runs as a transient unit, whose output is followed on a
+# terminal (a service's own journal gets it from the transient unit). Exits with bootc's status.
+set -uo pipefail
+
+unit=juniper-bootc-$$-$RANDOM
+follow=
+if [[ -t 1 ]]; then
+  journalctl --quiet --follow --output=cat --unit="$unit" &
+  follow=$!
+fi
+systemd-run --unit="$unit" --description="bootc $*" --wait --collect --quiet -- bootc "$@"
+rc=$?
+if [[ -n $follow ]]; then
+  # the journal can trail the unit's exit by a moment
+  sleep 1
+  kill "$follow" 2>/dev/null
+  wait "$follow" 2>/dev/null
+elif ((rc != 0)); then
+  echo "bootc $* failed (exit $rc); its output is in: journalctl -u $unit" >&2
+fi
+exit "$rc"
