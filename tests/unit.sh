@@ -1824,6 +1824,19 @@ test_default_avatar_keeps_yours() {
   check "avatar: svg matches its generator" cmp -s <(python3 "$ROOT/build_files/avatar.py" "$ROOT/system_files_dev/usr/share/juniper/logo.txt") "$ROOT/system_files_desktop/usr/share/juniper/avatar.svg"
 }
 
+# The desktop's login tips name keys; each must be bound in juniper.kdl.
+test_desktop_tips_name_bound_keys() {
+  local tips=$ROOT/system_files_desktop/usr/share/juniper/tips-desktop.txt
+  local k=$ROOT/system_files_desktop/usr/share/juniper/niri/juniper.kdl key
+  check "desktop tips: present" test -s "$tips"
+  while read -r key; do
+    [[ $key == Mod+Ctrl+arrows ]] && key=Mod+Ctrl+Left
+    [[ $key == Mod+/ ]] && key=Mod+Slash
+    [[ $key == Mod+1 || $key == Mod+9 ]] && key="$key {"
+    check "desktop tips: $key is bound" grep -qE "^ +${key//+/\\+}( |\$)" "$k"
+  done < <(grep -oE 'Mod\+[A-Za-z0-9/+]+' "$tips" | sed 's/[.,;]$//' | sort -u)
+}
+
 test_wallpaper_is_current() {
   local w=$ROOT/system_files_desktop/usr/share/juniper/wallpapers
   check "wallpaper: svg matches its generator" cmp -s <(python3 "$ROOT/build_files/wallpaper.py") "$w/juniper-berry.svg"

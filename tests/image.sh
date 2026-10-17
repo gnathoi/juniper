@@ -455,6 +455,7 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
   [[ $(systemctl --global is-enabled juniper-dots-update.timer) == enabled ]]
   [[ $(systemctl --global is-enabled juniper-default-avatar.service) == enabled ]]
   test -s /usr/share/juniper/avatar.png
+  test -s /usr/share/juniper/tips-desktop.txt
   t=$(mktemp -d)
   (umask 077 && mkdir -p "$t/home/.config/foot")
   echo '# mine' >"$t/home/.config/foot/foot.ini"
