@@ -78,8 +78,8 @@ controls the tag controls what runs.
 
 The image's health hook ([`health.d/50-sensor-sample`](health.d/50-sensor-sample)) passes only
 once the sensor has logged a reading in this boot. After an OS update under tryboot, a failing
-hook falls back to the previous image. See "Readiness checks for your workload" in the
-[main README](../../README.md#readiness-checks-for-your-workload).
+hook falls back to the previous image. See
+[readiness checks for your workload](../../docs/appliances.md#readiness-checks-for-your-workload).
 
 ## Data and rollback
 

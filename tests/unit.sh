@@ -713,7 +713,7 @@ test_healthcheck_local_hook_timeout() {
 test_example_appliance_health_hook() {
   local h=$ROOT/examples/appliance/health.d/50-sensor-sample
   check "example: appliance health hook is executable" test -x "$h"
-  check "example: appliance health hook documented in README" grep -q '/etc/juniper/health.d' "$ROOT/README.md"
+  check "example: appliance health hook documented" grep -q '/etc/juniper/health.d' "$ROOT/docs/appliances.md"
 }
 
 # Locked: Tailscale must also be connected to its control plane (.Self.Online), or the update

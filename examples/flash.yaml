@@ -4,7 +4,7 @@
 # chmod 600. Applied once, on the Pi's first boot, then wiped from the card.
 
 # juniper (dev tools, Homebrew), juniper-minimal (appliance base) or juniper-desktop
-# (experimental niri desktop). Default: juniper.
+# (niri + DankMaterialShell desktop). Default: juniper.
 image: juniper
 
 # juniper-desktop requires a password (just flash asks for it; only a hash is written). It's
