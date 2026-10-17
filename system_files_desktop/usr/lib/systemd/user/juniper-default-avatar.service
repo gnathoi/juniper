@@ -1,0 +1,11 @@
+[Unit]
+Description=Juniper's default user picture (once, if you have none)
+ConditionPathExists=!%h/.local/state/juniper/avatar.done
+After=graphical-session-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/juniper/default-avatar
+
+[Install]
+WantedBy=graphical-session.target

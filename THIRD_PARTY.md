@@ -27,7 +27,7 @@ components, unmodified, under their own licenses. License texts are in the image
 | Material Symbols fonts (`juniper-desktop`) | Apache-2.0 | COPR avengemedia/danklinux |
 | zirconium/zdots: niri key bindings, DMS integration, `dms.kdl`, greeter wiring, cli-policy (adapted) | Apache-2.0 | github.com/zirconium-dev/zdots |
 
-The juniper-berry wallpaper (`juniper-desktop`) is original artwork, CC0-1.0.
+The juniper-berry wallpaper and the default user picture (`juniper-desktop`) are original artwork, CC0-1.0.
 
 Juniper builds `FROM` the AlmaLinux image; no files from AlmaLinux/bootc-images-rpi
 (GPL-3.0 build tooling) are copied. Tools installed later by Homebrew (`Brewfile`) or

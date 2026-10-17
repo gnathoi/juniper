@@ -1789,6 +1789,41 @@ test_desktop_idle_hint() {
   check "niri: Mod+Space opens the launcher" grep -q 'Mod+Space .*"spotlight" "toggle"' "$k"
 }
 
+# A user with no picture gets Juniper's once, through AccountsService (the greeter can't read
+# ~/.face in a private home, which is AccountsService's fallback answer).
+avatar_env() {
+  export T HOME=$T/home XDG_STATE_HOME=$T/home/.local/state
+  mkdir -p "$HOME"
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub busctl 'case "$*" in
+  *FindUserById*) echo "o \"/org/freedesktop/Accounts/User1000\"" ;;
+  *get-property*IconFile*) echo "s \"$(cat "$T/icon" 2>/dev/null)\"" ;;
+esac'
+}
+
+test_default_avatar_set_once() {
+  avatar_env
+  echo "$HOME/.face" >"$T/icon"
+  "$LIBEXEC_DESKTOP/default-avatar"
+  check "avatar: no picture -> Juniper's set" called "busctl --system call org.freedesktop.Accounts /org/freedesktop/Accounts/User1000 org.freedesktop.Accounts.User SetIconFile s /usr/share/juniper/avatar.png"
+  check "avatar: marked done" test -e "$XDG_STATE_HOME/juniper/avatar.done"
+  : >"$CALLS"
+  "$LIBEXEC_DESKTOP/default-avatar"
+  check "avatar: never again" not_called "busctl"
+}
+
+test_default_avatar_keeps_yours() {
+  avatar_env
+  echo pic >"$T/mine.png"
+  echo "$T/mine.png" >"$T/icon"
+  "$LIBEXEC_DESKTOP/default-avatar"
+  check "avatar: your picture kept" not_called "SetIconFile"
+  check "avatar: still marked done" test -e "$XDG_STATE_HOME/juniper/avatar.done"
+  local u=$ROOT/system_files_desktop/usr/lib/systemd/user/juniper-default-avatar.service
+  check "avatar unit: skipped once done" grep -qx 'ConditionPathExists=!%h/.local/state/juniper/avatar.done' "$u"
+  check "avatar: svg matches its generator" cmp -s <(python3 "$ROOT/build_files/avatar.py" "$ROOT/system_files_dev/usr/share/juniper/logo.txt") "$ROOT/system_files_desktop/usr/share/juniper/avatar.svg"
+}
+
 test_wallpaper_is_current() {
   local w=$ROOT/system_files_desktop/usr/share/juniper/wallpapers
   check "wallpaper: svg matches its generator" cmp -s <(python3 "$ROOT/build_files/wallpaper.py") "$w/juniper-berry.svg"

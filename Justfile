@@ -95,6 +95,7 @@ bump-desktop:
     git diff --stat build_files/desktop.lock
 
 # Regenerate the desktop wallpaper (SVG from build_files/wallpaper.py, then its 3840x2160 PNG)
+# and the default user picture (build_files/avatar.py from logo.txt, then its 512x512 PNG)
 wallpaper:
     #!/usr/bin/bash
     set -euo pipefail
@@ -103,6 +104,11 @@ wallpaper:
     python3 build_files/wallpaper.py >"$d/juniper-berry.svg"
     rsvg-convert -w 3840 -h 2160 "$d/juniper-berry.svg" -o "$d/juniper-berry.png"
     ls -l "$d"
+    # the default user picture: the terminal's berry logo on the same colours
+    a=system_files_desktop/usr/share/juniper
+    python3 build_files/avatar.py system_files_dev/usr/share/juniper/logo.txt >"$a/avatar.svg"
+    rsvg-convert -w 512 -h 512 "$a/avatar.svg" -o "$a/avatar.png"
+    ls -l "$a"/avatar.*
 
 # Pin rpi-fw-crypto to the newest raspberrypi/utils master commit touching rpifwcrypto/ (build_files/fwcrypto.lock)
 bump-fwcrypto:
