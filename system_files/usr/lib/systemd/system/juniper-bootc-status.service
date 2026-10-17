@@ -1,0 +1,15 @@
+[Unit]
+Description=Snapshot bootc status for Juniper's metrics
+
+[Service]
+Type=oneshot
+# systemd runs bootc itself, so it starts in SELinux's install_t. Run from a script
+# (unconfined_service_t), bootc checks for install_t with chcon on every call, and SELinux logs
+# two mac_admin denials each time: every 5 minutes from juniper-metrics.
+ExecStart=/usr/bin/bootc status --json
+StandardOutput=truncate:/run/juniper/bootc-status.json
+RuntimeDirectory=juniper
+RuntimeDirectoryPreserve=yes
+TimeoutStartSec=60
+Nice=19
+IOSchedulingClass=idle
