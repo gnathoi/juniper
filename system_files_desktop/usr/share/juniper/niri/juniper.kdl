@@ -39,8 +39,10 @@ input {
     }
 }
 
+// zirconium's spacing, shadow and corners; DMS's dms/layout.kdl writes the same gaps and radius
+// from settings.json (niriLayoutGapsOverride, niriLayoutRadiusOverride).
 layout {
-    gaps 12
+    gaps 16
     center-focused-column "never"
     preset-column-widths {
         proportion 0.33333
@@ -48,10 +50,17 @@ layout {
         proportion 0.66667
     }
     default-column-width { proportion 0.5; }
+    shadow {
+        on
+        softness 30
+        spread 5
+        offset x=0 y=5
+        color "#0007"
+    }
 }
 
 window-rule {
-    geometry-corner-radius 8
+    geometry-corner-radius 6
     clip-to-geometry true
 }
 
