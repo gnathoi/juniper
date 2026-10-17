@@ -45,7 +45,7 @@ if [[ $1 == -u ]]; then rm -f "$2"; fi'
   # systemd-run runs its command here (bootc-run starts bootc as a transient unit)
   # shellcheck disable=SC2016 # expands inside the stub
   stub systemd-run 'while [[ $# -gt 0 && $1 != -- ]]; do shift; done; shift; exec "$@"'
-  export JUNIPER_BOOTLOADER=bootloader JUNIPER_BOOTC_RUN=$LIBEXEC/bootc-run
+  export JUNIPER_BOOTLOADER=bootloader JUNIPER_BOOTC_RUN=$LIBEXEC/bootc-run JUNIPER_BOOTC_STATUS=$LIBEXEC/bootc-status
   export PATH=$T/bin:$ORIG_PATH
 }
 
@@ -791,6 +791,17 @@ test_healthcheck_rejects_unknown_argument() {
 # bootc pulls images in install_t, the only domain that may set a SELinux label the running
 # policy doesn't know (an image that adds a policy module). systemd starts it there; a service's
 # script or a tailscale SSH session would not, so bootc-run always goes through systemd-run.
+# Scripts read bootc's status through bootc-status: as root it refreshes and prints the snapshot
+# juniper-bootc-status.service takes in install_t; otherwise it asks bootc.
+test_bootc_status_falls_back_to_bootc() {
+  stub bootc 'echo "{\"status\":{}}"'
+  check "bootc-status: not root -> asks bootc" test "$("$LIBEXEC/bootc-status")" = '{"status":{}}'
+  check "bootc-status: bootc status --json" called "bootc status --json"
+  check "bootc-status: not root -> no snapshot unit" not_called "systemctl start juniper-bootc-status.service"
+  # shellcheck disable=SC2016 # literal script text
+  check "apply-update: reads status through bootc-status" grep -q '"${JUNIPER_BOOTC_STATUS:-/usr/libexec/juniper/bootc-status}"' "$LIBEXEC/apply-update"
+}
+
 test_bootc_run_pulls_through_systemd() {
   stub bootc 'exit 7'
   local rc=0

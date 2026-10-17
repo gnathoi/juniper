@@ -18,7 +18,7 @@ allow() {
   exit 0
 }
 
-[[ $(bootc status --json 2>/dev/null | jq '.status.staged != null' 2>/dev/null) == true ]] ||
+[[ $("${JUNIPER_BOOTC_STATUS:-/usr/libexec/juniper/bootc-status}" 2>/dev/null | jq '.status.staged != null' 2>/dev/null) == true ]] ||
   allow ""
 
 # A held update (it failed its health check twice) won't be applied: no deferral and no

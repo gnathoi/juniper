@@ -1,5 +1,5 @@
 [Unit]
-Description=Snapshot bootc status for Juniper's metrics
+Description=Snapshot bootc status (for metrics, apply-update and the health check)
 
 [Service]
 Type=oneshot
