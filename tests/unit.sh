@@ -1723,6 +1723,14 @@ test_check_target_refuses_system_disks() {
   check "target: partition refused" fails "$ROOT/disk/check-target" /dev/mmcblk0p1
 }
 
+# DankMaterialShell starts a geoclue client at every login, and geoclue's IP and Wi-Fi sources
+# ask an online service where the device is (seen on the Pi). Juniper turns both off.
+test_desktop_geoclue_stays_offline() {
+  local g=$ROOT/system_files_desktop/etc/geoclue/conf.d/90-juniper.conf
+  check "geoclue: IP lookup off" test "$(sed -n '/^\[ip\]/,/^\[/p' "$g" | grep -c '^enable=false$')" = 1
+  check "geoclue: Wi-Fi lookup off" test "$(sed -n '/^\[wifi\]/,/^\[/p' "$g" | grep -c '^enable=false$')" = 1
+}
+
 # greetd shows dms-greeter (as the unprivileged greeter user); a session starts only after PAM
 # accepts a password, and is typed wayland in logind (the reboot window's idle check needs it).
 test_greetd_graphical_login() {
