@@ -460,6 +460,10 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
   [[ $(stat -c %a "$t/home/.config") == 700 && $(stat -c %a "$t/home/.local") == 700 ]]
   niri validate -c "$t/home/.config/niri/config.kdl"
   grep -qx '# mine' "$t/home/.config/foot/foot.ini"
+  # ...and an edit to a file Juniper wrote survives the daily update (chezmoi asks; dots skips)
+  echo '# my edit' >>"$t/home/.config/gtk-3.0/settings.ini"
+  (umask 022 && HOME=$t/home /usr/libexec/juniper/dots update)
+  [[ $(tail -n 1 "$t/home/.config/gtk-3.0/settings.ini") == '# my edit' ]]
   s=$t/home/.config/DankMaterialShell/settings.json
   [[ $(jq -c '[.weatherEnabled, .useAutoLocation, .updaterHideWidget, .updaterCustomCommand, .acLockTimeout]' "$s") == '[false,false,true,"ujust update",600]' ]]
   [[ $(jq -r .wallpaperPath "$t/home/.local/state/DankMaterialShell/session.json") == /usr/share/juniper/wallpapers/juniper-berry.png ]]
