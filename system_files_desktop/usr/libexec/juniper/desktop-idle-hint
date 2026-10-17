@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Started by niri (juniper.kdl): set logind's idle hint after 30 min idle; the reboot window
+# (desktop-idle) waits for it. DankMaterialShell does the locking (ujust desktop-lock-idle).
+set -euo pipefail
+exec swayidle -w idlehint 1800

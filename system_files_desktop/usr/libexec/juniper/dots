@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# Juniper's desktop dotfiles: chezmoi applies /usr/share/juniper/dots into your home with its own
+# config and state (~/.config/juniper/chezmoi), so a chezmoi setup of yours is untouched.
+#   init           first login (juniper-dots-init.service), once
+#   update [--auto] daily (juniper-dots-update.timer, --auto: skipped after `ujust toggle-auto-dots`)
+#   reset niri|all  move Juniper's files out of the way (backup in ~/.local/state/juniper) and
+#                   apply them fresh (ujust dots-reset); niri = config.kdl and dms.kdl only,
+#                   never your local.kdl or DMS's dms/*.kdl
+# A managed file that is new to us (every file on the first run of any command, or one a newer
+# image added; dots-known lists the ones already seen) but already in your home is yours: it is
+# left alone (listed in ~/.local/state/juniper/dots-kept) until `ujust dots-reset`. Files you
+# change after Juniper wrote them are skipped (chezmoi asks; we answer "s"). Files DMS owns
+# (settings, colours) are only created when missing.
+set -euo pipefail
+
+src=${JUNIPER_DOTS_SRC:-/usr/share/juniper/dots}
+cfg=${XDG_CONFIG_HOME:-$HOME/.config}
+cfgdir=$cfg/juniper/chezmoi
+state=${XDG_STATE_HOME:-$HOME/.local/state}/juniper
+args=(--source "$src" --config "$cfgdir/chezmoi.toml" --persistent-state "$cfgdir/chezmoistate.boltdb"
+  --no-tty --keep-going)
+
+usage() {
+  echo "usage: dots init | update [--auto] | reset niri|all" >&2
+  exit 2
+}
+# directories we create are private, like the private_ ones in the source tree; existing ones are
+# never touched
+mkpriv() (
+  umask 077
+  mkdir -p "$@"
+)
+prepare() {
+  mkpriv "$cfgdir"
+  [[ -e $cfgdir/chezmoi.toml ]] || : >"$cfgdir/chezmoi.toml"
+}
+# list_managed: fill $managed with the absolute paths chezmoi manages; a failure (or nothing
+# managed) stops us, since an empty target list would mean "everything" to chezmoi
+list_managed() {
+  local out
+  prepare
+  out=$(chezmoi managed "${args[@]:0:6}" --path-style absolute --include files) || {
+    echo "dots: chezmoi managed failed" >&2
+    exit 1
+  }
+  [[ -n $out ]] || {
+    echo "dots: chezmoi manages nothing in $src" >&2
+    exit 1
+  }
+  mapfile -t managed <<<"$out"
+}
+# apply [--force] [targets...]: straight to chezmoi
+apply() {
+  prepare
+  chezmoi apply "${args[@]}" "$@" < <(yes s)
+}
+# put_list FILE [LINE...]: replace FILE whole (.new, then mv), so a failure never leaves half a list
+put_list() {
+  local f=$1
+  shift
+  if (($#)); then printf '%s\n' "$@"; fi >"$f.new"
+  mv "$f.new" "$f"
+}
+# note_new: fill $managed, then sort the files we haven't seen before: one that's already in your
+# home goes on dots-kept, and all of them go on dots-known. Recorded before any apply, so each
+# file is decided once: an apply that fails half-way can't turn Juniper's own files into "yours"
+# on the retry.
+note_new() {
+  local f
+  local -a add=()
+  list_managed
+  for f in "${managed[@]}"; do
+    grep -qxF -- "$f" "$known" 2>/dev/null && continue
+    [[ -e $f ]] || continue
+    grep -qxF -- "$f" "$kept" 2>/dev/null || add+=("$f")
+  done
+  mkpriv "$state"
+  if ((${#add[@]})) || [[ ! -e $kept ]]; then
+    local -a old=()
+    [[ ! -e $kept ]] || mapfile -t old <"$kept"
+    put_list "$kept" "${old[@]}" "${add[@]}"
+  fi
+  put_list "$known" "${managed[@]}"
+}
+# apply every managed file except the kept ones
+apply_unkept() {
+  local f
+  local -a want=()
+  note_new
+  for f in "${managed[@]}"; do
+    grep -qxF -- "$f" "$kept" || want+=("$f")
+  done
+  ((${#want[@]})) || return 0
+  # chezmoi can't create a file target whose parent directory is missing
+  for f in "${want[@]}"; do mkpriv "${f%/*}"; done
+  apply "${want[@]}"
+}
+
+kept=$state/dots-kept
+known=$state/dots-known
+
+case ${1:-} in
+  init)
+    [[ ! -e $state/dots.done ]] || exit 0
+    apply_unkept
+    mkpriv "$state"
+    : >"$state/dots.done"
+    ;;
+  update)
+    if [[ ${2:-} == --auto && -e $cfg/juniper/no-auto-dots ]]; then
+      exit 0
+    fi
+    apply_unkept
+    ;;
+  reset)
+    case ${2:-} in
+      niri | all) ;;
+      *) usage ;;
+    esac
+    # new files are sorted first, as before any apply: one of yours this reset doesn't touch
+    # stays yours on later updates
+    note_new
+    if [[ $2 == niri ]]; then
+      targets=("$cfg/niri/config.kdl" "$cfg/niri/dms.kdl")
+    else
+      targets=("${managed[@]}")
+    fi
+    backup=$state/dots-backup-${JUNIPER_NOW:-$(date +%Y%m%d-%H%M%S)}
+    for t in "${targets[@]}"; do
+      [[ -e $t ]] || continue
+      rel=${t#"$HOME"/}
+      mkpriv "$backup/$(dirname "$rel")"
+      mv "$t" "$backup/$rel"
+    done
+    # the reset targets are Juniper's again: no longer "kept"
+    for t in "${targets[@]}"; do
+      grep -vxF -- "$t" "$kept" >"$kept.new" || true
+      mv "$kept.new" "$kept"
+    done
+    for t in "${targets[@]}"; do mkpriv "${t%/*}"; done
+    apply --force "${targets[@]}"
+    echo "Reset ${2}; your previous files are in $backup"
+    ;;
+  *) usage ;;
+esac

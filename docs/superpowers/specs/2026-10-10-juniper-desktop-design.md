@@ -53,6 +53,8 @@ Success looks like:
 | COPRs | Option 1 below: pinned keys, `includepkgs` fences, exact versions from a lock file, `just bump-desktop` |
 | Distribution | Built in CI in its own job chain; **published as experimental** (signed image, disk image, release assets; not in `os-list.json`) when its own build and tests pass. Untested on hardware until the owner's Pi 5 run (owner decision 2026-10-11) |
 
+Superseded for the bar, launcher, notifications, lock and greeter by 2026-10-14-dms-desktop-design.md.
+
 ## Package sources and trust
 
 | Source | Packages |

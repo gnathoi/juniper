@@ -20,6 +20,14 @@ components, unmodified, under their own licenses. License texts are in the image
 | Homebrew | BSD-2-Clause | github.com/Homebrew/brew |
 | starship's `plain-text-symbols` preset, as `/usr/share/juniper/starship.toml` (`juniper` image) | ISC | github.com/starship/starship |
 | node_exporter (only if you run `ujust enable-metrics`; pulled on the device) | Apache-2.0 | quay.io/prometheus/node-exporter |
+| DankMaterialShell (dms, dms-cli), dms-greeter, dgop (`juniper-desktop`) | MIT | COPRs avengemedia/dms, avengemedia/danklinux |
+| quickshell (`juniper-desktop`) | LGPL-3.0-only AND GPL-3.0-only | COPR avengemedia/danklinux |
+| matugen (`juniper-desktop`) | GPL-2.0-or-later | COPR avengemedia/danklinux |
+| cliphist (`juniper-desktop`) | GPL-3.0-or-later | COPR avengemedia/danklinux |
+| Material Symbols fonts (`juniper-desktop`) | Apache-2.0 | COPR avengemedia/danklinux |
+| zirconium/zdots: niri key bindings, DMS integration, `dms.kdl`, greeter wiring, cli-policy (adapted) | Apache-2.0 | github.com/zirconium-dev/zdots |
+
+The juniper-berry wallpaper (`juniper-desktop`) is original artwork, CC0-1.0.
 
 Juniper builds `FROM` the AlmaLinux image; no files from AlmaLinux/bootc-images-rpi
 (GPL-3.0 build tooling) are copied. Tools installed later by Homebrew (`Brewfile`) or

@@ -10,17 +10,27 @@ LIBEXEC=$ROOT/system_files/usr/libexec/juniper
 LIBEXEC_DESKTOP=$ROOT/system_files_desktop/usr/libexec/juniper
 ORIG_PATH=$PATH
 ORIG_TMPDIR=${TMPDIR-}
+ORIG_HOME=${HOME-}
+ORIG_XDG_CONFIG_HOME=${XDG_CONFIG_HOME-}
+ORIG_XDG_CONFIG_SET=${XDG_CONFIG_HOME+y}
+ORIG_XDG_STATE_HOME=${XDG_STATE_HOME-}
+ORIG_XDG_STATE_SET=${XDG_STATE_HOME+y}
 fails=0
 
 setup() {
   # a test may export TMPDIR into its own (now deleted) $T
   if [[ -n $ORIG_TMPDIR ]]; then export TMPDIR=$ORIG_TMPDIR; else unset TMPDIR; fi
+  # the dots tests export HOME and the XDG dirs into their $T
+  export HOME=$ORIG_HOME
+  if [[ -n $ORIG_XDG_CONFIG_SET ]]; then export XDG_CONFIG_HOME=$ORIG_XDG_CONFIG_HOME; else unset XDG_CONFIG_HOME; fi
+  if [[ -n $ORIG_XDG_STATE_SET ]]; then export XDG_STATE_HOME=$ORIG_XDG_STATE_HOME; else unset XDG_STATE_HOME; fi
   # ...and the overrides fwkey/cryptroot tests export; a later test must never inherit them
   unset JUNIPER_SYSFS JUNIPER_VCIO JUNIPER_CMDLINE JUNIPER_BLOCK_SYSFS JUNIPER_CIDATA_MNT \
     JUNIPER_RUN_DIR JUNIPER_CPUINFO JUNIPER_TRYBOOT_FLAG JUNIPER_ROOT_WAIT \
     JUNIPER_UNLOCK_FAIL_DELAY JUNIPER_FWKEY JUNIPER_CONSOLE JUNIPER_CRYPTSETUP_LOCKDIR FAKE_PASS \
     JUNIPER_DT JUNIPER_FWKEY_WEDGED JUNIPER_FWKEY_DEADLINE RP JUNIPER_UPTIME_FILE \
-    JUNIPER_HEALTH_TRIES JUNIPER_HEALTH_INTERVAL JUNIPER_HEALTH_DEADLINE
+    JUNIPER_HEALTH_TRIES JUNIPER_HEALTH_INTERVAL JUNIPER_HEALTH_DEADLINE \
+    JUNIPER_DOTS_SRC JUNIPER_NOW
   T=$(mktemp -d)
   export CALLS=$T/calls JUNIPER_STATE_DIR=$T/state
   mkdir -p "$T/bin" "$JUNIPER_STATE_DIR"
@@ -1713,26 +1723,46 @@ test_check_target_refuses_system_disks() {
   check "target: partition refused" fails "$ROOT/disk/check-target" /dev/mmcblk0p1
 }
 
-# greetd shows its text login (agreety) first; niri starts only after PAM authentication.
-test_greetd_login_prompt_first() {
-  local c=$ROOT/system_files_desktop/etc/greetd/config.toml
+# greetd shows dms-greeter (as the unprivileged greeter user); a session starts only after PAM
+# accepts a password, and is typed wayland in logind (the reboot window's idle check needs it).
+test_greetd_graphical_login() {
+  local d=$ROOT/system_files_desktop c=$ROOT/system_files_desktop/etc/greetd/config.toml
   check "greetd: no auto-login (no initial_session)" fails grep -q initial_session "$c"
-  check "greetd: agreety starts niri-session" grep -qx 'command = "agreety --cmd niri-session"' "$c"
-  check "greetd: greeter runs as greetd" grep -qx 'user = "greetd"' "$c"
-  check "greetd: no lock-first spawn in niri defaults" fails grep -q lock-first \
-    "$ROOT/system_files_desktop/usr/share/juniper/niri/juniper.kdl"
+  check "greetd: dms-greeter in niri" grep -qx 'command = "dms-greeter --command niri --cache-dir /var/cache/dms-greeter"' "$c"
+  check "greetd: greeter runs as greeter" grep -qx 'user = "greeter"' "$c"
+  check "greetd: sessions through greetd-spawn" grep -qx 'service = "greetd-spawn"' "$c"
+  check "pam: greetd-spawn includes greetd" grep -qE '^auth +include +greetd$' "$d/etc/pam.d/greetd-spawn"
+  check "pam: greetd-spawn types the session wayland" grep -q 'conffile=/usr/share/juniper/greetd-spawn.pam_env.conf' "$d/etc/pam.d/greetd-spawn"
+  check "pam: env file" grep -qx 'XDG_SESSION_TYPE DEFAULT=wayland OVERRIDE=wayland' "$d/usr/share/juniper/greetd-spawn.pam_env.conf"
+  check "greeter: static purple theme" test "$(jq -r .currentThemeName "$d/usr/share/juniper/dms-greeter/settings.json")" = purple
+  check "greeter: Juniper wallpaper" test "$(jq -r .wallpaperPath "$d/usr/share/juniper/dms-greeter/session.json")" = /usr/share/juniper/wallpapers/juniper-berry.png
+  check "greeter: weather off" test "$(jq -r .weatherEnabled "$d/usr/share/juniper/dms-greeter/settings.json")" = false
+  check "dms: image-changing CLI commands blocked" test "$(jq -r '.blocked_commands | sort | join(",")' "$d/usr/share/dms/cli-policy.json")" = "greeter enable,greeter install,greeter uninstall,setup"
+  # the dms-greeter RPM ships its own tmpfiles d entries for /var/cache/dms-greeter and /var/lib/greeter
+  # (owner greeter), so ours only link the look into the cache
+  check "tmpfiles: settings.json linked into the greeter cache" grep -qx 'L+ /var/cache/dms-greeter/settings.json - - - - /usr/share/juniper/dms-greeter/settings.json' "$d/usr/lib/tmpfiles.d/juniper-greetd.conf"
+  check "tmpfiles: session.json linked into the greeter cache" grep -qx 'L+ /var/cache/dms-greeter/session.json - - - - /usr/share/juniper/dms-greeter/session.json' "$d/usr/lib/tmpfiles.d/juniper-greetd.conf"
 }
 
-test_desktop_idle_lock() {
-  export HOME=$T/home XDG_CONFIG_HOME=$T/home/.config
+test_desktop_idle_hint() {
   stub swayidle ''
-  "$LIBEXEC_DESKTOP/desktop-idle-lock"
-  check "idle-lock: locks after 10 min" called "swayidle -w timeout 600 swaylock -f"
-  mkdir -p "$XDG_CONFIG_HOME/juniper" && touch "$XDG_CONFIG_HOME/juniper/no-idle-lock"
-  : >"$CALLS"
-  "$LIBEXEC_DESKTOP/desktop-idle-lock"
-  check "idle-lock: off -> idle hint only" called "swayidle -w idlehint 1800"
-  check "idle-lock: off -> no lock" not_called "swaylock"
+  "$LIBEXEC_DESKTOP/desktop-idle-hint"
+  check "idle-hint: logind idle hint after 30 min" called "swayidle -w idlehint 1800"
+  check "idle-hint: never locks (DMS does)" not_called "timeout"
+  local k=$ROOT/system_files_desktop/usr/share/juniper/niri/juniper.kdl
+  check "niri: starts the idle hint" grep -qx 'spawn-at-startup "/usr/libexec/juniper/desktop-idle-hint"' "$k"
+  check "niri: no old bar/notifier/locker" fails grep -qE 'waybar|swaync|swaylock|fuzzel|desktop-idle-lock' "$k"
+  check "niri: lid close locks via DMS" grep -q 'lid-close { spawn "dms" "ipc" "call" "lock" "lock"; }' "$k"
+  check "niri: DMS layer rule" grep -q 'match namespace="quickshell"' "$k"
+}
+
+test_wallpaper_is_current() {
+  local w=$ROOT/system_files_desktop/usr/share/juniper/wallpapers
+  check "wallpaper: svg matches its generator" cmp -s <(python3 "$ROOT/build_files/wallpaper.py") "$w/juniper-berry.svg"
+  check "wallpaper: png is 3840x2160" test "$(python3 -c '
+import struct, sys
+d = open(sys.argv[1], "rb").read(24)
+print("%dx%d" % struct.unpack(">II", d[16:24]))' "$w/juniper-berry.png" 2>/dev/null)" = 3840x2160
 }
 
 test_flatpak_setup_installs_apps_once() {
@@ -1757,7 +1787,7 @@ idle_env() {
   # shellcheck disable=SC2016 # expands inside the stub
   stub loginctl 'case "$1" in
     list-sessions) echo "3 1000 nat seat0 tty1" ;;
-    show-session) case "$4" in Type) echo wayland ;; Active) echo yes ;; IdleHint) echo "${IDLE:-no}" ;; esac ;;
+    show-session) case "$4" in Class) echo user ;; Type) echo wayland ;; Active) echo yes ;; IdleHint) echo "${IDLE:-no}" ;; esac ;;
   esac'
 }
 
@@ -1880,7 +1910,7 @@ test_desktop_idle_any_active_nonidle_session_defers() {
   # shellcheck disable=SC2016 # expands inside the stub
   stub loginctl 'case "$1" in
     list-sessions) printf "3 1000 nat seat0 tty1\n4 1000 nat seat0 tty2\n" ;;
-    show-session) case "$4" in Type) echo wayland ;; Active) echo yes ;; IdleHint) [[ $2 == 3 ]] && echo yes || echo no ;; esac ;;
+    show-session) case "$4" in Class) echo user ;; Type) echo wayland ;; Active) echo yes ;; IdleHint) [[ $2 == 3 ]] && echo yes || echo no ;; esac ;;
   esac'
   check "idle: one idle + one busy session -> skip" fails "$LIBEXEC_DESKTOP/desktop-idle"
 }
@@ -1890,9 +1920,19 @@ test_desktop_idle_ignores_non_graphical_sessions() {
   # shellcheck disable=SC2016 # expands inside the stub
   stub loginctl 'case "$1" in
     list-sessions) echo "5 1000 nat seat0 pts/0" ;;
-    show-session) case "$4" in Type) echo tty ;; Active) echo yes ;; IdleHint) echo no ;; esac ;;
+    show-session) case "$4" in Class) echo user ;; Type) echo tty ;; Active) echo yes ;; IdleHint) echo no ;; esac ;;
   esac'
   check "idle: ssh/tty-only session -> reboot" "$LIBEXEC_DESKTOP/desktop-idle"
+}
+
+test_desktop_idle_ignores_greeter_sessions() {
+  idle_env
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub loginctl 'case "$1" in
+    list-sessions) echo "c1 973 greeter seat0 tty1" ;;
+    show-session) case "$4" in Class) echo greeter ;; Type) echo wayland ;; Active) echo yes ;; IdleHint) echo no ;; esac ;;
+  esac'
+  check "idle: busy-looking greeter session -> reboot" "$LIBEXEC_DESKTOP/desktop-idle"
 }
 
 test_desktop_idle_future_marker() {
@@ -5328,6 +5368,236 @@ test_unlock_card_recipe() {
 
 test_epel_countme_metalinks() {
   check "epel: reporting-compatible metalinks" python3 "$ROOT/tests/test-epel-metalinks.py"
+}
+
+DOTS=$ROOT/system_files_desktop/usr/libexec/juniper/dots
+dots_env() {
+  export HOME=$T/home XDG_CONFIG_HOME=$T/home/.config XDG_STATE_HOME=$T/home/.local/state
+  export JUNIPER_DOTS_SRC=$T/src JUNIPER_NOW=20261014-120000
+  export T # the chezmoi stub writes into it
+  mkdir -p "$HOME" "$JUNIPER_DOTS_SRC"
+  # chezmoi stub: log argv and what it read on stdin (the skip answers)
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub chezmoi 'if [[ $1 == managed ]]; then printf "%s\n" "$HOME/.config/niri/config.kdl" "$HOME/.config/niri/dms.kdl" "$HOME/.config/foot/foot.ini"; exit 0; fi
+head -c 2 >"$T/chezmoi-stdin" || true'
+}
+
+test_dots_init_once() {
+  dots_env
+  "$DOTS" init
+  check "dots: init applies Juniper's source" called "chezmoi apply --source $T/src --config $XDG_CONFIG_HOME/juniper/chezmoi/chezmoi.toml --persistent-state $XDG_CONFIG_HOME/juniper/chezmoi/chezmoistate.boltdb --no-tty --keep-going $HOME/.config/niri/config.kdl $HOME/.config/niri/dms.kdl $HOME/.config/foot/foot.ini"
+  check "dots: files you changed are skipped (s answers)" cmp -s "$T/chezmoi-stdin" <(printf 's\n')
+  check "dots: own chezmoi config, not yours" test -e "$XDG_CONFIG_HOME/juniper/chezmoi/chezmoi.toml"
+  check "dots: marked done" test -e "$XDG_STATE_HOME/juniper/dots.done"
+  check "dots: nothing kept in a fresh home" test ! -s "$XDG_STATE_HOME/juniper/dots-kept"
+  : >"$CALLS"
+  "$DOTS" init
+  check "dots: init only once" not_called "chezmoi apply"
+}
+
+test_dots_keeps_files_that_existed_before_init() {
+  dots_env
+  mkdir -p "$HOME/.config/foot"
+  echo mine >"$HOME/.config/foot/foot.ini"
+  "$DOTS" init
+  local k=$XDG_STATE_HOME/juniper/dots-kept
+  check "dots: pre-existing file listed as kept" test "$(cat "$k")" = "$HOME/.config/foot/foot.ini"
+  check "dots: init doesn't apply the kept file" not_called "foot.ini"
+  check "dots: init applies the missing ones" called "$HOME/.config/niri/config.kdl $HOME/.config/niri/dms.kdl"
+  : >"$CALLS"
+  "$DOTS" update
+  check "dots: update doesn't apply the kept file either" not_called "foot.ini"
+  check "dots: update applies the others" called "$HOME/.config/niri/config.kdl"
+  mkdir -p "$HOME/.config/niri"
+  echo mine >"$HOME/.config/niri/config.kdl"
+  echo local >"$HOME/.config/niri/local.kdl"
+  echo "$HOME/.config/niri/config.kdl" >>"$k"
+  : >"$CALLS"
+  "$DOTS" reset niri >/dev/null
+  check "dots reset niri: no longer kept" not_grep_dir "niri" "$k"
+  check "dots reset niri: your local.kdl untouched" test "$(cat "$HOME/.config/niri/local.kdl")" = local
+  check "dots reset niri: other kept files stay kept" grep -qx "$HOME/.config/foot/foot.ini" "$k"
+  check "dots reset niri: applied with --force" called "--force $HOME/.config/niri"
+  echo "$HOME/.config/niri/dms.kdl" >"$k"
+  mkdir -p "$HOME/.config/niri"
+  : >"$HOME/.config/niri/dms.kdl"
+  "$DOTS" reset all >/dev/null
+  check "dots reset all: nothing kept" test ! -s "$k"
+}
+
+test_dots_init_failure_retried() {
+  dots_env
+  mkdir -p "$HOME/.config/foot"
+  echo mine >"$HOME/.config/foot/foot.ini"
+  local good
+  good=$(cat "$T/bin/chezmoi")
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub chezmoi 'if [[ $1 == managed ]]; then printf "%s\n" "$HOME/.config/niri/config.kdl" "$HOME/.config/foot/foot.ini"; exit 0; fi
+exit 1'
+  check "dots: failed apply fails" fails "$DOTS" init
+  check "dots: failed apply not marked done" test ! -e "$XDG_STATE_HOME/juniper/dots.done"
+  printf '%s\n' "$good" >"$T/bin/chezmoi"
+  : >"$CALLS"
+  "$DOTS" init
+  check "dots: retry still keeps the pre-existing file" grep -qx "$HOME/.config/foot/foot.ini" "$XDG_STATE_HOME/juniper/dots-kept"
+  check "dots: retry doesn't apply it" not_called "foot.ini"
+  check "dots: retry marked done" test -e "$XDG_STATE_HOME/juniper/dots.done"
+}
+
+# managed_stub FILE...: chezmoi manages exactly the files listed in $T/managed (edit it to model
+# a newer image); apply "writes" each target it's given
+managed_stub() {
+  printf '%s\n' "$@" >"$T/managed"
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub chezmoi 'if [[ $1 == managed ]]; then cat "$T/managed"; exit 0; fi
+for a; do [[ $a != "$HOME"/* ]] || echo juniper >"$a"; done'
+}
+
+test_dots_update_before_init_keeps_existing() {
+  dots_env
+  managed_stub "$HOME/.config/niri/config.kdl" "$HOME/.config/foot/foot.ini"
+  mkdir -p "$HOME/.config/foot"
+  echo mine >"$HOME/.config/foot/foot.ini"
+  "$DOTS" update
+  local k=$XDG_STATE_HOME/juniper/dots-kept
+  check "dots: update before init keeps your file" test "$(cat "$HOME/.config/foot/foot.ini")" = mine
+  check "dots: ...lists it as kept" test "$(cat "$k")" = "$HOME/.config/foot/foot.ini"
+  check "dots: ...and applies the missing one" called "--keep-going $HOME/.config/niri/config.kdl"
+  : >"$CALLS"
+  "$DOTS" init
+  check "dots: the later init still keeps it" test "$(cat "$HOME/.config/foot/foot.ini")" = mine
+  check "dots: ...and doesn't make Juniper's copy kept" test "$(cat "$k")" = "$HOME/.config/foot/foot.ini"
+}
+
+test_dots_file_added_by_a_newer_image() {
+  dots_env
+  managed_stub "$HOME/.config/niri/config.kdl"
+  "$DOTS" init
+  local k=$XDG_STATE_HOME/juniper/dots-kept
+  check "dots: known files recorded" test "$(cat "$XDG_STATE_HOME/juniper/dots-known")" = "$HOME/.config/niri/config.kdl"
+  mkdir -p "$HOME/.config/gtk-3.0"
+  echo mine >"$HOME/.config/gtk-3.0/settings.ini"
+  printf '%s\n' "$HOME/.config/niri/config.kdl" "$HOME/.config/gtk-3.0/settings.ini" \
+    "$HOME/.config/gtk-4.0/settings.ini" >"$T/managed"
+  : >"$CALLS"
+  "$DOTS" update
+  check "dots: new managed file you already have is left alone" test "$(cat "$HOME/.config/gtk-3.0/settings.ini")" = mine
+  check "dots: ...and listed as kept" test "$(cat "$k")" = "$HOME/.config/gtk-3.0/settings.ini"
+  check "dots: ...not applied" not_called "gtk-3.0"
+  check "dots: new managed file you don't have is applied" test "$(cat "$HOME/.config/gtk-4.0/settings.ini")" = juniper
+  check "dots: a file Juniper wrote isn't kept" fails grep -q niri "$k"
+  check "dots: known list follows the image" grep -qx "$HOME/.config/gtk-4.0/settings.ini" "$XDG_STATE_HOME/juniper/dots-known"
+  : >"$CALLS"
+  "$DOTS" update
+  check "dots: next update still leaves it alone" not_called "gtk-3.0"
+  "$DOTS" reset all >/dev/null
+  check "dots reset all: the kept file is Juniper's again" test "$(cat "$HOME/.config/gtk-3.0/settings.ini")" = juniper
+  check "dots reset all: ...and stays known" grep -qx "$HOME/.config/gtk-3.0/settings.ini" "$XDG_STATE_HOME/juniper/dots-known"
+  check "dots reset all: nothing kept" test ! -s "$k"
+}
+
+# chezmoi --keep-going writes what it can, then fails: the retry must not mistake the files it
+# did write for yours.
+test_dots_half_applied_init_retry() {
+  dots_env
+  managed_stub "$HOME/.config/niri/config.kdl" "$HOME/.config/foot/foot.ini"
+  # shellcheck disable=SC2016 # expands inside the stub
+  stub chezmoi 'if [[ $1 == managed ]]; then cat "$T/managed"; exit 0; fi
+for a; do [[ $a != */niri/* ]] || echo juniper >"$a"; done; exit 1'
+  check "dots: half-applied init fails" fails "$DOTS" init
+  managed_stub "$HOME/.config/niri/config.kdl" "$HOME/.config/foot/foot.ini"
+  : >"$CALLS"
+  "$DOTS" init
+  check "dots: retry doesn't keep what Juniper wrote" test ! -s "$XDG_STATE_HOME/juniper/dots-kept"
+  check "dots: retry applies both" called "$HOME/.config/niri/config.kdl $HOME/.config/foot/foot.ini"
+}
+
+test_dots_failing_managed_stops() {
+  dots_env
+  mkdir -p "$HOME/.config/foot"
+  echo mine >"$HOME/.config/foot/foot.ini"
+  stub chezmoi 'exit 1'
+  check "dots: init fails when chezmoi managed fails" fails "$DOTS" init
+  check "dots: ...and isn't marked done" test ! -e "$XDG_STATE_HOME/juniper/dots.done"
+  check "dots: ...and kept list isn't half-written" test ! -e "$XDG_STATE_HOME/juniper/dots-kept"
+  check "dots: update fails when chezmoi managed fails" fails "$DOTS" update
+  check "dots: reset all fails when chezmoi managed fails" fails "$DOTS" reset all
+  check "dots: ...with no forced apply" not_called "--force"
+  check "dots: ...and the user's file stays" test "$(cat "$HOME/.config/foot/foot.ini")" = mine
+  stub chezmoi 'exit 0'
+  check "dots: nothing managed is an error too" fails "$DOTS" reset all
+}
+
+test_dots_new_dirs_are_private() {
+  dots_env
+  local old_umask
+  old_umask=$(umask)
+  umask 022
+  # the stub applies nothing, so only the dirs dots itself creates exist
+  "$DOTS" init
+  check "dots: ~/.config private" test "$(stat -c %a "$HOME/.config")" = 700
+  check "dots: ~/.local private" test "$(stat -c %a "$HOME/.local")" = 700
+  check "dots: ~/.local/state private" test "$(stat -c %a "$HOME/.local/state")" = 700
+  mkdir -m 755 "$T/open"
+  HOME=$T/open XDG_CONFIG_HOME=$T/open/.config XDG_STATE_HOME=$T/open/.local/state "$DOTS" update
+  check "dots: nothing loosened, existing dir kept" test "$(stat -c %a "$T/open")" = 755
+  umask "$old_umask"
+}
+
+test_dots_update_respects_opt_out() {
+  dots_env
+  "$DOTS" update --auto
+  check "dots: daily update applies" called "chezmoi apply"
+  mkdir -p "$XDG_CONFIG_HOME/juniper" && : >"$XDG_CONFIG_HOME/juniper/no-auto-dots"
+  : >"$CALLS"
+  "$DOTS" update --auto
+  check "dots: automatic update off -> skipped" not_called "chezmoi apply"
+  "$DOTS" update
+  check "dots: ujust dots-update still applies" called "chezmoi apply"
+}
+
+test_toggle_auto_dots_is_where_dots_looks() {
+  dots_env
+  XDG_CONFIG_HOME=$T/xdg just --justfile "$ROOT/system_files_desktop/usr/share/juniper/just/desktop.just" \
+    toggle-auto-dots >/dev/null
+  XDG_CONFIG_HOME=$T/xdg "$DOTS" update --auto
+  check "toggle-auto-dots: dots sees it under XDG_CONFIG_HOME" not_called "chezmoi apply"
+}
+
+test_dots_reset_backs_up_then_forces() {
+  dots_env
+  mkdir -p "$HOME/.config/niri" "$HOME/.config/foot"
+  echo mine >"$HOME/.config/niri/config.kdl"
+  echo myfoot >"$HOME/.config/foot/foot.ini"
+  "$DOTS" reset niri >/dev/null
+  local b=$XDG_STATE_HOME/juniper/dots-backup-20261014-120000
+  check "dots reset niri: old file kept in the backup" test "$(cat "$b/.config/niri/config.kdl")" = mine
+  check "dots reset niri: moved out of the way" test ! -e "$HOME/.config/niri/config.kdl"
+  check "dots reset niri: foot untouched" test -e "$HOME/.config/foot/foot.ini"
+  check "dots reset niri: foot, never applied before, stays yours" grep -qx "$HOME/.config/foot/foot.ini" "$XDG_STATE_HOME/juniper/dots-kept"
+  check "dots reset niri: forced apply of niri only" called "chezmoi apply --source $T/src"
+  check "dots reset niri: --force" called "--force $HOME/.config/niri"
+  "$DOTS" reset all >/dev/null
+  check "dots reset all: foot backed up too" test -e "$b/.config/foot/foot.ini"
+  check "dots: bad scope refused" fails "$DOTS" reset everything
+  check "dots: bad command refused" fails "$DOTS" frobnicate
+}
+
+LOCKIDLE=$ROOT/system_files_desktop/usr/libexec/juniper/desktop-lock-idle
+test_desktop_lock_idle_edits_dms_settings() {
+  export XDG_CONFIG_HOME=$T/cfg
+  local s=$T/cfg/DankMaterialShell/settings.json
+  "$LOCKIDLE" off >/dev/null
+  check "lock-idle off: creates settings with 0" test "$(jq -c '[.acLockTimeout,.batteryLockTimeout]' "$s")" = '[0,0]'
+  echo '{"currentThemeName":"dynamic","acLockTimeout":0}' >"$s"
+  "$LOCKIDLE" on >/dev/null
+  check "lock-idle on: 600 s" test "$(jq -c '[.acLockTimeout,.batteryLockTimeout]' "$s")" = '[600,600]'
+  check "lock-idle: other settings kept" test "$(jq -r .currentThemeName "$s")" = dynamic
+  check "lock-idle: status" stdout_has "on" "$LOCKIDLE"
+  echo 'not json' >"$s"
+  check "lock-idle: broken settings refused" fails "$LOCKIDLE" off
+  check "lock-idle: broken settings left as they were" test "$(cat "$s")" = "not json"
+  check "lock-idle: bad arg refused" fails "$LOCKIDLE" maybe
 }
 
 for t in $(declare -F | awk -v f="${UNIT_FILTER:-.}" '$3 ~ /^test_/ && $3 ~ f {print $3}'); do

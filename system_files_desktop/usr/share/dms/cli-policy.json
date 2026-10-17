@@ -1,0 +1,10 @@
+{
+  "policy_version": 1,
+  "blocked_commands": [
+    "greeter install",
+    "greeter enable",
+    "greeter uninstall",
+    "setup"
+  ],
+  "message": "Juniper is image-based: the greeter and DMS's system setup come with the image. Use ujust for system changes."
+}

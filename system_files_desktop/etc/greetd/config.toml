@@ -1,8 +1,13 @@
-# Juniper Desktop: boot to greetd's text login (agreety); niri starts only after the password
-# is accepted (PAM). No auto-login. Replaces the greetd package's default config.
+# Juniper Desktop: greetd shows DankMaterialShell's greeter (in its own niri, as the unprivileged
+# greeter user); your session starts only after PAM accepts your password. No auto-login.
+# greetd-spawn (/etc/pam.d) is greetd's PAM stack plus XDG_SESSION_TYPE=wayland for logind.
+# Replaces the greetd package's default config and the one dms-greeter's install writes.
+[general]
+service = "greetd-spawn"
+
 [terminal]
 vt = 1
 
 [default_session]
-command = "agreety --cmd niri-session"
-user = "greetd"
+command = "dms-greeter --command niri --cache-dir /var/cache/dms-greeter"
+user = "greeter"

@@ -1,0 +1,11 @@
+[Unit]
+Description=Juniper desktop dotfiles (first login)
+ConditionPathExists=!%h/.local/state/juniper/dots.done
+Before=graphical-session-pre.target niri.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/juniper/dots init
+
+[Install]
+WantedBy=graphical-session-pre.target

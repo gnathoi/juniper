@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# `ujust desktop-lock-idle [on|off]`: DankMaterialShell locks the screen after 10 minutes idle
+# (on) or never (off); with no argument, say which. Edits DMS's settings.json in place (DMS
+# picks the change up live); a settings file that isn't valid JSON is left alone.
+set -euo pipefail
+f=${XDG_CONFIG_HOME:-$HOME/.config}/DankMaterialShell/settings.json
+
+current() {
+  local t
+  t=$(jq -r '.acLockTimeout // 0' "$f" 2>/dev/null || echo 0)
+  if ((t > 0)); then echo "Lock on idle: on"; else echo "Lock on idle: off"; fi
+}
+set_timeout() {
+  local tmp
+  mkdir -p "${f%/*}"
+  [[ -s $f ]] || echo '{}' >"$f"
+  jq -e . "$f" >/dev/null 2>&1 || {
+    echo "desktop-lock-idle: $f isn't valid JSON; fix it or remove it first" >&2
+    exit 1
+  }
+  tmp=$(mktemp "$f.XXXXXX")
+  jq --argjson t "$1" '.acLockTimeout = $t | .batteryLockTimeout = $t' "$f" >"$tmp"
+  mv "$tmp" "$f"
+}
+
+case ${1:-} in
+  on) set_timeout 600 && echo "Lock on idle: on (after 10 minutes)." ;;
+  off) set_timeout 0 && echo "Lock on idle: off." ;;
+  "") current ;;
+  *)
+    echo "usage: ujust desktop-lock-idle [on|off]" >&2
+    exit 2
+    ;;
+esac

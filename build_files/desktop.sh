@@ -27,12 +27,15 @@ dnf -y install --exclude=fzf "${locked[@]}" \
   xdg-desktop-portal-gnome xdg-desktop-portal-gtk gnome-keyring \
   pipewire wireplumber pipewire-pulseaudio \
   mesa-dri-drivers mesa-vulkan-drivers \
+  accountsservice qt6-qtmultimedia qt6-qtwayland chezmoi xdg-terminal-exec \
   google-noto-sans-fonts google-noto-sans-mono-fonts google-noto-emoji-fonts
 dnf clean all
 rm -f /etc/yum.repos.d/juniper-copr-*.repo
 install -D -m 0644 /ctx/build_files/desktop.lock /usr/share/juniper/desktop.lock
 
 cp -a /ctx/system_files_desktop/. /
+# dms-greeter's %post backs up the greetd config it replaced; ours (just copied) is the one in use
+rm -f /etc/greetd/config.toml.backup-*
 
 # KMS graphics, per kernel (replaces the headless rpi-config.txt build.sh installed).
 for kdir in /usr/lib/modules/*/; do
@@ -41,6 +44,9 @@ done
 
 # --- units ---
 systemctl enable greetd.service
+# DankMaterialShell starts with every graphical session (dms.service, WantedBy=graphical-session.target)
+systemctl --global enable dms.service
+systemctl --global enable juniper-dots-init.service juniper-dots-update.timer
 systemctl enable juniper-flatpak-setup.timer juniper-flatpak-update.timer juniper-reboot-retry.timer
 systemctl set-default graphical.target
 

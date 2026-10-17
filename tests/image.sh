@@ -389,18 +389,39 @@ fi
 
 if [[ $IMAGE_ID == juniper-desktop ]]; then
   # --- desktop only ---
-  need_cmds niri niri-session xwayland-satellite Xwayland greetd agreety foot waybar fuzzel \
-    swaylock swayidle swaync pipewire wireplumber flatpak notify-send
+  need_cmds niri niri-session xwayland-satellite Xwayland greetd dms-greeter dms qs matugen dgop \
+    cliphist chezmoi xdg-terminal-exec foot swayidle pipewire wireplumber flatpak notify-send jq
+  for cmd in waybar fuzzel swaylock swaync swaybg; do
+    if command -v "$cmd" >/dev/null; then
+      echo "replaced by DMS but still installed: $cmd"
+      exit 1
+    fi
+  done
+  rpm -q accountsservice qt6-qtmultimedia qt6-qtwayland material-symbols-fonts >/dev/null
+  test -s /usr/share/juniper/wallpapers/juniper-berry.png
   need_enabled greetd.service
   systemd-analyze verify greetd.service
-  # Login prompt first: agreety, then niri only after PAM authentication; never auto-login.
-  grep -qx 'command = "agreety --cmd niri-session"' /etc/greetd/config.toml
+  # Login: dms-greeter as the unprivileged greeter user; a session only after PAM, typed wayland.
+  grep -qx 'command = "dms-greeter --command niri --cache-dir /var/cache/dms-greeter"' /etc/greetd/config.toml
+  grep -qx 'service = "greetd-spawn"' /etc/greetd/config.toml
+  getent passwd greeter >/dev/null
+  [[ $(id -u greeter) -lt 1000 ]]
+  test -s /etc/pam.d/greetd-spawn
+  test -s /usr/share/juniper/greetd-spawn.pam_env.conf
+  if compgen -G '/etc/greetd/config.toml.backup-*' >/dev/null; then
+    echo "dms-greeter's stale greetd config backup shipped"
+    exit 1
+  fi
   if grep -q initial_session /etc/greetd/config.toml ||
     compgen -G '/usr/lib/systemd/system/greetd.service.d/*' >/dev/null ||
     compgen -G '/etc/systemd/system/greetd.service.d/*' >/dev/null; then
     echo "greetd auto-login, or a drop-in overriding /etc/greetd/config.toml"
     exit 1
   fi
+  # dms-greeter's install labelled its paths with semanage in the build; the image must keep them
+  [[ $(matchpathcon -n /var/lib/greeter) == *:user_home_dir_t:* ]]
+  [[ $(matchpathcon -n /var/cache/dms-greeter) == *:cache_home_t:* ]]
+  [[ $(matchpathcon -n /usr/bin/dms-greeter) == *:bin_t:* ]]
   # An update that doesn't bring greetd up is rolled back under tryboot (healthcheck hook).
   test -x /usr/lib/juniper/health.d/10-greetd
   grep -q '^GPGKey=' /etc/flatpak/remotes.d/flathub.flatpakrepo
@@ -422,15 +443,43 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
   # ...and only while automatic reboots are on (`ujust update-schedule off` disables the timer).
   grep -qx 'ExecCondition=/usr/bin/systemctl is-enabled --quiet juniper-reboot.timer' \
     /usr/lib/systemd/system/juniper-reboot-retry.service
-  # niri accepts Juniper's defaults, the /etc config, and the stub desktop-config writes.
   niri validate -c /usr/share/juniper/niri/juniper.kdl
   niri validate -c /etc/niri/config.kdl
+  [[ $(systemctl --global is-enabled dms.service) == enabled ]]
+  test -x /usr/libexec/juniper/desktop-idle-hint
+  test ! -e /usr/libexec/juniper/desktop-idle-lock
+  grep -qx foot.desktop /usr/share/xdg-terminal-exec/xdg-terminals.list
+  # Juniper's dotfiles: a fresh home gets a valid niri config and DMS settings that keep the
+  # update path and the network quiet; a file the user already has is kept.
+  [[ $(systemctl --global is-enabled juniper-dots-init.service) == enabled ]]
+  [[ $(systemctl --global is-enabled juniper-dots-update.timer) == enabled ]]
   t=$(mktemp -d)
-  HOME=$t just --justfile /usr/share/juniper/just/desktop.just desktop-config
-  head -2 "$t/.config/niri/config.kdl" | grep -q '^include "/usr/share/juniper/niri/juniper.kdl"'
+  (umask 077 && mkdir -p "$t/home/.config/foot")
+  echo '# mine' >"$t/home/.config/foot/foot.ini"
+  (umask 022 && HOME=$t/home /usr/libexec/juniper/dots init)
+  [[ $(stat -c %a "$t/home/.config") == 700 && $(stat -c %a "$t/home/.local") == 700 ]]
+  niri validate -c "$t/home/.config/niri/config.kdl"
+  grep -qx '# mine' "$t/home/.config/foot/foot.ini"
+  # ...and an edit to a file Juniper wrote survives the daily update (chezmoi asks; dots skips)
+  echo '# my edit' >>"$t/home/.config/gtk-3.0/settings.ini"
+  (umask 022 && HOME=$t/home /usr/libexec/juniper/dots update)
+  [[ $(tail -n 1 "$t/home/.config/gtk-3.0/settings.ini") == '# my edit' ]]
+  s=$t/home/.config/DankMaterialShell/settings.json
+  [[ $(jq -c '[.weatherEnabled, .useAutoLocation, .updaterHideWidget, .updaterCustomCommand, .acLockTimeout]' "$s") == '[false,false,true,"ujust update",600]' ]]
+  [[ $(jq -r .wallpaperPath "$t/home/.local/state/DankMaterialShell/session.json") == /usr/share/juniper/wallpapers/juniper-berry.png ]]
+  HOME=$t/home /usr/libexec/juniper/desktop-lock-idle off >/dev/null
+  [[ $(jq .acLockTimeout "$s") == 0 ]]
   rm -rf "$t"
-  grep -qx 'desktop-config' <<<"$recipes"
-  grep -qx 'flatpak-setup' <<<"$recipes"
+  for r in desktop-lock-idle dots-update dots-reset toggle-auto-dots flatpak-setup; do
+    grep -qx "$r" <<<"$recipes" || {
+      echo "missing recipe: $r"
+      exit 1
+    }
+  done
+  if grep -qx desktop-config <<<"$recipes"; then
+    echo "desktop-config is gone (chezmoi writes the niri config)"
+    exit 1
+  fi
   ls /usr/lib64/dri/v3d_dri.so /usr/lib64/dri/vc4_dri.so >/dev/null
   ls /usr/lib/modules/*/kernel/drivers/gpu/drm/v3d/v3d.ko* >/dev/null
   # The COPRs are build-time only: devices never pull from them.
@@ -438,11 +487,13 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
     echo "COPR repo left in the image"
     exit 1
   fi
-  # Every COPR package is exactly the version in the lock file.
+  # Every COPR package is exactly the locked version (epoch-aware: dms-greeter-1:1.6.2-3.el10)
   test -s /usr/share/juniper/desktop.lock
-  while read -r nvr; do
-    rpm -q "$nvr" >/dev/null || {
-      echo "not the locked version: $nvr"
+  while read -r nevr; do
+    name=${nevr%-*-*}
+    have=$(rpm -q --qf '%{NAME}-%{EPOCH}:%{VERSION}-%{RELEASE}\n' "$name" | sed 's/-(none):/-/; s/-0:/-/')
+    [[ $have == "$nevr" ]] || {
+      echo "not the locked version: $nevr (have $have)"
       exit 1
     }
   done </usr/share/juniper/desktop.lock
