@@ -8,6 +8,25 @@ state_dir=${JUNIPER_STATE_DIR:-/var/lib/juniper}
 
 row() { printf '  \e[1;32m%-10s\e[0m %s\n' "$1" "$2"; }
 
+# The booted image's reference (what updates pull: ghcr.io/you/image:tag), from its deployment's
+# world-readable origin file; the kernel's ostree= path leads to that deployment. Prints
+# nothing if it can't tell.
+image_ref() {
+  local sysroot=${JUNIPER_OSTREE_PATH:-/sysroot} o d ref
+  o=$(tr ' ' '\n' <"${JUNIPER_CMDLINE:-/proc/cmdline}" 2>/dev/null | sed -n 's/^ostree=//p' | head -n1)
+  [[ -n $o ]] || return 0
+  d=$(readlink -f "$sysroot$o" 2>/dev/null) || return 0
+  ref=$(sed -n 's/^container-image-reference=//p' "$d.origin" 2>/dev/null | head -n1)
+  # Drop the transport: ostree-unverified-registry:IMG, ostree-remote-image:REMOTE:docker://IMG, ...
+  case $ref in
+    ostree-remote-*:*:*) ref=${ref#*:} ref=${ref#*:} ;;
+    ostree-*:*) ref=${ref#*:} ;;
+  esac
+  ref=${ref#docker://}
+  ref=${ref#registry:}
+  printf '%s' "$ref" | tr -cd '[:print:]'
+}
+
 if ip=$(tailscale ip -4 2>/dev/null) && [[ -n $ip ]]; then
   if [[ -e $state_dir/locked ]]; then fw="firewall: Tailscale only"; else fw="firewall: LAN open"; fi
   ts="${ip%%$'\n'*} ($fw)"
@@ -39,7 +58,12 @@ fi
 
 # fastfetch ships only in the full image.
 if command -v fastfetch >/dev/null; then fastfetch; fi
-row Image "${PRETTY_NAME}"
+ref=$(image_ref)
+if [[ -n $ref ]]; then
+  row Image "$ref${IMAGE_VERSION:+ ($IMAGE_VERSION)}"
+else
+  row Image "${PRETTY_NAME}"
+fi
 row Tailscale "$ts"
 row Update "$upd"
 # Only after lockdown does the old unscoped `lan-ssh on` matter; before it SSH is open anyway.
