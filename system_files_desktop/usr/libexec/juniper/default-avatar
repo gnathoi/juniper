@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# juniper-default-avatar.service (user, at login until done): give a user with no picture
+# Juniper's (the terminal's berry logo on the wallpaper's colours) through AccountsService,
+# which copies it to /var/lib/AccountsService/icons/$USER, where the greeter and DMS find it.
+# Once per user: a picture set or removed later is the user's own choice and stays.
+set -euo pipefail
+
+state=${XDG_STATE_HOME:-$HOME/.local/state}/juniper
+marker=$state/avatar.done
+avatar=${JUNIPER_AVATAR:-/usr/share/juniper/avatar.png}
+
+[[ -e $marker ]] && exit 0
+user_path=$(busctl --system call org.freedesktop.Accounts /org/freedesktop/Accounts \
+  org.freedesktop.Accounts FindUserById x "$(id -u)" | sed -n 's/^o "\(.*\)"$/\1/p')
+[[ -n $user_path ]] || {
+  echo "default-avatar: AccountsService doesn't know this user" >&2
+  exit 1
+}
+# With no picture set, AccountsService reports ~/.face whether or not it exists.
+icon=$(busctl --system get-property org.freedesktop.Accounts "$user_path" \
+  org.freedesktop.Accounts.User IconFile | sed -n 's/^s "\(.*\)"$/\1/p')
+if [[ -z $icon || ! -s $icon ]]; then
+  busctl --system call org.freedesktop.Accounts "$user_path" org.freedesktop.Accounts.User \
+    SetIconFile s "$avatar"
+fi
+(umask 077 && mkdir -p "$state")
+: >"$marker"

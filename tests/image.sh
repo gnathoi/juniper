@@ -453,6 +453,8 @@ if [[ $IMAGE_ID == juniper-desktop ]]; then
   # update path and the network quiet; a file the user already has is kept.
   [[ $(systemctl --global is-enabled juniper-dots-init.service) == enabled ]]
   [[ $(systemctl --global is-enabled juniper-dots-update.timer) == enabled ]]
+  [[ $(systemctl --global is-enabled juniper-default-avatar.service) == enabled ]]
+  test -s /usr/share/juniper/avatar.png
   t=$(mktemp -d)
   (umask 077 && mkdir -p "$t/home/.config/foot")
   echo '# mine' >"$t/home/.config/foot/foot.ini"

@@ -333,6 +333,8 @@ updates still go through Juniper's health-checked path.
   updates until you reset it. `niri` resets only `config.kdl` and `dms.kdl`, `all` everything.
 - `ujust desktop-lock-idle on|off` turns the lock after 10 minutes idle on or off.
 - `ujust flatpak-setup` retries the first-boot install of Firefox and Bazaar.
+- A user with no picture gets Juniper's (the terminal's berry logo) at their first login, for the
+  greeter and DMS; change it in DMS's settings window, and Juniper won't set it again.
 
 A pending update's reboot waits while the desktop is in use (not idle for 30 minutes), for at
 most 7 days after the first deferral. A deferred update is retried hourly and applies once
