@@ -1,7 +1,7 @@
 # Juniper: headless bootc images for Raspberry Pi 4/5.
 #   --target minimal  -> juniper-minimal (appliance base: build FROM this)
 #   --target juniper  -> juniper (minimal + developer tools)
-#   --target desktop  -> juniper-desktop (juniper + niri desktop; experimental)
+#   --target desktop  -> juniper-desktop (juniper + niri and DankMaterialShell desktop)
 FROM scratch AS ctx
 COPY build_files /build_files
 COPY system_files /system_files

@@ -19,7 +19,7 @@ base, without giving up Juniper's guarantees:
 Success: a Pi 5 boots to a graphical DMS login, logs into a themed niri + DMS session (bar,
 launcher, notifications, lock, OSDs, polkit agent) in blues and purples from a Juniper
 wallpaper, and the reboot window, health check and Flatpak setup behave as they do today.
-Still experimental until the owner's hardware run (#58).
+Tested on the owner's Pi 5 on 2026-10-17 (`docs/acceptance.md`); #58 keeps the session-start health check.
 
 ## Decisions (owner, 2026-10-14)
 

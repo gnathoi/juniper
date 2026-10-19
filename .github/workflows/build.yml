@@ -239,7 +239,7 @@ jobs:
           path: digest/${{ matrix.image }}
           retention-days: 3
 
-  # The experimental desktop has its own job chain (build-desktop -> sign-desktop ->
+  # The desktop has its own job chain (build-desktop -> sign-desktop ->
   # disk-desktop), with the same steps as the headless jobs: a desktop failure (a pruned COPR
   # build, say) never blocks signing, disk images or the release of juniper and
   # juniper-minimal, and the desktop is published only when its own build and tests pass.
@@ -415,7 +415,7 @@ jobs:
         run: |
           sudo chown "$USER:$(id -gn)" "$IMAGE-$VERSION.raw"
           xz -T0 -k "$IMAGE-$VERSION.raw"
-          # The experimental desktop stays out of the Raspberry Pi Imager list (os-list.json).
+          # The desktop stays out of the Raspberry Pi Imager list (os-list.json) for now.
           if [ "$IMAGE" != juniper-desktop ]; then
             disk/render-os-list.sh "$IMAGE" "$IMAGE-$VERSION.raw" "$IMAGE-$VERSION.raw.xz" \
               "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$IMAGE-$VERSION.raw.xz" \
@@ -497,7 +497,10 @@ jobs:
           sha256sum ./*.raw.xz os-list.json >SHA256SUMS
           if compgen -G 'juniper-desktop-*.raw.xz' >/dev/null; then
             echo "" >>notes.md
-            echo "**juniper-desktop** (the niri desktop) is experimental and untested on hardware." >>notes.md
+            {
+              echo "**juniper-desktop** (niri + DankMaterialShell) is tested on a Raspberry Pi 5;"
+              echo "it is not in Raspberry Pi Imager's list yet."
+            } >>notes.md
           fi
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:

@@ -124,3 +124,23 @@ DNS was up and failed; it retries daily.
 - `rpi-fw-crypto hmac` locks up on EEPROM 2025-11-05 (a known bug, fixed in pieeprom-2026-01-21); after updating to 2026-05-11 with `sudo rpi-eeprom-update -a`, hmac works (the encrypted card unlocks with it on every boot). fwkey refuses firmware older than 2026-01-21.
 - `lock_device_private_key=1` blocks genkey on firmware before 2026-06-17, because it is the old global lock; per-operation locks (`set-key-status`) exist only from that release. The config lock is therefore no longer set (#86).
 - Thermals (Pi 5): idle 44 C; the fan starts at the 50 C trip point; peak 59.5 C under full load; never throttled.
+
+## 2026-10-17, `juniper-desktop` on a Pi 5 (#58, #109–#120)
+
+Pi 5 (4 GB), encrypted root, the everyday card from 2026-10-11, switched from `juniper` with
+`ujust switch`; micro-HDMI to a 1080p screen, USB keyboard and mouse; checks over Tailscale SSH.
+
+| Step | Check | Result |
+|---|---|---|
+| 1 | `ujust switch ghcr.io/gnathoi/juniper-desktop:latest` from `juniper` over Tailscale SSH | **fail**: `fsetxattr(security.selinux): Invalid argument` on `flatpak-system-helper`. The desktop adds SELinux policy modules (flatpak, greetd) and bootc, run from a script or Tailscale SSH (`unconfined_service_t`), isn't in `install_t`, the one domain that may set labels the running policy doesn't know. Completed once with `setenforce 0` around the pull (enforcing again after the reboot). Fixed in #112 (`bootc-run`: pulls as a transient systemd unit) |
+| 2 | Boot, greeter | pass: tryboot, health check, greeter on HDMI; SELinux enforcing, no AVCs; `/var/lib/greeter` `user_home_dir_t`, `/var/cache/dms-greeter` `cache_home_t`; `greeter` and `greetd` users from sysusers; no failed units |
+| 3 | Login, session | pass: password login; session `Type=wayland`, `Class=user` (the greeter's is `wayland`, `Class=greeter`, which `desktop-idle` ignores); DMS bar, launcher, terminal, wallpaper theme; dotfiles applied at first login (none pre-existing, `dots-kept` empty) |
+| 4 | Memory, idle | ~450 MB used at the greeter; ~1.0–1.1 GB in a session (quickshell 280–400 MB, niri ~100 MB); 2–9 % CPU and ~46 °C idle |
+| 5 | Privacy | **fail**: each DMS start made geoclue look up the location online (HTTPS to a location service) though DMS's location and weather are off. Fixed in #111 (geoclue's IP and Wi-Fi sources off; nothing left the Pi after) |
+| 6 | Daily dotfiles timer | **fail**: `juniper-dots-update.timer` never armed at the first login (its condition was checked before `dots init`). Fixed in #110 |
+| 7 | `ujust update` to a build with #110–#117, then to one with #119 | pass: both updates staged and rebooted through tryboot, health check passed, previous build kept as rollback. The second pull ran as `juniper-bootc-*.service` (#112's path) |
+| 8 | Default user picture | pass: set through AccountsService from a user unit (polkit allows it), copied to `/var/lib/AccountsService/icons/nat`, readable by the greeter |
+
+Not checked on this run: the reboot deferral after 30 minutes idle, gnome-keyring unlocking at
+login, the first-boot Flathub install of Firefox and Bazaar, a flashed (rather than switched)
+desktop card, and falling back from a broken desktop update. Performance measurements: #118.

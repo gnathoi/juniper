@@ -17,7 +17,7 @@ A Pi 5 running `juniper`. `juniper-minimal` shows just the status block.
 
 | | `juniper-minimal` | `juniper` | `juniper-desktop` |
 |---|---|---|---|
-| Purpose | appliance base | dev box | dev box with a screen (experimental) |
+| Purpose | appliance base | dev box | dev box with a screen |
 | Interface | headless | headless | niri + DankMaterialShell desktop |
 | Tailscale, flash-time join, firewall lockdown, `ujust lan-ssh` | yes | yes | yes |
 | Podman + quadlets, nightly `podman auto-update`, firewalld | yes | yes | yes |
@@ -34,23 +34,10 @@ A Pi 5 running `juniper`. `juniper-minimal` shows just the status block.
 
 ## Images
 
-Dev box (minimal + developer tools):
-
 ```
-ghcr.io/gnathoi/juniper:latest
-```
-
-Appliance base, to build `FROM`:
-
-```
-ghcr.io/gnathoi/juniper-minimal:latest
-```
-
-Desktop (experimental, published but untested on hardware; `juniper` plus niri, Firefox and
-Bazaar):
-
-```
-ghcr.io/gnathoi/juniper-desktop:latest
+ghcr.io/gnathoi/juniper-minimal:latest   # appliance base, to build FROM
+ghcr.io/gnathoi/juniper:latest           # dev box: minimal + developer tools
+ghcr.io/gnathoi/juniper-desktop:latest   # juniper + niri, DankMaterialShell, Firefox, Bazaar
 ```
 
 Every image, disk image and checksum is cosign-signed, and Pis only accept signed OS
@@ -64,51 +51,25 @@ cosign verify --key system_files/usr/share/pki/containers/juniper.pub ghcr.io/gn
 
 | Hardware | Boot media | `juniper-minimal` | `juniper` | `juniper-desktop` |
 |---|---|---|---|---|
-| Raspberry Pi 5 | microSD | ✅ tested 2026-10-10 | ✅ tested 2026-10-10 | untested |
+| Raspberry Pi 5 | microSD | ✅ tested 2026-10-10 | ✅ tested 2026-10-10 | ✅ tested 2026-10-17 |
 | Raspberry Pi 5 | USB or NVMe | untested | untested | untested |
 | Raspberry Pi 4, 400 | microSD or USB | untested | untested | untested |
 | Raspberry Pi 500, CM4, CM5 | any | untested | untested | untested |
 
-"Tested" means the full hardware acceptance run in [docs/acceptance.md](docs/acceptance.md):
+"Tested" means the hardware acceptance run in [docs/acceptance.md](docs/acceptance.md):
 first boot, the Tailscale join and lockdown, signed updates through tryboot, and falling back
-from a broken update. The other boards should work, since the AlmaLinux base supports them,
+from a broken update. The desktop's run covered the greeter, the session and updates on an
+encrypted Pi 5 (4 GB), switched from `juniper`; a flashed desktop card and a desktop fallback
+are still to check. The other boards should work, since the AlmaLinux base supports them,
 but nobody has checked yet. **If you have one, please try an image and
 [report how it went](https://github.com/gnathoi/juniper/issues/new?template=hardware-report.yml)**,
 even if everything just worked.
 
 ## Install
 
-1. Create a **tagged**, one-off, pre-approved auth key at
-   <https://login.tailscale.com/admin/settings/keys>. Pick a short expiry that matches when you
-   will deploy; the device deletes an unused key after 14 days or as soon as Tailscale rejects
-   it. Tagged devices never expire, so the lockdown can't lock you out later. The key turns on Tailscale SSH, so your
-   [tailnet policy](https://tailscale.com/kb/1337/policy-syntax) needs to let you in to that
-   tag. Keep it narrow: an admin group, SSH as your login user only (no root: use `sudo`),
-   and only the ports you use, in place of the default allow-all rule (a `tcp:22`-only grant
-   also blocks ICMP and every other port, so add the ports for the services you run). For example
-   (`you` is the `user` in your flash config):
-
-   ```json
-   {
-     "groups": {"group:admins": ["alice@example.com"]},
-     "tagOwners": {"tag:server": ["group:admins"], "tag:monitoring": ["group:admins"]},
-     "grants": [
-       {"src": ["group:admins"], "dst": ["tag:server"], "ip": ["tcp:22"]},
-       {"src": ["tag:monitoring"], "dst": ["tag:server"], "ip": ["tcp:9100"]}
-     ],
-     "ssh": [
-       {"action": "check", "src": ["group:admins"], "dst": ["tag:server"], "users": ["you"]}
-     ]
-   }
-   ```
-
-   `check` asks you to re-authenticate in the browser every 12 hours; use `accept` only for
-   automation (a tagged CI or backup device) with its own narrow rule.
-   `"users": ["autogroup:nonroot"]` also works, but lets the admin group log in as any
-   non-root account on the Pi. The second grant is for `ujust enable-metrics`
-   (node_exporter on :9100) from a monitoring host tagged `tag:monitoring`; drop it if you
-   don't use it. See [grants](https://tailscale.com/kb/1324/grants) and
-   [Tailscale SSH](https://tailscale.com/kb/1193/tailscale-ssh).
+1. Create a **tagged**, one-off, pre-approved Tailscale auth key, and let your tailnet policy
+   allow you SSH to that tag. Keep the policy narrow: [docs/tailscale.md](docs/tailscale.md)
+   has an example and explains why.
 2. Flash an SD card or USB disk: with `just flash` on Linux (below), or by hand on any OS.
 3. Boot. The Pi joins your tailnet; `ssh <user>@<hostname>` over Tailscale.
 
@@ -121,7 +82,7 @@ and `run0` or `sudo` for the write.
     just flash /dev/sdX ~/.config/juniper/flash.yaml
 
 The config ([`examples/flash.yaml`](examples/flash.yaml)) holds the image (`juniper`,
-`juniper-minimal` or the experimental `juniper-desktop`), hostname, user, SSH keys, timezone,
+`juniper-minimal` or `juniper-desktop`), hostname, user, SSH keys, timezone,
 Tailscale key and Wi-Fi. `just flash` downloads the latest release (or pass a tag or a local
 `.raw.xz` as a third argument), checks its cosign signature, refuses anything but a
 removable, USB or SD card disk, shows what it will write and asks for a y/N before erasing
@@ -132,7 +93,7 @@ every image either way).
 
 ### Flash by hand (any OS)
 
-Download `juniper-*.raw.xz`, `juniper-minimal-*.raw.xz` or (experimental)
+Download `juniper-*.raw.xz`, `juniper-minimal-*.raw.xz` or
 `juniper-desktop-*.raw.xz` and its `.bundle` from
 [Releases](https://github.com/gnathoi/juniper/releases), verify it, and flash it with any
 tool:
@@ -147,252 +108,41 @@ Then edit `user-data` on the small FAT partition and, for Wi-Fi, add `network-co
 
 Run `ujust` to list Juniper's commands (updates, reboot window, LAN SSH escape hatch,
 Tailscale, metrics, Pi status, and on `juniper` the dev box). Press Tab after `ujust` to
-complete recipe names and their fixed arguments (`on`/`off`, ...) in bash.
+complete recipe names and their fixed arguments (`on`/`off`, ...) in bash. The login banner
+shows the image the Pi follows, its Tailscale address and update state, and a tip.
 
-### Lockdown and LAN SSH
+- **Network.** Once the Pi joins your tailnet, the firewall drops everything but Tailscale.
+  If Tailscale ever goes away, `ujust lan-ssh on` re-opens SSH to the local network only.
+  [docs/tailscale.md](docs/tailscale.md)
+- **Updates.** A signed release every Monday; Pis reboot into it on Tuesday at 04:00 local
+  time (`ujust update-schedule`, or `ujust update` now). Each update boots once through
+  firmware tryboot and is kept only if the health check passes, else the Pi falls back.
+  [docs/operations.md](docs/operations.md#updates-and-fallback)
+- **Security.** Opt-in encryption at rest (`encrypt: true` in flash.yaml, Pi 5), what to do
+  if a device is lost, and signing your own images. [docs/security.md](docs/security.md)
+- **Storage and monitoring.** Juniper keeps room for updates, prunes dangling images, caps
+  the journal, and writes Prometheus metrics for `ujust enable-metrics`.
+  [docs/operations.md](docs/operations.md#storage-on-long-running-devices)
+- **Dev tools** (`juniper`, `juniper-desktop`): Homebrew from Bluefin's `ublue-os/brew`
+  keeps your brew packages updated (`brew-update.timer`, `brew-upgrade.timer`).
 
-Until the Pi has joined your tailnet, SSH is open on whatever network it is on. That is a
-deliberate choice: if the Tailscale join fails, you can still reach the Pi over the LAN to
-fix it. Once it joins, a lockdown makes the firewall drop everything except Tailscale, and
-LAN SSH is closed. `ujust lan-ssh` only matters after lockdown.
-
-If Tailscale ever goes away, re-open SSH without exposing it to the internet:
-
-    ujust lan-ssh                       # show the state: off, scoped, or legacy-unscoped
-    ujust lan-ssh on                    # allow SSH from the networks this Pi is directly on
-    ujust lan-ssh on 192.168.1.0/24     # or only from the CIDRs you give (IPv4 or IPv6)
-    ujust lan-ssh for 2h                # same, but runtime only: expires after 2h or on reboot
-    ujust lan-ssh off                   # close it again
-
-By default `on` and `for` allow the on-link prefixes of every non-Tailscale interface (IPv4
-and IPv6, including link-local and your router-advertised global /64), never the internet.
-Container and VM bridges (`podman*`, `docker*`, `veth*`, `cni*`, `cali*`, `flannel*`,
-`virbr*`) are skipped: local containers don't need the Pi's sshd.
-Sources are fixed at the moment you run it: re-run it after moving the Pi to another
-network. `for` needs a unit (`30s`, `30m`, `2h`); `on` and `off` cancel an active `for`
-window (a network that is already open keeps its original expiry if you run `for` again).
-CIDRs broader than /8 (IPv4) or /16 (IPv6), including `0.0.0.0/0` and `::/0`, are
-refused unless you add `--force`. Older images' `ujust lan-ssh on` opened SSH to every
-network; the login banner and `ujust pi-status` warn while that rule is still there, and
-`ujust lan-ssh on` or `off` removes it. Nothing changes it automatically on update.
-
-The `juniper` image's Homebrew comes from Bluefin's `ublue-os/brew` and updates and
-upgrades your brew packages automatically (`brew-update.timer`, `brew-upgrade.timer`).
-
-### If a device is lost or stolen
-
-The root filesystem is not encrypted unless you opted in (see "Encryption at rest" below).
-Whoever holds a plain card can read the Tailscale node state (a working tailnet node), SSH host keys, Wi-Fi passwords,
-password hashes and workload data. The boot partition is unsigned too, so a card that comes
-back may have been modified. Revoke in this order:
-
-1. Remove the device in the Tailscale admin console. That revokes its node key. Devices
-   that joined with a tagged auth key never expire on their own.
-2. Revoking or expiring the auth key does not remove nodes that already joined with it.
-   Revoke it too if the card never booted: its auth key is still on the FAT partition.
-3. Change the Wi-Fi password, and any workload or API secrets the device held.
-4. Remove its SSH host key from your `known_hosts`.
-5. Reflash any card that comes back instead of trusting it.
-
-What is verified: OS updates are signature-checked before they install. Nothing verifies
-the boot chain on the card itself.
-
-### Encryption at rest
-
-Opt-in for now: set `encrypt: true` in flash.yaml (it becomes the default after the first
-hardware run). On first boot the Pi encrypts the root filesystem (LUKS2) before anything
-secret is written. It is bound to this board and this card, so it unlocks by itself only
-here. A stolen card yields nothing: Wi-Fi passwords, SSH host keys, the Tailscale node
-state, password hashes and workload data sit inside the encrypted root. First boot takes a
-few extra minutes; don't cut the power (it resumes if you do). `ujust pi-status` says
-"Storage: encrypted".
-
-- **The one-time key.** If the board has no device key, first boot writes one into the Pi's
-  one-time-programmable memory, once per board. It is permanent. Raspberry Pi tools reuse
-  this key rather than replace it, and secure boot later (#73) can still use it.
-  Never run `rpi-otp-private-key -w -f`: it corrupts the key and the card is then
-  recoverable only with your recovery key.
-- **Hardware.** Pi 5 only, with a bootloader EEPROM built 2026-01-21 or later (older ones
-  have an HMAC lock-up bug). Otherwise the card stays plain, with a "NOT ENCRYPTED" warning.
-  Update with `sudo rpi-eeprom-update -a` (the image ships 2026-05-11); an EEPROM update has
-  no tryboot fallback. Pi 4 is unverified in v1: `fwkey` fails open, so the card stays plain. A card not written by
-  `just flash`, or flashed with no usable recovery key, stays plain too.
-- **Limits.** Anyone holding both the board and the card can unlock it until secure boot
-  (#73); a card that is modified and returned can capture the key (evil maid, #73); root on
-  the running device can derive the key. A USB disk with no serial binds to the board only,
-  and an SD card in a USB reader binds to the reader.
-- **Recovery.** The recovery key is age-encrypted to the SSH keys in flash.yaml (or
-  `recovery_key:`, an age public key, instead). If the board dies, put the card in a Linux
-  laptop and run `just unlock-card /dev/sdX [IDENTITY]` (default `~/.ssh/id_ed25519`, then
-  `id_rsa`): it mounts the root read-only at `/run/media/$USER/juniper-recovered`;
-  `just unlock-card --close` undoes it. Keep that SSH private key as a file: age can't use an
-  agent or a hardware key.
-- **Changing the recovery keys** (a lost laptop, a new key): on the Pi,
-  `ujust recovery-reseal FILE` (`-` reads stdin) with ssh-ed25519, ssh-rsa or `age1…` public
-  keys. The next boot seals a new recovery key to them and the old one stops working;
-  `ujust recovery-reseal --status` or `--cancel` until then. A power cut during it is picked
-  up by the next boot; the Pi's own key keeps the card unlockable throughout.
-- **Moving a card to another Pi** (or to a `dd` clone on a new card): on the laptop,
-  `just rebind-card /dev/sdX [IDENTITY]` adds a one-time key (keyslot 2, and
-  `CIDATA/juniper-rebind.key`). The card's next confirmed boot, in whichever Pi it is in,
-  replaces the old board's key with that Pi's key for that card, then removes the one-time key.
-  A power cut at any step is picked up by the next boot. Until that boot, anyone holding the
-  card can unlock it with that file, so keep it with you. Under tryboot nothing changes.
-- **Alert.** `juniper_encrypted == 0 or juniper_encryption_recovery_sealed == 0` catches a
-  device that is plain or whose recovery key isn't sealed yet.
-
-### Storage on long-running devices
-
-A full card is how an unattended device dies, so Juniper reserves some room and watches it:
-
-- **Update check.** Before staging an update, the daily download checks that the filesystem
-  holding the ostree repo has at least 2048 MiB free (override with `MIN_FREE_MB=<MiB>` in
-  `/etc/juniper/update.conf`). If not, it prunes dangling podman images and checks again;
-  if still short it skips that day's update (not a failure) and the next run retries. The
-  login banner and `ujust pi-status` say so.
-- **Weekly prune.** `juniper-image-prune.timer` runs `podman image prune -f` as root:
-  dangling images only. It never touches volumes, containers or tagged images.
-- **Journal.** Capped at 200M (`SystemMaxUse`), and it leaves the last 1G free
-  (`SystemKeepFree`).
-- **Warning.** The login banner and `ujust pi-status` warn when `/` has under 10% or 1 GiB
-  free.
-
-What the workload has to do itself: keep its data under `/var/lib/<app>`, apply retention
-in the app (rotate or expire old data; Juniper never deletes it), and put high-volume data
-(video, sensor logs, databases that grow without bound) on a separate USB disk.
-
-### Monitoring
-
-`ujust enable-metrics` runs Prometheus node_exporter as a quadlet on :9100, reachable over
-Tailscale only as before (the access rules are unchanged; nothing new is exposed). Re-running
-it on a device that already has it updates the existing quadlet and restarts the exporter,
-which is how an existing device picks up the Juniper metrics below.
-
-Every image writes `/var/lib/juniper/metrics/juniper.prom` every 5 minutes
-(`juniper-metrics.timer`), and node_exporter serves it through its textfile collector. A
-metric whose input is missing is left out rather than reported wrong.
-
-| Metric | Meaning |
-| --- | --- |
-| `juniper_image_info{image,digest,version}` | 1 for the booted image |
-| `juniper_staged_image_info{digest}` | 1 while an update is staged for the next reboot |
-| `juniper_image_timestamp_seconds` | build time of the booted image |
-| `juniper_healthy` | 1 if the health check passes right now (same probes as at boot, no side effects) |
-| `juniper_health_last_ok_timestamp_seconds` | last boot whose health check confirmed the deployment |
-| `juniper_update_held` | 1 if the staged update failed its health check twice and is held |
-| `juniper_update_skipped_space` | 1 if the last update was skipped for lack of disk space |
-| `juniper_tailscale_join_gave_up` | 1 if the first-boot Tailscale join gave up |
-| `juniper_lan_ssh_legacy` | 1 if locked down but SSH is still open to every network |
-| `juniper_locked` | 1 once locked down to Tailscale only |
-| `juniper_time_synced` | 1 if the clock is NTP-synchronised |
-| `juniper_encrypted` | 1 if the root filesystem is on LUKS2 |
-| `juniper_encryption_requested` | 1 if encryption was requested at flash time (or the root is encrypted) |
-| `juniper_encryption_key_locked`, `juniper_encryption_recovery_sealed` | only on an encrypted root: firmware key lock held; age-sealed recovery keyslot exists |
-| `juniper_kernel_build_timestamp_seconds` | build time of the installed Pi kernel |
-
-Example alert conditions:
-
-- Node down or offline: `up{job="juniper"} == 0` (use the job name from your own scrape config). A device that is off, or off the tailnet,
-  silently misses updates; this is how it shows up.
-- Update stuck: `juniper_update_held == 1`.
-- Clock wrong: `juniper_time_synced == 0` for 30 minutes.
-- Unhealthy: `juniper_healthy == 0` for 30 minutes.
-- Encryption requested but not active: `juniper_encryption_requested == 1 and juniper_encrypted == 0`.
-- Image out of date: `time() - juniper_image_timestamp_seconds > 21 * 86400` (pick your N).
-
-The login banner and `ujust pi-status` also warn "Clock not synchronised (NTP)" when the
-clock is not synced, since a Pi has no battery-backed clock.
-
-### The experimental desktop
-
-`juniper-desktop` is experimental: it is built, tested in CI and published (signed image and
-disk image), and has had its first run on a Raspberry Pi 5 (4 GB), but its hardware checklist
-(#58) isn't finished, and it isn't in Raspberry Pi Imager's list.
+## The desktop
 
 ![juniper-desktop on a Raspberry Pi 5: niri with DankMaterialShell's bar, fastfetch and btop in see-through foot terminals, about 1 GB of RAM in use](docs/images/desktop.png)
 
-It boots to DankMaterialShell's graphical login (dms-greeter); your niri session starts after you
-log in with your password. The desktop is niri with DankMaterialShell: bar, launcher (Mod+Space),
-notifications (Mod+N), clipboard history (Mod+Alt+V), lock screen (Mod+Alt+L) and a settings
-window, coloured from Juniper's juniper-berry wallpaper. The keys are zirconium's: Mod+T (or
-Mod+Return) opens a terminal (foot), Mod+Ctrl+arrows move windows, Mod+1–9 switch workspaces.
-Mod+/ shows every key, and the list also comes up at each login. `just flash` and
-`ujust switch` both require a password for the first user (uid 1000), and on a flashed desktop
-`sudo` asks for it too.
-
-DankMaterialShell's weather and location lookups are off, geoclue never asks an online
-service where the device is (its IP and Wi-Fi sources are off in
-`/etc/geoclue/conf.d/90-juniper.conf`), and DMS's update button runs `ujust update`, so
-updates still go through Juniper's health-checked path.
-
-- Your niri changes go in `~/.config/niri/local.kdl`; DMS's settings window writes its own.
-  Juniper refreshes the rest of its dotfiles daily unless you changed them
-  (`ujust toggle-auto-dots` turns that off); `ujust dots-reset niri|all` puts Juniper's back
-  (yours go to a backup in `~/.local/state/juniper`). A dotfile that already existed before
-  Juniper's first apply is kept and listed in `~/.local/state/juniper/dots-kept`; it gets no
-  updates until you reset it. `niri` resets only `config.kdl` and `dms.kdl`, `all` everything.
-- `ujust desktop-lock-idle on|off` turns the lock after 10 minutes idle on or off.
-- `ujust flatpak-setup` retries the first-boot install of Firefox and Bazaar.
-- A user with no picture gets Juniper's (the terminal's berry logo) at their first login, for the
-  greeter and DMS; change it in DMS's settings window, and Juniper won't set it again.
-
-A pending update's reboot waits while the desktop is in use (not idle for 30 minutes), for at
-most 7 days after the first deferral. A deferred update is retried hourly and applies once
-the desktop is idle, which can be outside the reboot window; a notification says so, with the
-deadline. `ujust update-schedule off` turns these reboots off too. Under tryboot the update
-also needs greetd to be running, or it falls back.
+`juniper-desktop` boots to DankMaterialShell's graphical login; niri starts after you log in
+with your password. Mod+/ shows every key (the list also comes up at each login), Mod+T a
+terminal, Mod+Space the launcher. Nothing looks up your location, and DMS's update button runs
+`ujust update`. Settings, keys and how updates wait for an idle desktop:
+[docs/desktop.md](docs/desktop.md).
 
 ## Build your own appliance
 
 See [examples/appliance](examples/appliance): `FROM ghcr.io/gnathoi/juniper-minimal`, add
-packages and quadlets, push, `bootc switch` the device to it.
-
-### Your own images
-
-Juniper only enforces signatures on its own namespace, so your images (a derived OS image or a
-workload) are accepted unsigned until you say otherwise. Sign them with cosign and trust your
-key on the device:
-
-    ujust trust-images ghcr.io/you ~/cosign.pub    # images under ghcr.io/you need your signature
-    ujust trust-images                             # list trusted namespaces and keys
-    ujust untrust-images ghcr.io/you               # stop requiring it
-
-From then on `bootc switch`, OS updates, podman pulls and `podman auto-update` refuse any image
-under that namespace without your signature. Run it before switching to a derived image and the
-first switch is verified too.
-
-Where it lives: each trusted namespace is a small drop-in in `/etc/juniper/trusted-images.d/`,
-its key in `/etc/pki/containers/`, and its `use-sigstore-attachments` setting in
-`/etc/containers/registries.d/`. Juniper's own policy ships read-only in the image
-(`/usr/share/juniper/containers/policy.json`), so it updates with every image, key rotations
-included. At every boot, before anything pulls, `juniper-containers-policy.service` rebuilds
-`/etc/containers/policy.json` from that base plus the drop-ins (validated first, previous copy
-kept as `policy.json.bak`). If that fails at boot, the previous policy stays in force (it fails
-closed). No drop-in can change a scope the base policy sets (Juniper's own namespace, vendor
-entries) or anything under one; one that tries, or is invalid, is skipped and logged
-(`journalctl -u juniper-containers-policy`). Don't edit `policy.json` by hand: it is rebuilt at
-boot. A derived image ships its trust as files instead: drop-ins and keys under
-`/usr/lib/juniper/trusted-images.d/`, merged before the local ones (a local drop-in for the same
-namespace wins), never `RUN trust-images` in the Containerfile. See
-[the appliance example](examples/appliance#signatures). For workloads, sign and
-auto-update on a fleet, or pin by digest on a one-off: see
-[the appliance example](examples/appliance#workload-images-signed-or-pinned), which also covers
-keeping app data safe across a rollback.
-
-### Readiness checks for your workload
-
-After an update, the boot health check keeps the new image only if the device is reachable
-(a default route; once locked, Tailscale connected to its control plane and SSH over it) and
-every health hook passes; under tryboot, anything else falls back to the previous image. Add
-your own check, such as "a sample was stored in the last 10 minutes", as an executable that
-exits 0 when ready:
-
-- in your image: `/usr/lib/juniper/health.d/`
-- on a device running plain quadlets: `/etc/juniper/health.d/`; only root-owned files that
-  aren't group- or world-writable run, anything else is skipped and logged
-
-Hooks run in name order at every boot, 15 seconds at most each, retried for about 7 minutes.
-See [the example](examples/appliance/health.d/50-sensor-sample).
+packages and quadlets, push, `bootc switch` the device to it. Require your own signature with
+`ujust trust-images` ([docs/security.md](docs/security.md#your-own-images)), and keep an
+update only once your workload is ready with a health hook
+([docs/appliances.md](docs/appliances.md)).
 
 ## Switch an existing AlmaLinux RPi bootc system
 
@@ -427,24 +177,10 @@ couldn't open the root; `ujust switch IMAGE --force` skips the check.
 
 ## Release schedule
 
-A new release (both signed images, disk images and release notes) is published every
-Monday at 02:00 UTC with that week's dependency and security updates. Pis download it daily
-and reboot into it on Tuesday at 04:00 local time, within a 90-minute window; change that
-with `ujust update-schedule`, or apply it now with `ujust update`.
-
-The new image boots once through firmware tryboot and is kept only if the boot health check
-passes (see [readiness checks](#readiness-checks-for-your-workload)); otherwise, or if the
-check itself fails, the Pi falls back to the previous image. A locked device that can't reach
-Tailscale's control plane after an update falls back too. An image that fell back once is
-retried at the next window; one that fails twice is held: the login status and
-`ujust pi-status` say "update … failed its health check twice; waiting for a newer image",
-and the next release proceeds as usual. To retry a held image anyway, run `ujust update-unhold`: it
-prints the digests it cleared (or "nothing held") and the image is tried again at the next window
-or by `ujust update`. The hold shows right away after the second failed boot.
-
-The kernel and Pi firmware arrive only when AlmaLinux rebuilds its base image, not with the
-weekly updates; each release's notes state the kernel's build date and whether a newer one
-is waiting, and `ujust pi-status` shows the running kernel's age.
+A new release (signed images, disk images and release notes) is published every Monday at
+02:00 UTC with that week's dependency and security updates; Pis apply it on Tuesday at 04:00
+local time. The kernel and Pi firmware arrive when AlmaLinux rebuilds its base image. Details,
+held updates and how releases are fed: [docs/operations.md](docs/operations.md).
 
 ## Acknowledgements
 
@@ -457,8 +193,9 @@ Juniper stands on other people's work:
 - [Universal Blue](https://universal-blue.org)'s [Bluefin](https://github.com/ublue-os/bluefin)
   and [Bazzite](https://github.com/ublue-os/bazzite), where the overall approach and `ujust`
   come from, and [ublue-os/brew](https://github.com/ublue-os/brew) for Homebrew on bootc.
-- [Zirconium](https://github.com/zirconium-dev/zirconium), whose niri setup informs the
-  desktop image.
+- [Zirconium](https://github.com/zirconium-dev/zirconium), whose niri keys and DankMaterialShell
+  setup the desktop adapts, and [DankMaterialShell](https://github.com/AvengeMedia/DankMaterialShell)
+  and [niri](https://github.com/YaLTeR/niri) themselves.
 
 ## License
 

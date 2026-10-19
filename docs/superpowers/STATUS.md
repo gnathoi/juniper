@@ -9,7 +9,7 @@ Start here when picking the project up on another machine.
 | A | Images (`juniper-minimal`, `juniper`), CI, releases | `specs/2026-10-09-juniper-image-design.md` | `plans/2026-10-09-juniper-image-core.md` | Done and hardened; second release `build-20261011` passed hardware acceptance (#79). Task 11 (Pi 5 hardware acceptance) passed, including 7b; one unexplained first-boot hang to reproduce (see Next); results in `docs/acceptance.md` |
 | B | Tailscale field in Raspberry Pi Imager (own-use fork) | `specs/2026-10-09-imager-tailscale-design.md` | `plans/2026-10-09-imager-tailscale.md` | **Parked** (2026-10-10): `just flash` covers it. Read the plan's "Parked" note before resuming |
 | C | Encryption at rest (OTP-bound LUKS2 root + age recovery keyslot), issue #50 Phase 0 + Phase 2 | `specs/2026-10-11-encryption-design.md` | `plans/2026-10-11-encryption.md` | **Shipped opt-in (`encrypt: true`, #78) and hardware-verified on the owner's Pi 5** (EEPROM 2026-05-11; `docs/acceptance.md`): encrypts on first boot (~3.5 min), unlocks unattended, tryboot both ways, laptop recovery works. Fixes from the run: #86 (config.txt key lock blocked genkey), #87 (`unlock-card` stdin). 2026-10-12: #83's M1–M5 and Task 11 done (#91–#96), **re-bind shipped** (`just rebind-card`, #99, loop-tested). Before flipping the default (Task 14), the owner's hardware checks: single-command `unlock-card` and `rebind-card` on a laptop, a re-bind into a second Pi (or a `dd` clone), and the clone check |
-| D | **Experimental `juniper-desktop` (niri)** | `specs/2026-10-10-juniper-desktop-design.md` | `plans/2026-10-10-juniper-desktop.md` | **Published as experimental** (#49 merged 2026-10-11: signed image, disk image, release assets; not in `os-list.json`). Session is niri + DankMaterialShell with dms-greeter (graphical login; niri after authentication), still experimental. Hardware desktop test pending a micro-HDMI cable (#58); then the Tested-hardware cell. Research below |
+| D | **`juniper-desktop` (niri + DankMaterialShell)** | `specs/2026-10-14-dms-desktop-design.md` | `plans/2026-10-14-dms-desktop.md` | **Tested on a Pi 5 (4 GB), 2026-10-17** (`docs/acceptance.md`): dms-greeter graphical login, niri + DankMaterialShell session, updates through tryboot. Hardware run found and fixed the SELinux switch failure (#112), geoclue lookups (#111) and the dots timer (#110). Open in #58: a health check that a session can start; not in `os-list.json` yet. Performance measurements: #118 |
 
 ## Next, in order
 
@@ -52,7 +52,7 @@ Hardware: `build-20261011` (#79) and opt-in encryption (#84) passed on the Pi 5;
 
 - #54, #55 (remainders); #56 (delivery path); #57 (canary, deferred by the owner).
 - #73 secure boot (deferred); #83 (remaining: owner hardware checks, `root_wait`, Task 12 optional, then Task 14 default-on); #85 (YubiKey recovery, low priority).
-- #58 desktop hardware test (micro-HDMI cable).
+- #58 desktop: session-start health check (hardware test done 2026-10-17).
 
 ## What happened on 2026-10-10
 
