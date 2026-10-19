@@ -10,6 +10,8 @@ Unreleased as its release notes, then moves those entries under the release's ta
 
 ## Unreleased
 
+## build-20261019 (2026-10-19)
+
 ### Added
 
 - `juniper-desktop`: a default user picture, the terminal's berry logo on the wallpaper's colours, set once through AccountsService for a user who has none, so the greeter and DMS show it instead of a blank
