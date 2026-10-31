@@ -1,9 +1,9 @@
 brightnessctl-0.5.1-17.el10
 cliphist-0.7.0-1.el10
-dgop-1:1.6.2-1.el10
-dms-1.6.3-1.el10
-dms-cli-1.6.3-1.el10
-dms-greeter-1:1.6.2-3.el10
+dgop-1:2.0.0-1.el10
+dms-2.0.0-1.el10
+dms-cli-2.0.0-1.el10
+dms-greeter-1:2.0.0-2.el10
 fcft-3.3.3-3.el10
 foot-1.28.0-1.el10
 foot-terminfo-1.28.0-1.el10
