@@ -15,11 +15,11 @@ FROM ghcr.io/ublue-os/brew@sha256:2aaf87e3757466bc28d056505a651c7ca5c56fd28f6ff7
 
 # rpi-fw-crypto (issue #50): built from the raspberrypi/utils commit pinned in
 # build_files/fwcrypto.lock (`just bump-fwcrypto`), on the same base as minimal.
-FROM quay.io/almalinuxorg/almalinux-bootc-rpi:10@sha256:43df38295af6150bc63d0b7bb4f6a9943b998ada5e499a46a7c03dcd8e05de3a AS fwcrypto
+FROM quay.io/almalinuxorg/almalinux-bootc-rpi:10@sha256:ae36478ffb81034a5a582b83971ef428b18094f01495abc28efbf193bca1a747 AS fwcrypto
 COPY build_files/fwcrypto.lock build_files/fwcrypto.sh /
 RUN /fwcrypto.sh
 
-FROM quay.io/almalinuxorg/almalinux-bootc-rpi:10@sha256:43df38295af6150bc63d0b7bb4f6a9943b998ada5e499a46a7c03dcd8e05de3a AS minimal
+FROM quay.io/almalinuxorg/almalinux-bootc-rpi:10@sha256:ae36478ffb81034a5a582b83971ef428b18094f01495abc28efbf193bca1a747 AS minimal
 
 # Published image ref without tag (e.g. ghcr.io/gnathoi/juniper), image name and date version.
 ARG IMAGE_REF=localhost/juniper-minimal
