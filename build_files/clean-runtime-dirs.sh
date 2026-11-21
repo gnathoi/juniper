@@ -10,7 +10,10 @@ set -euo pipefail
 root_dev=$(stat -c %d /)
 shopt -s nullglob dotglob
 for p in /run/* /tmp/* /boot/*; do
-  if [[ $(stat -c %d "$p") == "$root_dev" ]] && ! mountpoint -q "$p" 2>/dev/null; then
+  # a symlink is never a mount, but stat and mountpoint follow it (/run/host -> ../ is "/")
+  if [[ -L $p ]]; then
+    rm -f "$p"
+  elif [[ $(stat -c %d "$p") == "$root_dev" ]] && ! mountpoint -q "$p" 2>/dev/null; then
     rm -rf --one-file-system "$p"
   fi
 done
