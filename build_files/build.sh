@@ -92,12 +92,15 @@ done
 # regenerates /etc/containers/policy.json from it (plus `ujust trust-images` drop-ins) at every
 # boot. /etc gets the same bytes here, so a fresh device matches.
 namespace=${IMAGE_REF%/*}
+# containers-common 6 ships its stock policy in /usr/share/containers only (older: /etc).
+stock=/etc/containers/policy.json
+[[ -f $stock ]] || stock=/usr/share/containers/policy.json
 install -d -m 0755 /usr/share/juniper/containers
 jq --arg ns "$namespace" \
   '.transports.docker[$ns] = [{"type": "sigstoreSigned",
      "keyPath": "/usr/share/pki/containers/juniper.pub",
      "signedIdentity": {"type": "matchRepository"}}]' \
-  /etc/containers/policy.json >/usr/share/juniper/containers/policy.json
+  "$stock" >/usr/share/juniper/containers/policy.json
 chmod 0644 /usr/share/juniper/containers/policy.json
 cp /usr/share/juniper/containers/policy.json /etc/containers/policy.json
 printf 'docker:\n  %s:\n    use-sigstore-attachments: true\n' "$namespace" \
